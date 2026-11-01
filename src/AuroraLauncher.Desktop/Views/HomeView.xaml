@@ -1,0 +1,109 @@
+<UserControl x:Class="AuroraLauncher.Desktop.Views.HomeView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d">
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- ======== Hero ======== -->
+        <Border Grid.Row="0" CornerRadius="14" Background="{DynamicResource AccentGradient}"
+                Padding="28,24" Margin="0,0,0,18" Effect="{StaticResource HeroShadow}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="欢迎使用 Aurora Launcher" FontSize="24" FontWeight="Bold" Foreground="White"/>
+                    <TextBlock FontSize="13" Foreground="#D8FFFFFF" Margin="0,6,0,0" TextWrapping="Wrap">
+                        <Run Text="当前实例："/>
+                        <Run Text="{Binding SelectedInstance.Name, Mode=OneWay, TargetNullValue=未选择}"/>
+                        <Run Text="  ·  账户："/>
+                        <Run Text="{Binding SelectedAccount.Username, Mode=OneWay, TargetNullValue=未登录}"/>
+                    </TextBlock>
+                    <TextBlock Text="选择账户与实例，一键启动 Minecraft。" FontSize="12" Foreground="#B8FFFFFF" Margin="0,3,0,0"/>
+                </StackPanel>
+                <Button Grid.Column="1" Content="启 动 游 戏" Command="{Binding LaunchCommand}"
+                        Background="White" Foreground="#232741" FontSize="16" FontWeight="Bold"
+                        Padding="28,13" VerticalAlignment="Center"
+                        Template="{StaticResource PrimaryButtonTemplate}"/>
+            </Grid>
+        </Border>
+
+        <!-- ======== Cards ======== -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Accounts -->
+            <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,9,0">
+                <StackPanel>
+                    <TextBlock Text="账户" Style="{StaticResource CardTitle}" Margin="0,0,0,12"/>
+                    <ComboBox ItemsSource="{Binding Accounts}" SelectedItem="{Binding SelectedAccount}" Margin="0,0,0,12">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding Username}" FontWeight="SemiBold"/>
+                                    <TextBlock Text="{Binding Type, StringFormat='  ({0})'}" Foreground="{DynamicResource TextMutedBrush}" Margin="6,0,0,0"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+
+                    <TextBlock Text="添加离线账户" Style="{StaticResource FieldLabel}" Margin="0,2,0,6"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox Text="{Binding OfflineName, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,8,0"/>
+                        <Button Grid.Column="1" Content="添加" Command="{Binding AddOfflineAccountCommand}" Style="{StaticResource PrimaryButton}"/>
+                    </Grid>
+
+                    <Separator Margin="0,14"/>
+
+                    <TextBlock Text="微软账号 (Microsoft)" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <Button Content="开始微软登录" Command="{Binding MicrosoftBeginCommand}" Margin="0,0,8,0"/>
+                        <Button Content="完成登录" Command="{Binding MicrosoftCompleteCommand}"/>
+                    </StackPanel>
+                    <!-- 未配置 Azure 应用 ID 时的引导提示（点击"开始微软登录"也会显示完整步骤） -->
+                    <TextBlock Text="{Binding MicrosoftLoginHint}" TextWrapping="Wrap" FontSize="11.5"
+                               Foreground="{DynamicResource WarningBrush}" Margin="0,0,0,6"/>
+                    <TextBlock Text="{Binding MicrosoftMessage}" TextWrapping="Wrap" Style="{StaticResource FieldLabel}"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Instances -->
+            <Border Grid.Column="1" Style="{StaticResource Card}" Margin="9,0,0,0">
+                <StackPanel>
+                    <TextBlock Text="实例" Style="{StaticResource CardTitle}" Margin="0,0,0,12"/>
+                    <ListBox ItemsSource="{Binding Instances}" SelectedItem="{Binding SelectedInstance}" MaxHeight="270" Margin="0,0,0,12">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
+                                    <TextBlock Foreground="{DynamicResource TextMutedBrush}" FontSize="12">
+                                        <Run Text="{Binding MinecraftVersion}"/>
+                                        <Run Text=" · "/>
+                                        <Run Text="{Binding LoaderType}"/>
+                                        <Run Text="{Binding LoaderVersion, StringFormat=' ({0})'}"/>
+                                    </TextBlock>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <Button Content="启动游戏" Command="{Binding LaunchCommand}" Style="{StaticResource PrimaryButton}" FontSize="15" Padding="14,9"/>
+                    <TextBlock Text="提示：未安装所选实例时会自动触发下载安装。" Foreground="{DynamicResource TextMutedBrush}" FontSize="11" Margin="0,10,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

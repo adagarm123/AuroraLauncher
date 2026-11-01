@@ -1,0 +1,19 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>AuroraSelfTest</RootNamespace>
+    <AssemblyName>AuroraSelfTest</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\AuroraCore\AuroraCore.csproj" />
+    <!-- Round-53: VM state-machine regression tests (LoaderCardVM etc.) live
+         in the Desktop project; they are pure INPC logic with no UI types. -->
+    <ProjectReference Include="..\..\src\AuroraLauncher.Desktop\AuroraLauncher.Desktop.csproj" />
+  </ItemGroup>
+
+</Project>

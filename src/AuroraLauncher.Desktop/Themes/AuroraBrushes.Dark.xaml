@@ -1,0 +1,51 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                      xmlns:sys="clr-namespace:System;assembly=mscorlib">
+  <sys:String x:Key="ThemeKey">AuroraDark</sys:String>
+
+  <!-- Base surfaces -->
+  <SolidColorBrush x:Key="BgBrush" Color="#14151D"/>
+  <SolidColorBrush x:Key="BgDeepBrush" Color="#0F1017"/>
+  <SolidColorBrush x:Key="PanelBrush" Color="#1B1D28"/>
+  <SolidColorBrush x:Key="PanelAltBrush" Color="#262A3A"/>
+  <SolidColorBrush x:Key="BorderBrush" Color="#2C3042"/>
+  <SolidColorBrush x:Key="InputBgBrush" Color="#161822"/>
+  <SolidColorBrush x:Key="InputBorderBrush" Color="#3A3F58"/>
+
+  <!-- Text -->
+  <SolidColorBrush x:Key="TextBrush" Color="#EDEFF9"/>
+  <SolidColorBrush x:Key="TextMutedBrush" Color="#8B90A8"/>
+
+  <!-- Accent (aurora violet) -->
+  <SolidColorBrush x:Key="AccentBrush" Color="#7C6AF8"/>
+  <SolidColorBrush x:Key="AccentHoverBrush" Color="#9486FF"/>
+  <SolidColorBrush x:Key="AccentSoftBrush" Color="#2E7C6AF8"/>
+  <SolidColorBrush x:Key="DangerBrush" Color="#FF5C6C"/>
+  <SolidColorBrush x:Key="DangerSoftBrush" Color="#2EFF5C6C"/>
+  <SolidColorBrush x:Key="SuccessBrush" Color="#3DDC97"/>
+  <SolidColorBrush x:Key="WarningBrush" Color="#FFB454"/>
+
+  <!-- Scroll bar: high-contrast lane + thumb -->
+  <SolidColorBrush x:Key="SuccessSoftBrush" Color="#2E3DDC97"/>
+  <SolidColorBrush x:Key="ScrollLaneBrush" Color="#262A3A"/>
+  <SolidColorBrush x:Key="ScrollThumbBrush" Color="#565D78"/>
+  <SolidColorBrush x:Key="ScrollThumbHoverBrush" Color="#9486FF"/>
+
+  <!-- Lists / nav / chips -->
+  <SolidColorBrush x:Key="ListHoverBrush" Color="#232739"/>
+  <SolidColorBrush x:Key="ListSelectedBrush" Color="#2E7C6AF8"/>
+  <SolidColorBrush x:Key="NavActiveBrush" Color="#2E7C6AF8"/>
+  <SolidColorBrush x:Key="ChipBrush" Color="#262A3A"/>
+  <SolidColorBrush x:Key="ScrollBrush" Color="#3C415C"/>
+
+  <!-- Gradients -->
+  <LinearGradientBrush x:Key="AccentGradient" StartPoint="0,0" EndPoint="1,1">
+    <GradientStop Color="#6A5AF8" Offset="0"/>
+    <GradientStop Color="#22C8FA" Offset="1"/>
+  </LinearGradientBrush>
+  <LinearGradientBrush x:Key="TitleGradient" StartPoint="0,0" EndPoint="1,0">
+    <GradientStop Color="#6A5AF8" Offset="0"/>
+    <GradientStop Color="#22C8FA" Offset="0.55"/>
+    <GradientStop Color="#3DDC97" Offset="1"/>
+  </LinearGradientBrush>
+</ResourceDictionary>

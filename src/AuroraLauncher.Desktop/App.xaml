@@ -1,0 +1,22 @@
+﻿<Application x:Class="AuroraLauncher.Desktop.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:AuroraLauncher.Desktop"
+             xmlns:conv="clr-namespace:AuroraLauncher.Desktop.Converters"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/Themes/AuroraBrushes.Dark.xaml"/>
+                <ResourceDictionary Source="pack://application:,,,/Styles/AuroraControls.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+            <conv:PageActiveConverter x:Key="PageActive"/>
+            <conv:TextMatchConverter x:Key="TextMatch"/>
+            <conv:BoolToTextConverter x:Key="BoolToText"/>
+            <conv:BoolToOpacityConverter x:Key="BoolToOpacity"/>
+            <conv:StatusToBrushConverter x:Key="StatusToBrush"/>
+            <conv:NullToCollapsedConverter x:Key="NullToCollapsed"/>
+            <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

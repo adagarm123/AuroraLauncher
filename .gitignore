@@ -1,0 +1,13 @@
+# 编译输出
+[Bb]in/
+[Oo]bj/
+publish/
+publish_staging/
+
+# Visual Studio / 本地文件
+.vs/
+*.user
+
+# 系统文件
+.DS_Store
+Thumbs.db

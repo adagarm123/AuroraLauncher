@@ -1,0 +1,52 @@
+<UserControl x:Class="AuroraLauncher.Desktop.Views.LogsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d">
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <Grid Grid.Row="0" Margin="0,0,0,14">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="日志" Style="{StaticResource PageTitle}"/>
+                <TextBlock Text="启动器运行日志（访问令牌已自动脱敏，仅保留最近 600 行）。" Style="{StaticResource PageSubtitle}"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                <!-- 崩溃排查：一键只看错误/警告 -->
+                <ToggleButton x:Name="ErrorsOnlyToggle" VerticalAlignment="Center" Margin="0,0,10,0"
+                              Padding="14,7" Checked="ErrorsOnly_Changed" Unchecked="ErrorsOnly_Changed">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE7BA;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="13"
+                                   VerticalAlignment="Center" Margin="0,0,7,0"/>
+                        <TextBlock Text="只看错误" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </ToggleButton>
+                <Border Style="{StaticResource Chip}" VerticalAlignment="Center">
+                    <TextBlock Text="CONSOLE" FontSize="11" Foreground="{DynamicResource TextMutedBrush}"/>
+                </Border>
+            </StackPanel>
+        </Grid>
+        <!-- ListBox 自带滚动（虚拟化在此层生效）；外层不再套 ScrollViewer -->
+        <Border Grid.Row="1" CornerRadius="12" Background="#12131B" BorderBrush="#262A3A" BorderThickness="1" Padding="14"
+                Effect="{StaticResource CardShadow}">
+            <ListBox x:Name="LogList" ItemsSource="{Binding LogsView}" Background="Transparent" BorderThickness="0"
+                     VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                     VirtualizingPanel.ScrollUnit="Pixel" Focusable="False"
+                     ScrollViewer.ScrollChanged="LogList_ScrollChanged">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}" FontFamily="Consolas, Cascadia Mono, Menlo, monospace"
+                                   FontSize="12" Foreground="#C9CFE0"/>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </Border>
+    </Grid>
+</UserControl>

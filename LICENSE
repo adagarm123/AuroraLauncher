@@ -1,0 +1,41 @@
+MIT License
+
+Copyright (c) 2026 AuroraLauncher Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+----------------------------------------------------------------------------
+
+Compliance & third-party notice
+--------------------------------
+This launcher is an INDEPENDENT, clean-room implementation. It was written
+from Mojang/Microsoft public metadata & HTTP APIs, and from the OFFICIAL,
+publicly distributed installer JARs of Forge / NeoForge / Fabric / Quilt
+(which are executed, not copied or modified). It does NOT contain, derive
+from, or link against the source code of any other launcher.
+
+Notably:
+- PCL2 source is NOT used (its license/terms are restrictive and forbid reuse).
+- HMCL source is NOT used (GPLv3; this project is MIT and independent).
+- Prism Launcher, XMCL, BMCLAPI were studied only at the level of publicly
+  documented behavior (file layouts, API endpoints) and re-implemented.
+
+All Minecraft assets, game files, and mods remain the property of their
+respective owners and are downloaded from official or operator-chosen sources
+at runtime.
