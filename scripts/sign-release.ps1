@@ -17,8 +17,17 @@ $root = Split-Path -Parent $PSScriptRoot   # scripts\ -> repo root
 $exe = Join-Path $root "publish\AuroraLauncher.exe"
 $keyFile = Join-Path $PSScriptRoot "signing\private_key.xml"
 if (-not (Test-Path $exe)) { throw "publish\AuroraLauncher.exe not found - run scripts\publish.ps1 first." }
-if (-not (Test-Path $keyFile)) { throw "signing private key not found at $keyFile" }
 
+# ========= 修改：优先从环境变量读取私钥 =========
+$privateKeyXml = $null
+if ($env:RSA_PRIVATE_KEY) {
+    $privateKeyXml = $env:RSA_PRIVATE_KEY
+} elseif (Test-Path $keyFile) {
+    $privateKeyXml = Get-Content $keyFile -Raw
+} else {
+    throw "找不到私钥！既没有 RSA_PRIVATE_KEY 环境变量，也没有找到 $keyFile"
+}
+# =================================================
 if ($Round -le 0) {
     $src = Get-Content (Join-Path $root "src\AuroraCore\BuildInfo.cs") -Raw
     if ($src -match 'CurrentRound\s*=\s*(\d+)') { $Round = [int]$Matches[1] }
@@ -32,7 +41,7 @@ $sha = (Get-FileHash $exe -Algorithm SHA256).Hash
 $payload = "$Round|$Version|$DownloadUrl|$sha|$($exeItem.Length)"
 
 $rsa = [System.Security.Cryptography.RSA]::Create()
-$rsa.FromXmlString((Get-Content $keyFile -Raw))
+$rsa.FromXmlString($privateKeyXml)
 $sig = [Convert]::ToBase64String($rsa.SignData([Text.Encoding]::UTF8.GetBytes($payload),
     [System.Security.Cryptography.HashAlgorithmName]::SHA256,
     [System.Security.Cryptography.RSASignaturePadding]::Pkcs1))

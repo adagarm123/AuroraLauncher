@@ -11,3 +11,4 @@ publish_staging/
 # 系统文件
 .DS_Store
 Thumbs.db
+scripts/signing/private_key.xml
