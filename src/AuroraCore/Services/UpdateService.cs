@@ -91,16 +91,20 @@ public sealed class UpdateService
     /// <summary>防降级: only a STRICTLY higher round is an update.</summary>
     public static bool IsNewer(UpdateManifest manifest, int currentRound) => manifest.Round > currentRound;
 
-    /// <summary>Fetches and verifies the feed manifest. Returns null when
-    /// updates are disabled, the feed is unreachable, the signature is bad,
-    /// or the manifest is not newer than this build — every negative result
-    /// is silent by design (an update check must never bother the user).</summary>
+    /// <summary>Human-readable result of the LAST check — displayed in
+    /// 设置 → 更新 next to the progress bar (round-58). Silent startup checks
+    /// ignore it; manual 「检查更新」 always shows it.</summary>
+    public string LastCheckMessage { get; private set; } = "";
+
+    /// <summary>Fetches and verifies the feed manifest. Returns null for every
+    /// negative result; <see cref="LastCheckMessage"/> explains which one.</summary>
     public async Task<UpdateManifest?> CheckAsync(CancellationToken ct = default)
     {
         var feed = ResolveFeedUrl();
         if (string.IsNullOrWhiteSpace(feed))
         {
             _log.Info("Update", "未配置更新源（UpdateFeedUrl），跳过检查。");
+            LastCheckMessage = "未配置更新源：请在设置中填写更新源地址";
             return null;
         }
         string json;
@@ -111,6 +115,7 @@ public sealed class UpdateService
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.Info("Update", $"更新源不可达（不影响使用）: {ex.Message}");
+            LastCheckMessage = "暂时无法连接更新源，可稍后重试";
             return null;
         }
 
@@ -119,21 +124,29 @@ public sealed class UpdateService
         catch (Exception ex)
         {
             _log.Warn("Update", "更新清单解析失败，忽略本次检查: " + ex.Message);
+            LastCheckMessage = "更新清单格式异常，请反馈给发布者";
             return null;
         }
-        if (manifest == null || manifest.Round <= 0 || string.IsNullOrWhiteSpace(manifest.Url)) return null;
+        if (manifest == null || manifest.Round <= 0 || string.IsNullOrWhiteSpace(manifest.Url))
+        {
+            LastCheckMessage = "更新清单内容为空";
+            return null;
+        }
 
         if (!VerifySignature(manifest))
         {
             _log.Warn("Update", $"更新清单签名校验失败（Round {manifest.Round}）——可能被篡改或密钥不匹配，忽略本次更新。");
+            LastCheckMessage = "更新清单签名校验失败，已忽略（防篡改保护）";
             return null;
         }
         if (!IsNewer(manifest, BuildInfo.CurrentRound))
         {
             _log.Info("Update", $"已运行最新版本（当前第 {BuildInfo.CurrentRound} 轮，清单第 {manifest.Round} 轮）。");
+            LastCheckMessage = $"已是最新版本（第 {BuildInfo.CurrentRound} 轮）";
             return null;
         }
         _log.Info("Update", $"发现新版本：第 {manifest.Round} 轮（当前第 {BuildInfo.CurrentRound} 轮）。");
+        LastCheckMessage = $"发现新版本（第 {manifest.Round} 轮）";
         return manifest;
     }
 

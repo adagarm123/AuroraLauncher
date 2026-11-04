@@ -18,12 +18,27 @@ public static class HelpContent
     /// <summary>Round number of the newest entry in <see cref="Changelog"/> —
     /// bump together with the changelog entry; drives the one-time "已更新"
     /// startup toast (dismissed permanently once the user opens the page).</summary>
-    public const int LatestChangelogRound = 57;
+    public const int LatestChangelogRound = 58;
     /// <summary>更新日志（说人话版本：无技术名词、用户视角）——独立页面
     /// 「更新日志」使用；模板见 docs/release-notes-template.md。
     /// 每轮发布时在此置顶新增一条。</summary>
     public static IEnumerable<HelpTopicVM> Changelog() => new[]
     {
+        new HelpTopicVM
+        {
+            Category = "更新日志", Glyph = "\uE777", Title = "【第 58 轮更新】新功能：更新方式自己选",
+            Summary = "每次启动自动检查，发现新版本弹窗提醒",
+            Body =
+                "新功能\n" +
+                "· 每次打开启动器都会自动检查新版本；发现新版本会弹窗提醒，只有「立即更新」和「关闭」两个选择——你不点，它就不会动。\n" +
+                "· 设置里新增「更新方式」开关：自动更新（后台下载、重启生效）/ 有更新时提醒我，但不自动更新 / 不获取更新。默认第二种。\n" +
+                "· 设置里新增「检查更新」按钮，检查和下载时都有进度条与状态文字，下载到哪了一目了然。\n" +
+                "· 也可以自己填写更新源地址（留空就用内置的）。\n\n" +
+                "优化\n" +
+                "· 手动「检查更新」不受开关限制，想什么时候查就什么时候查。\n" +
+                "· 点「立即更新」后下载完成会自动重启完成换装，不用再手动替换文件。\n\n" +
+                "如果你遇到问题，可在「设置 → 导出诊断包」，把文件附在反馈里，排查会快很多。"
+        },
         new HelpTopicVM
         {
             Category = "更新日志", Glyph = "\uE777", Title = "【第 57 轮更新】新功能：自动更新",

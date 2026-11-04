@@ -6,15 +6,15 @@
 - **零外部 NuGet 依赖**：仅使用 .NET 基类库（`System.Text.Json`、`HttpClient`、`System.IO.Compression` 等）。无网络可达性依赖，可离线构建。
 - 许可：**MIT**。完全独立实现，未复用 PCL2 / HMCL 等受限制许可证项目的源代码（详见 `LICENSE`）。
 
-> ### 当前状态速览（第 57 轮，2026-11-01）
+> ### 当前状态速览（第 58 轮，2026-11-04）
 >
-> - **自测**：Unit 31/31（离线）· All 38/38（含网络集成），**机制防线 9 条**（编号连续性、命令绑定、交互元素、版本数据入口、classpath 一致性、HttpClient 生命周期、实例元数据入口、加载器卡片竞态、文档基线一致性）
-> - **页面**：9 个功能页面（首页/游戏下载/实例管理/内容中心/下载管理/设置/日志/更新日志/帮助中心）+ 主窗口侧栏导航与**首次启动引导**；67 个交互元素全覆盖审计，零死按钮
-> - **新功能**：自动更新（启动时静默检查 → 后台下载 + SHA-256 校验 → 重启自动换装；清单 RSA-4096 签名防篡改、轮次号防降级）
+> - **自测**：Unit 32/32（离线）· All 39/39（含网络集成），**机制防线 9 条**（编号连续性、命令绑定、交互元素、版本数据入口、classpath 一致性、HttpClient 生命周期、实例元数据入口、加载器卡片竞态、文档基线一致性）
+> - **页面**：9 个功能页面（首页/游戏下载/实例管理/内容中心/下载管理/设置/日志/更新日志/帮助中心）+ 主窗口侧栏导航与**首次启动引导**；69 个交互元素全覆盖审计，零死按钮
+> - **新功能**：启动弹窗提醒更新（仅「立即更新 / 关闭」）+ 三态更新开关（自动更新 / 提醒但不自动更新 / 不获取更新）+ 手动检查进度条；清单 RSA-4096 签名防篡改、轮次号防降级
 > - **EXE**：`publish/AuroraLauncher.exe`（约 63 MB，单文件自包含）
 > - **已真机验证**：Fabric 1.21 完整启动；Forge/NeoForge 官方安装器路径；微软设备码登录（需自备 Azure Client ID，设置页一键配置）
 > - **CI**：GitHub Actions——每次 push/PR 跑离线 unit（不联网、无抖动），每日定时跑联网全量
-> - **文档**：[ROADMAP](ROADMAP.md)（基线与待办）· [TEST\_RESULTS](TEST_RESULTS.md)（35 项自测）· [INTERACTIVE\_UI\_AUDIT](INTERACTIVE_UI_AUDIT.md)（可交互 UI 全量检验）· [docs/adr](docs/adr/INDEX.md)（5 篇架构决策记录）
+> - **文档**：[ROADMAP](ROADMAP.md)（基线与待办）· [TEST\_RESULTS](TEST_RESULTS.md)（39 项自测）· [INTERACTIVE\_UI\_AUDIT](INTERACTIVE_UI_AUDIT.md)（可交互 UI 全量检验）· [docs/adr](docs/adr/INDEX.md)（5 篇架构决策记录）
 
 ---
 
@@ -50,7 +50,7 @@ dotnet publish src/AuroraLauncher.Desktop/AuroraLauncher.Desktop.csproj `
 
 ```bash
 dotnet run --project tests/AuroraSelfTest -c Debug -- --unit   # 25 项，离线、毫秒级、CI 必跑
-dotnet run --project tests/AuroraSelfTest -c Debug -- --all    # 38 项，含 7 项网络集成
+dotnet run --project tests/AuroraSelfTest -c Debug -- --all    # 39 项，含 7 项网络集成
 ```
 
 本地一键 CI 脚本：`scripts/run-tests.ps1`（`-Full` 跑全量）；GitHub Actions 见 `.github/workflows/selftest.yml`。
@@ -87,7 +87,7 @@ AuroraLauncher/
 │     ├─ Themes/ Styles/           # 深色/浅色主题画刷与控制样式
 │     ├─ Views/                    # 8 个页面：首页/游戏下载/实例管理/内容中心/下载管理/设置/日志/帮助
 │     └─ ViewModels/MainViewModel.cs# MVVM 绑定层（引导、网络感知、安装流程图、成功横幅）
-├─ tests/AuroraSelfTest/           # 38 项自测（--unit 31 离线 / --all 38 含网络），9 条机制防线
+├─ tests/AuroraSelfTest/           # 39 项自测（--unit 32 离线 / --all 39 含网络），9 条机制防线
 ├─ tools/                          # DiagTool（诊断）/ IconGen（图标生成）/ bench_extract.py（基准提取）
 ├─ scripts/run-tests.ps1           # 本地一键 CI（-Full 跑全量）
 ├─ .github/workflows/selftest.yml  # CI：push/PR 跑 unit，每日定时跑 integration（失败自动开 issue）
@@ -98,7 +98,7 @@ AuroraLauncher/
 
 ---
 
-## 功能总览（截至第 57 轮）
+## 功能总览（截至第 58 轮）
 
 | 领域       | 能力                                                                                                                              |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------- |
@@ -168,7 +168,7 @@ AuroraLauncher/
 
 ## 测试结果
 
-自测现状见 `TEST_RESULTS.md`：**38 项全部通过**（Unit 31 离线 + Integration 7 联网），含 **9 条机制防线**与缓存一致性校验；CI 分层运行（unit 每次 push、integration 每日定时）。
+自测现状见 `TEST_RESULTS.md`：**39 项全部通过**（Unit 32 离线 + Integration 7 联网），含 **9 条机制防线**与缓存一致性校验；CI 分层运行（unit 每次 push、integration 每日定时）。
 
 ---
 
@@ -976,3 +976,20 @@ meta.fabricmc.net/v2/versions/loader/1.21/fabric-loader-0.20.1-1.21/profile/json
 **配套改动**：`BuildInfo.CurrentRound` 常量（发布时 bump）并纳入文档基线 Guard（docs 轮次 ≠ BuildInfo 即红——本次运行已实际抓到一次漏 bump）；新增单测 #31（验签通过 / 篡改 url|sha|size|round 任一字段必失败 / 防降级规则）；`SlowTransferKBsPerSec` 等配置项化；应用内更新日志新增第 57 轮条目。
 
 自测 **Unit 31/31** 全绿；EXE 经 `publish.ps1` 重新发布。
+
+## 更新补充（第 58 轮：启动弹窗提醒 + 三态更新开关 + 检查进度条）
+
+**用户反馈**：每次打开启动器都要自动检查更新；有更新要弹窗提醒，且**只有「立即更新」和「关闭」两个选项**；设置里要有三态开关；手动检查要能看到进度（和搜索模组类似）。
+
+**1. 启动检查 + 两按钮弹窗**：新增 `UpdateDialog`（只有「立即更新」「关闭」两个按钮，无"稍后提醒 / 跳过版本"等第三选项）。每次启动（模式 1/2）延迟 1.2 秒等主窗口就绪后检查；发现新版本：
+- 模式 1「自动更新」：不弹窗，后台下载 → 下次启动自动换装；
+- 模式 2「提醒但不自动更新」（**默认**）：弹窗等待用户决定，点「立即更新」才下载，下载完成后自动重启换装；点「关闭」不下载；
+- 模式 3「不获取更新」：启动时不联网检查；**手动「检查更新」仍可用**（用户主动发起的操作必须有反馈）。
+
+**2. 设置页「更新」卡片**：三态下拉开关（自动更新 / 有更新时提醒我，但不自动更新 / 不获取更新）、可填更新源地址、手动「检查更新」按钮、状态文字 + 进度条（检查阶段不确定进度、下载阶段按字节数显示百分比，与内容中心搜索进度条同款做法）。检查失败/已是最新版本/签名校验失败均有明确状态文字。
+
+**3. 单一来源策略**：`UpdatePolicy`（AuroraCore 纯逻辑）集中"是否启动检查 / 发现更新后做什么"的判定，配置从布尔 `AutoCheckUpdates` 升级为 `UpdateMode` 枚举；旧 config.json 里显式关闭过自动检查的用户会一次性迁移到「不获取更新」。新增单测 #32 锁定三态语义与文案↔枚举往返。
+
+**4. 版本约定执行**：`BuildInfo.CurrentRound` 57→58、`HelpContent.Changelog()` 置顶第 58 轮更新说明（说人话版本）、`LatestChangelogRound` 同步；三份文档与交互元素审计（66→69：新增 2 个弹窗按钮 + 设置页检查更新按钮补记）同步。
+
+自测 **Unit 32/32、All 39/39** 全绿；EXE 经 `publish.ps1` 重新发布。

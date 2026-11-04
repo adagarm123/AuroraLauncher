@@ -1020,6 +1020,38 @@ internal static class Program
             Assert(UpdateService.IsNewer(m, 59), "strictly higher round is an update");
         });
 
+        Check("UpdatePolicy: 3-way mode switch (startup check / notify / auto-download)", () =>
+        {
+            // Round-58: the settings switch is a pure state machine — lock
+            // its semantics so a future refactor cannot silently turn
+            // "不获取更新" back into a network check, or make the startup
+            // popup disappear in the default "提醒" mode.
+            Assert(UpdatePolicy.ShouldCheckOnStartup(UpdateMode.Auto), "mode 1 checks on startup");
+            Assert(UpdatePolicy.ShouldCheckOnStartup(UpdateMode.Notify), "mode 2 checks on startup");
+            Assert(!UpdatePolicy.ShouldCheckOnStartup(UpdateMode.Disabled), "mode 3 never checks on startup");
+
+            Assert(UpdatePolicy.Decide(UpdateMode.Auto, true, false) == UpdateAction.AutoDownload,
+                "mode 1 downloads automatically without a popup");
+            Assert(UpdatePolicy.Decide(UpdateMode.Notify, true, false) == UpdateAction.Notify,
+                "mode 2 shows the two-button popup");
+            Assert(UpdatePolicy.Decide(UpdateMode.Disabled, true, false) == UpdateAction.None,
+                "mode 3 takes no action on startup");
+            Assert(UpdatePolicy.Decide(UpdateMode.Auto, false, false) == UpdateAction.None &&
+                   UpdatePolicy.Decide(UpdateMode.Notify, false, false) == UpdateAction.None,
+                "no update → no action in every mode");
+
+            // Manual 「检查更新」 is an explicit user action: always notify,
+            // even in mode 3 (and even in mode 1) — the user must see the result.
+            foreach (var mode in new[] { UpdateMode.Auto, UpdateMode.Notify, UpdateMode.Disabled })
+                Assert(UpdatePolicy.Decide(mode, true, true) == UpdateAction.Notify,
+                    $"manual check must notify in mode {mode}");
+
+            // Display text round-trip (settings ComboBox ←→ persisted enum).
+            foreach (var mode in new[] { UpdateMode.Auto, UpdateMode.Notify, UpdateMode.Disabled })
+                Assert(UpdatePolicy.FromDisplayText(UpdatePolicy.DisplayText(mode)) == mode,
+                    $"display text round-trip failed for {mode}");
+        });
+
         Check("Guard: README round numbering is continuous", () =>
         {
             // Round sections were lost/misnumbered twice (5, 16 lost; 44→46

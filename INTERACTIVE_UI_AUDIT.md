@@ -41,11 +41,11 @@
 
 ## 结论
 
-**66 个交互元素全部有功能反馈路径，无死按钮。**（Views 49 + MainWindow 17，含首次启动引导 7 个按钮；第 48 轮全量重数修正，第 55 轮新增「更新日志」页导航按钮 +1，见下节）
+**69 个交互元素全部有功能反馈路径，无死按钮。**（Views 52 + MainWindow 17，含首次启动引导 7 个按钮；第 48 轮全量重数修正，第 55 轮 +1、第 57 轮 +1、第 58 轮 +2，见下节）
 
-- 直接 Command 绑定：**49 个**（全部核对存在于 MainViewModel；含 `DataContext.` 相对源绑定与主题切换按钮 ×2）
-- 事件处理器元素：**2 个**（LogsView 只看错误 Checked/Unchecked → `ErrorsOnly_Changed`；ModsView 定位适配版本 Click → `OnJumpToCompatible`，均已核对存在于对应 code-behind）
-- 样式 Setter 提供 Command：**15 个**（`NavItem` → NavigateCommand ×9（第 55 轮新增「更新日志」导航）；`SubNavItem` → SelectContentKindCommand ×6；样式命令已独立核对，不依赖元素引用）
+- 直接 Command 绑定：**50 个**（全部核对存在于 MainViewModel；含 `DataContext.` 相对源绑定与主题切换按钮 ×2）
+- 事件处理器元素：**4 个**（LogsView 只看错误 Checked/Unchecked → `ErrorsOnly_Changed`；ModsView 定位适配版本 Click → `OnJumpToCompatible`；UpdateDialog 立即更新 / 关闭 Click → `UpdateNow_Click` / `Close_Click`，均已核对存在于对应 code-behind）
+- 样式 Setter 提供 Command：**15 个**（`NavItem` → NavigateCommand ×9；`SubNavItem` → SelectContentKindCommand ×6；样式命令已独立核对，不依赖元素引用）
 - 静态命令（非绑定，如滚动条模板内 `ScrollBar.PageUpCommand`）：XAML 解析期即报错，不属静默失败类，核对后放行
 - 本轮新增发现：**3 个死代码候选命令**（见上节 WARN）
 
@@ -61,7 +61,9 @@
 
 修正后精确闭合：**49（直接绑定）+ 14（样式命令）+ 2（事件处理器）= 65**，与逐 XAML 文件的元素计数一致。
 
-> **第 55 轮更新**：新增独立「更新日志」页面与侧栏导航按钮——元素 65→**66**（MainWindow 16→**17**），NavItem 样式命令 8→**9**（样式命令合计 14→**15**）；直接绑定与事件处理器不变。当前闭合：49 + 15 + 2 = 66。
+> **第 55 轮更新**：新增独立「更新日志」页面与侧栏导航按钮——元素 65→**66**（MainWindow 16→**17**），NavItem 样式命令 8→**9**（样式命令合计 14→**15**）；直接绑定与事件处理器不变。
+> **第 57 轮更新**：设置页「更新」卡片新增「检查更新」按钮——66→**67**，直接绑定 49→**50**。
+> **第 58 轮更新**：新增更新提醒弹窗 UpdateDialog（立即更新 / 关闭两个按钮，均为事件处理器）——67→**69**，事件处理器元素 2→**4**。当前闭合：**50 + 15 + 4 = 69**。
 
 ### 数字链闭合（原 66 → 现 65 的逐项分解）
 
@@ -86,7 +88,7 @@
 
 两个死按钮均由第 21 项防线测试（XAML Command 绑定全量核对）在上线当日抓出。
 
-## 逐页清单（Views 49 项 + MainWindow 16 项）
+## 逐页清单（Views 52 项 + MainWindow 17 项）
 
 ### 首页 HomeView（5）
 | 元素 | 绑定 | 状态 |
@@ -141,7 +143,7 @@
 | 刷新 | `ScanModsCommand` | ✅ |
 | 导入 .mrpack 整合包 | `ImportMrpackCommand` | ✅ |
 
-### 设置 SettingsView（6）
+### 设置 SettingsView（7）
 | 元素 | 绑定 | 状态 |
 |------|------|------|
 | 打开文件夹 | `OpenRootDirectoryCommand` | ✅ |
@@ -149,7 +151,14 @@
 | 使用（选择 Java） | `UseJavaCommand` | ✅ |
 | 导出诊断包 | `ExportDiagnosticsCommand` | ✅ |
 | 切换主题 | `SwitchThemeCommand`（直接绑定） | ✅ |
+| 检查更新 | `CheckUpdateCommand` | ✅（第 57 轮） |
 | 保存设置 | `ApplySettingsCommand` | ✅ |
+
+### 更新提醒弹窗 UpdateDialog（2）
+| 元素 | 绑定 | 状态 |
+|------|------|------|
+| 立即更新 | Click → `UpdateNow_Click` | ✅（第 58 轮） |
+| 关闭 | Click → `Close_Click` | ✅（第 58 轮） |
 
 ### 日志 LogsView（1）
 | 元素 | 绑定 | 状态 |
@@ -168,7 +177,7 @@
 | 引导：一键安装 | `FirstRunInstallCommand` | ✅ |
 | 引导：稍后再说 / 完成 | `FirstRunSkipCommand` / `FirstRunDoneCommand` | ✅ |
 
-> 页面合计核对：Home 5 + Download 2 + Downloads 2 + Instances 13 + 内容中心 17 + Mod 管理 3 + Settings 6 + Logs 1 = **49**（Views）+ **17**（MainWindow，第 55 轮新增「更新日志」导航按钮）= **66**，与分类合计 49 + 15 + 2 一致。
+> 页面合计核对：Home 5 + Download 2 + Downloads 2 + Instances 13 + 内容中心 17 + Mod 管理 3 + Settings 7 + Logs 1 + UpdateDialog 2 = **52**（Views）+ **17**（MainWindow）= **69**，与分类合计 50 + 15 + 4 一致。
 
 ## 附带反馈保障（第 40 轮同步加入，历史记录）
 

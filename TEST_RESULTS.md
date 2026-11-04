@@ -1,7 +1,7 @@
 # 自测结论（AuroraSelfTest）
 
-> 更新于 2026-11-01（第 57 轮）。
-> **上次全绿：2026-11-01 —— Unit 31/31（离线）、All 38/38（含网络集成）。**
+> 更新于 2026-11-04（第 58 轮）。
+> **上次全绿：2026-11-04 —— Unit 32/32（离线）、All 39/39（含网络集成）。**
 > 运行命令：`dotnet run --project tests/AuroraSelfTest -c Debug [-- --unit|--integration|--all]`
 > 一键脚本：`powershell -File scripts/run-tests.ps1 [-Full]`（CI 见 `.github/workflows/selftest.yml`）
 > 测试分层：**unit（离线，CI 必跑）/ integration（联网，CI 定时跑）/ all**。
@@ -42,8 +42,9 @@
 [PASS] SlowTransferWatcher: sustained crawl aborts, brief dips don't (pure logic)
 [PASS] LoaderCardVM: null coercion + append-only fill never auto-select (round-50 regression)
 [PASS] UpdateService: manifest signature + downgrade rejection (pure logic)
+[PASS] UpdatePolicy: 3-way mode switch (startup check / notify / auto-download)
 
-=== Result: 31 passed, 0 failed, 7 skipped ===（跳过的 7 项为网络集成测试）
+=== Result: 32 passed, 0 failed, 7 skipped ===（跳过的 7 项为网络集成测试）
 
 --all 模式（含网络集成）：
 另含 [PASS] Fetch + parse official version manifest
@@ -54,7 +55,7 @@
       [PASS] Resolver cache: multi-level inheritance chain
       [PASS] Resolver cache: corrupted & incomplete entries fall back to network
 
-=== Result: 38 passed, 0 failed, 0 skipped ===
+=== Result: 39 passed, 0 failed, 0 skipped ===
 ```
 
 ## 测试项增长记录（第 48 轮补记）
@@ -72,6 +73,7 @@
 | #29 | `SlowTransferWatcher: sustained crawl aborts, brief dips don't (pure logic)` | 第 52 轮 | 随下载慢速看门狗加入（持续爬行中止 / 短暂波动不误杀，注入时钟纯逻辑） |
 | #30 | `LoaderCardVM: null coercion + append-only fill never auto-select (round-50 regression)` | 第 53 轮 | 第 50 轮"卡片自动选中"根因的状态机回归锁（null 归一 / 追加不选中 / IsLoaderSelected 单一来源）；测试工程自此引用 Desktop 项目 |
 | #31 | `UpdateService: manifest signature + downgrade rejection (pure logic)` | 第 57 轮 | 自动更新安全核心：验签通过 / 篡改 url|sha|size|round 任一字段必失败 / 防降级（仅严格更高轮次算更新）；文档基线 Guard 同轮新增 BuildInfo.CurrentRound 一致性核对 |
+| #32 | `UpdatePolicy: 3-way mode switch (startup check / notify / auto-download)` | 第 58 轮 | 三态更新开关的纯逻辑状态机：模式 3 启动不检查 / 模式 1 自动下载 / 模式 2 弹窗 / 手动检查任何模式都弹窗 / 文案↔枚举往返 |
 
 > 此后新增/修改测试项必须在对应轮次的更新补充章节中说明——该约定由 #28 号防线自动核对三份文档头部计数，漂移即红。
 

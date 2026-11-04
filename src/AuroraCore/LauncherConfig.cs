@@ -1,3 +1,4 @@
+using AuroraCore.Services;
 using AuroraCore.Utils;
 
 namespace AuroraCore;
@@ -65,8 +66,13 @@ public sealed class LauncherConfig
     /// （UpdateService.DefaultFeedUrl，发布者发布前设置）；两者都空 = 不检查更新。</summary>
     public string? UpdateFeedUrl { get; set; }
 
-    /// <summary>启动时自动检查更新（默认开启）。发现新版本会后台下载并校验，
-    /// 重启启动器即自动完成换装。</summary>
+    /// <summary>更新方式三态开关（round-58）：1 自动更新 / 2 提醒但不自动更新 /
+    /// 3 不获取更新。默认 2 —— 每次启动检查，发现新版本弹窗（立即更新 / 关闭）。</summary>
+    public UpdateMode UpdateMode { get; set; } = UpdateMode.Notify;
+
+    /// <summary>启动更新检查方式（旧布尔开关，round-58 起由 UpdateMode 取代）。
+    /// 仅用于读取旧 config.json 的兼容迁移，不再写入。</summary>
+    [JsonIgnore]
     public bool AutoCheckUpdates { get; set; } = true;
 
     // ---- Derived directories ----
@@ -131,8 +137,22 @@ public sealed class LauncherConfig
         LauncherConfig cfg;
         if (File.Exists(path))
         {
-            try { cfg = JsonHelper.Deserialize<LauncherConfig>(File.ReadAllText(path)); }
+            var raw = File.ReadAllText(path);
+            try { cfg = JsonHelper.Deserialize<LauncherConfig>(raw); }
             catch { cfg = new LauncherConfig(); }
+            // One-time migration (round-58): old config.json had a boolean
+            // "autoCheckUpdates". If it was explicitly false and the new
+            // three-way "updateMode" is absent, honor the user's opt-out.
+            try
+            {
+                using var doc = JsonDocument.Parse(raw);
+                if (cfg.UpdateMode == UpdateMode.Notify &&
+                    !doc.RootElement.TryGetProperty("updateMode", out _) &&
+                    doc.RootElement.TryGetProperty("autoCheckUpdates", out var legacy) &&
+                    legacy.ValueKind == JsonValueKind.False)
+                    cfg.UpdateMode = UpdateMode.Disabled;
+            }
+            catch { /* malformed legacy config → keep defaults */ }
         }
         else
         {

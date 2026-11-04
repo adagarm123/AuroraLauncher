@@ -211,7 +211,7 @@ public class MainViewModel : ViewModelBase
         NavigateCommand = new RelayCommand(o => Navigate(o as string));
         UseJavaCommand = new RelayCommand(o => UseJava(o as string));
         ReloadJavaListCommand = new RelayCommand(async _ => await LoadJavaListAsync());
-        CheckUpdateCommand = new RelayCommand(_ => _ = CheckForUpdateAsync(manual: true));
+        CheckUpdateCommand = new RelayCommand(_ => _ = CheckForUpdateAsync());
 
         // ---- 自动更新（round-57）：启动时若已下载好更新包，先换装再继续 ----
         if (UpdateService.HasStagedUpdate())
@@ -235,61 +235,158 @@ public class MainViewModel : ViewModelBase
     private readonly UpdateService _update = new();
     private CancellationTokenSource? _updateCts;
 
-    /// <summary>Silent startup check: download in the background when nothing
-    /// else is running; every failure path is silent — an update check must
-    /// never bother the user.</summary>
+    // ---- 更新设置（round-58）----
+    public ObservableCollection<string> UpdateModeOptions { get; } = new()
+    {
+        UpdatePolicy.DisplayText(UpdateMode.Auto),
+        UpdatePolicy.DisplayText(UpdateMode.Notify),
+        UpdatePolicy.DisplayText(UpdateMode.Disabled),
+    };
+    public string UpdateModeText { get; set; } = UpdatePolicy.DisplayText(UpdateMode.Notify);
+    public string UpdateFeedUrlText { get; set; } = "";
+
+    private bool _isCheckingUpdate;
+    /// <summary>True while checking OR downloading — drives the progress bar
+    /// in 设置 → 更新 (same indeterminate-then-determinate pattern as the mod
+    /// search progress indicator).</summary>
+    public bool IsCheckingUpdate { get => _isCheckingUpdate; set => SetProperty(ref _isCheckingUpdate, value); }
+
+    private bool _updateProgressIndeterminate = true;
+    public bool UpdateProgressIndeterminate { get => _updateProgressIndeterminate; set => SetProperty(ref _updateProgressIndeterminate, value); }
+
+    private double _updateProgress;
+    public double UpdateProgress { get => _updateProgress; set => SetProperty(ref _updateProgress, value); }
+
+    private string _updateStatusText = "";
+    public string UpdateStatusText { get => _updateStatusText; set => SetProperty(ref _updateStatusText, value); }
+
+    /// <summary>Startup check (round-58): every launch checks unless the user
+    /// picked mode 3. Mode 1 downloads automatically; mode 2 shows the
+    /// two-button reminder; failures are silent so the check never annoys.</summary>
     private async Task AutoCheckUpdateAsync()
     {
+        var mode = LauncherConfig.Instance.UpdateMode;
+        if (!UpdatePolicy.ShouldCheckOnStartup(mode)) return;
         try
         {
-            if (!LauncherConfig.Instance.AutoCheckUpdates) return;
+            // Let the main window finish loading (and the first-run wizard
+            // settle) before any modal dialog can appear.
+            await Task.Delay(1200).ConfigureAwait(true);
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             var info = await _update.CheckAsync(timeout.Token).ConfigureAwait(true);
-            if (info == null) return;
-            if (IsBusy)
+            var action = UpdatePolicy.Decide(mode, info != null, manual: false);
+            if (action == UpdateAction.None || info == null) return;
+
+            if (action == UpdateAction.AutoDownload)
             {
-                ShowToast($"发现新版本（第 {info.Round} 轮），当前有任务进行中，稍后可在「设置 → 检查更新」手动更新。");
-                return;
+                ShowToast($"发现新版本（第 {info.Round} 轮），正在后台自动更新...");
+                await DownloadUpdateAsync(info, applyImmediately: false).ConfigureAwait(true);
             }
-            ShowToast($"发现新版本（第 {info.Round} 轮），正在后台下载...");
-            await DownloadUpdateAsync(info).ConfigureAwait(true);
+            else if (ShowUpdateDialog(info))
+            {
+                await DownloadUpdateAsync(info, applyImmediately: true).ConfigureAwait(true);
+            }
         }
         catch (Exception ex)
         {
-            AddLog("[Update] 自动更新失败（不影响使用）: " + ex.Message);
+            AddLog("[Update] 启动检查失败（不影响使用）: " + ex.Message);
         }
     }
 
-    /// <summary>Manual "检查更新" from Settings: reports status clearly.</summary>
-    private async Task CheckForUpdateAsync(bool manual)
+    /// <summary>Shows the startup reminder. Returns true ONLY when the user
+    /// picked 「立即更新」; the dialog has exactly two buttons.</summary>
+    private bool ShowUpdateDialog(UpdateManifest info)
     {
         try
         {
-            Status = "正在检查更新...";
+            var dlg = new UpdateDialog(info);
+            if (Application.Current.MainWindow is { IsLoaded: true } main) dlg.Owner = main;
+            return dlg.ShowDialog() == true && dlg.UpdateNow;
+        }
+        catch (Exception ex)
+        {
+            AddLog("[Update] 更新提醒弹窗显示失败: " + ex.Message);
+            return false;
+        }
+    }
+
+    /// <summary>Manual 「检查更新」 from Settings: shows a progress bar while
+    /// checking, then the same two-button dialog. Works in ALL modes (including
+    /// mode 3) because it is an explicit user action.</summary>
+    private async Task CheckForUpdateAsync()
+    {
+        if (IsCheckingUpdate) return;
+        IsCheckingUpdate = true;
+        UpdateProgressIndeterminate = true;
+        UpdateProgress = 0;
+        UpdateStatusText = "正在检查更新...";
+        Status = UpdateStatusText;
+        try
+        {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             var info = await _update.CheckAsync(timeout.Token).ConfigureAwait(true);
             if (info == null)
             {
-                Status = $"已是最新版本（第 {AuroraCore.BuildInfo.CurrentRound} 轮）";
+                UpdateStatusText = _update.LastCheckMessage;
+                Status = UpdateStatusText;
                 return;
             }
-            Status = $"发现新版本（第 {info.Round} 轮），正在下载...";
-            await DownloadUpdateAsync(info).ConfigureAwait(true);
+            UpdateStatusText = _update.LastCheckMessage;
+            Status = UpdateStatusText;
+            if (!ShowUpdateDialog(info))
+            {
+                UpdateStatusText = "已关闭更新提醒（可随时再次检查）";
+                return;
+            }
+            await DownloadUpdateAsync(info, applyImmediately: true).ConfigureAwait(true);
         }
-        catch (OperationCanceledException) { Status = "已取消更新下载"; }
-        catch (Exception ex) { Status = "更新失败: " + ex.Message; }
+        catch (OperationCanceledException)
+        {
+            UpdateStatusText = "已取消更新";
+            Status = UpdateStatusText;
+        }
+        catch (Exception ex)
+        {
+            UpdateStatusText = "更新失败: " + ex.Message;
+            Status = UpdateStatusText;
+        }
+        finally { IsCheckingUpdate = false; }
     }
 
-    private async Task DownloadUpdateAsync(UpdateManifest info)
+    private async Task DownloadUpdateAsync(UpdateManifest info, bool applyImmediately)
     {
         _updateCts = new CancellationTokenSource();
+        IsCheckingUpdate = true;
+        UpdateProgressIndeterminate = false;
+        UpdateProgress = 0;
+        UpdateStatusText = "正在下载更新...";
+        Status = "正在下载启动器更新...";
         try
         {
-            await _update.DownloadStagedAsync(info, OnDownloadProgress, _updateCts.Token).ConfigureAwait(true);
-            ShowToast("新版本已就绪：重启启动器即可自动完成更新。");
-            Status = "新版本已就绪，重启启动器即可完成更新";
+            await _update.DownloadStagedAsync(info, p => Dispatch(() =>
+            {
+                var total = p.TotalBytes > 0 ? p.TotalBytes : info.Size;
+                var pct = total > 0 ? Math.Clamp(p.DownloadedBytes * 100.0 / total, 0, 100) : 0;
+                UpdateProgress = pct;
+                UpdateStatusText = $"正在下载更新 {pct:0}%";
+            }), _updateCts.Token).ConfigureAwait(true);
+            UpdateProgress = 100;
+            if (applyImmediately)
+            {
+                UpdateStatusText = "更新下载完成，启动器即将重启...";
+                ShowToast("更新下载完成，启动器即将重启以完成更新…");
+                await Task.Delay(1800).ConfigureAwait(true);
+                UpdateService.ApplyStagedAndRestart();
+                Environment.Exit(0);
+            }
+            else
+            {
+                UpdateStatusText = "新版本已就绪，重启启动器即可自动完成更新";
+                ShowToast("新版本已就绪：重启启动器即可自动完成更新。");
+                Status = UpdateStatusText;
+            }
         }
-        finally { _updateCts = null; }
+        finally { _updateCts = null; IsCheckingUpdate = false; }
     }
 
     // ---- 网络环境自动感知：启动时轻量探测官方 vs 镜像，用数据决定默认线路 ----
@@ -793,7 +890,9 @@ public class MainViewModel : ViewModelBase
         ProxyUrl = c.ProxyUrl ?? "";
         MicrosoftClientIdText = c.MicrosoftClientId ?? "";
         AutoInstallFabricApi = c.AutoInstallFabricApi;
-        AutoCheckUpdates = c.AutoCheckUpdates;
+        UpdateModeText = UpdatePolicy.DisplayText(c.UpdateMode);
+        UpdateFeedUrlText = c.UpdateFeedUrl ?? "";
+        UpdateStatusText = $"当前第 {BuildInfo.CurrentRound} 轮 · 更新方式：{UpdateModeText}";
         WindowW = c.WindowWidth; WindowH = c.WindowHeight;
         ExtraJvm = c.ExtraJvmArgs;
         RootDirectoryText = c.RootDirectory;
@@ -919,8 +1018,6 @@ public class MainViewModel : ViewModelBase
     public string MicrosoftClientIdText { get; set; } = "";
     /// <summary>安装 Fabric 实例时自动安装适配的 Fabric API 前置（默认开启）。</summary>
     public bool AutoInstallFabricApi { get; set; } = true;
-    /// <summary>启动时自动检查更新（默认开启）。</summary>
-    public bool AutoCheckUpdates { get; set; } = true;
     public int WindowW { get; set; } = 854;
     public int WindowH { get; set; } = 480;
     public string ExtraJvm { get; set; } = "";
@@ -2273,7 +2370,8 @@ public class MainViewModel : ViewModelBase
         c.ProxyUrl = string.IsNullOrWhiteSpace(ProxyUrl) ? null : ProxyUrl;
         c.MicrosoftClientId = string.IsNullOrWhiteSpace(MicrosoftClientIdText) ? null : MicrosoftClientIdText.Trim();
         c.AutoInstallFabricApi = AutoInstallFabricApi;
-        c.AutoCheckUpdates = AutoCheckUpdates;
+        c.UpdateMode = UpdatePolicy.FromDisplayText(UpdateModeText);
+        c.UpdateFeedUrl = string.IsNullOrWhiteSpace(UpdateFeedUrlText) ? null : UpdateFeedUrlText.Trim();
         RefreshMicrosoftLoginState();
         c.WindowWidth = WindowW; c.WindowHeight = WindowH;
         c.ExtraJvmArgs = ExtraJvm;
