@@ -57,7 +57,7 @@ public sealed class UpdateService
     /// publishing (any static HTTPS host works — see docs/auto-update.md).
     /// Empty = update checks disabled; LauncherConfig.UpdateFeedUrl overrides
     /// this for testing.</summary>
-    public const string DefaultFeedUrl = "";
+    public const string DefaultFeedUrl = "https://adagarm123.github.io/AuroraLauncher/latest.json";
 
     private readonly DownloadEngine _engine = new();
     private readonly Logger _log = Logger.Instance;
