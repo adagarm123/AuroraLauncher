@@ -1,7 +1,7 @@
 # 自测结论（AuroraSelfTest）
 
-> 更新于 2026-11-04（第 58 轮）。
-> **上次全绿：2026-11-04 —— Unit 32/32（离线）、All 39/39（含网络集成）。**
+> 更新于 2026-11-05（第 61 轮）。
+> **上次全绿：2026-11-05 —— Unit 37/37（离线）、All 44/44（含网络集成）。**
 > 运行命令：`dotnet run --project tests/AuroraSelfTest -c Debug [-- --unit|--integration|--all]`
 > 一键脚本：`powershell -File scripts/run-tests.ps1 [-Full]`（CI 见 `.github/workflows/selftest.yml`）
 > 测试分层：**unit（离线，CI 必跑）/ integration（联网，CI 定时跑）/ all**。
@@ -31,7 +31,7 @@
 [PASS] Guard: every XAML command binding resolves to a VM property
 [WARN] VM 命令从未被任何 XAML 绑定（死代码候选，仅警告不失败）: ChooseInstanceIconCommand, InstallContentCommand, ResetContentCommand
 [PASS] Guard: every interactive element has a binding or event handler
-[PASS] Guard: README round numbering is continuous
+[PASS] Guard: CHANGELOG round numbering is continuous
 [PASS] DiagnosticsExporter: truncation keeps the TAIL (crash lines at end)
 [PASS] DiagnosticsExporter: redaction replaces (not deletes) and reports hits
 [PASS] DiagnosticsExporter: no over-redaction (mod names / non-user paths stay intact)
@@ -43,8 +43,13 @@
 [PASS] LoaderCardVM: null coercion + append-only fill never auto-select (round-50 regression)
 [PASS] UpdateService: manifest signature + downgrade rejection (pure logic)
 [PASS] UpdatePolicy: 3-way mode switch (startup check / notify / auto-download)
+[PASS] JavaRuntimeService: Adoptium manifest parse + zip-slip guard (pure logic)
+[PASS] CrashAnalyzer.BuildReport: all causes, case-insensitive, no-match fallback
+[PASS] CurseForgeService: search parse + official-page URL builders (pure logic)
+[PASS] OptiFineService: downloads-page parse + ad-token URL parse (pure logic)
+[PASS] UpdateApplyArgs: visible updater handoff round-trips and fails closed
 
-=== Result: 32 passed, 0 failed, 7 skipped ===（跳过的 7 项为网络集成测试）
+=== Result: 37 passed, 0 failed, 7 skipped ===（跳过的 7 项为网络集成测试）
 
 --all 模式（含网络集成）：
 另含 [PASS] Fetch + parse official version manifest
@@ -55,7 +60,7 @@
       [PASS] Resolver cache: multi-level inheritance chain
       [PASS] Resolver cache: corrupted & incomplete entries fall back to network
 
-=== Result: 39 passed, 0 failed, 0 skipped ===
+=== Result: 44 passed, 0 failed, 0 skipped ===
 ```
 
 ## 测试项增长记录（第 48 轮补记）
@@ -66,7 +71,7 @@
 |----|------|----------|------|
 | #23 | `NetworkProbe.Decide: data-driven source selection` | 第 42 轮（代码），第 43 轮计入口径 | 随「网络环境自动感知」功能加入；当时 TEST_RESULTS 清单漏列，第 44 轮修正口径（23=22+1） |
 | #24 | `AuthService: Microsoft client id resolution + configuration guard` | 第 45 轮 | 随微软登录 400 根治加入（env > config 解析优先级 + 配置门卫） |
-| #25 | `Guard: README round numbering is continuous` | 第 45 轮文档会话 | 随「第 44→46 轮编号跳轮」修复加入；**当时未在更新日志中说明**（本表补记），README 更新补充章节同轮补齐 |
+| #25 | `Guard: README round numbering is continuous` | 第 45 轮文档会话 | 随「第 44→46 轮编号跳轮」修复加入；**当时未在更新日志中说明**（本表补记），README 更新补充章节同轮补齐（第 59 轮起历史记录迁入 CHANGELOG.md，该 Guard 更名并改扫 CHANGELOG；第 60 轮扩展为同时校验 README 最新一轮标题 = CurrentRound、两份文档的历史范围声明 = CHANGELOG 末轮，漏改数字即红） |
 | #26 | `LauncherConfig: AutoInstallFabricApi defaults ON and survives JSON round-trip` | 第 47 轮 | 随 Fabric API 前置自动安装加入 |
 | #27 | `GenerationGate: stale loader-card responses are discarded (race regression)` | 第 48 轮 | 随加载器卡片延迟修复加入（乱序响应丢弃的纯逻辑回归测试） |
 | #28 | `Guard: doc baselines agree (round + unit/all counts across the three main docs)` | 第 48 轮 | 文档基线一致性防线：README / ROADMAP / TEST_RESULTS 三份文档的轮次标记与 Unit/All 计数必须一致，否则测试红——"文档和代码对不上"从人工约定变成机制拦截 |
@@ -74,6 +79,11 @@
 | #30 | `LoaderCardVM: null coercion + append-only fill never auto-select (round-50 regression)` | 第 53 轮 | 第 50 轮"卡片自动选中"根因的状态机回归锁（null 归一 / 追加不选中 / IsLoaderSelected 单一来源）；测试工程自此引用 Desktop 项目 |
 | #31 | `UpdateService: manifest signature + downgrade rejection (pure logic)` | 第 57 轮 | 自动更新安全核心：验签通过 / 篡改 url|sha|size|round 任一字段必失败 / 防降级（仅严格更高轮次算更新）；文档基线 Guard 同轮新增 BuildInfo.CurrentRound 一致性核对 |
 | #32 | `UpdatePolicy: 3-way mode switch (startup check / notify / auto-download)` | 第 58 轮 | 三态更新开关的纯逻辑状态机：模式 3 启动不检查 / 模式 1 自动下载 / 模式 2 弹窗 / 手动检查任何模式都弹窗 / 文案↔枚举往返 |
+| #33 | `JavaRuntimeService: Adoptium manifest parse + zip-slip guard (pure logic)` | 第 59 轮 | 一键安装 Java 21 的安全核心：清单必须给出 HTTPS zip + 64 位 SHA-256，否则拒绝；zip 条目拒绝绝对路径 / 盘符 / `..` / ADS |
+| #34 | `CrashAnalyzer.BuildReport: all causes, case-insensitive, no-match fallback` | 第 60 轮 | 图形化崩溃卡片数据核心：一次崩溃列出全部匹配规则、大小写不敏感、无匹配时走兜底提示；旧 `Analyze()` 保持兼容 |
+| #35 | `CurseForgeService: search parse + official-page URL builders (pure logic)` | 第 60 轮 | CurseForge 搜索响应解析 / 无效条目跳过 / 畸形 JSON 失败关闭 / 下载动作只构造官方文件页 URL / 查询编码 |
+| #36 | `OptiFineService: downloads-page parse + ad-token URL parse (pure logic)` | 第 60 轮 | OptiFine 官网版本列表去重与命名解析 / 隐藏表单与内联链接两种令牌形式 / 缺令牌失败关闭（不把广告页当安装器） |
+| #37 | `UpdateApplyArgs: visible updater handoff round-trips and fails closed` | 第 61 轮 | 可见更新器链路：含空格路径作为单个 argv token 往返、畸形 token / 相对路径 / 非法 PID / 缺字段 / 多字段一律失败关闭；另含无 GUI 的完整换装演练（临时目录内等待已退出 PID → 二次 SHA-256 校验 → 覆盖目标 → 写 build-info → 注入式重启），以及「staged 被篡改时失败关闭且不破坏已安装 EXE」；换装重试预算有界 |
 
 > 此后新增/修改测试项必须在对应轮次的更新补充章节中说明——该约定由 #28 号防线自动核对三份文档头部计数，漂移即红。
 

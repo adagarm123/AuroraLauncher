@@ -18,12 +18,55 @@ public static class HelpContent
     /// <summary>Round number of the newest entry in <see cref="Changelog"/> —
     /// bump together with the changelog entry; drives the one-time "已更新"
     /// startup toast (dismissed permanently once the user opens the page).</summary>
-    public const int LatestChangelogRound = 58;
+    public const int LatestChangelogRound = 61;
     /// <summary>更新日志（说人话版本：无技术名词、用户视角）——独立页面
     /// 「更新日志」使用；模板见 docs/release-notes-template.md。
     /// 每轮发布时在此置顶新增一条。</summary>
     public static IEnumerable<HelpTopicVM> Changelog() => new[]
     {
+        new HelpTopicVM
+        {
+            Category = "更新日志", Glyph = "\uE777", Title = "【第 61 轮更新】更新时不再黑屏",
+            Summary = "装更新时会一直显示进度窗口，下载进度也更清楚",
+            Body =
+                "本次主要是体验修复：\n\n" +
+                "修复\n" +
+                "· 更新下载完、点重启之后，屏幕可能会黑十几秒，什么都没有，容易以为程序崩溃了——现在会一直显示一个小窗口，告诉你「正在应用更新并重启」，每一步在做什么都看得见。\n" +
+                "· 如果安装时文件被别的程序占住，以前只能干等甚至没反应——现在会告诉你正在重试；实在装不上也会写明原因，并给一个「重试」按钮。\n\n" +
+                "优化\n" +
+                "· 设置 → 更新 里的下载进度，现在会显示百分比、已经下了多少 MB、当前网速，主界面底部的状态栏也会同步显示。\n" +
+                "· 更新下载完成后，设置页会多出「立即重启并应用更新」按钮，什么时候装由你决定。\n" +
+                "· 后台自动下载时会提示你去设置页看进度，不再是完全没动静。\n\n" +
+                "如果你遇到问题，可在「设置 → 导出诊断包」，把文件附在反馈里，排查会快很多。"
+        },
+        new HelpTopicVM
+        {
+            Category = "更新日志", Glyph = "\uE777", Title = "【第 60 轮更新】崩溃了不用再翻日志",
+            Summary = "崩溃原因直接列出来，还加了两个新平台",
+            Body =
+                "新功能\n" +
+                "· 游戏崩溃时，日志页会直接出现一张醒目的红色卡片，写清楚「可能的原因」和怎么解决——不用再在一堆黑底白字里找。卡片上有一键导出诊断包和前往求助两个按钮。\n" +
+                "· 内容中心新增「CurseForge」：可以搜索和浏览上面的模组与整合包。因为平台规定，下载会带你到官方网页完成，下载好的文件用「本地管理」导入即可。\n" +
+                "· 内容中心新增「OptiFine」：点一下就能自动下载并打开官方安装器，按提示点 Install 即可。\n\n" +
+                "优化\n" +
+                "· 崩溃后日志自动切到「只看错误」，卡片可随时关掉。\n" +
+                "· CurseForge 和 OptiFine 页面都有状态文字和进度提示，失败会告诉你下一步怎么办。\n\n" +
+                "如果你遇到问题，可在「设置 → 导出诊断包」，把文件附在反馈里，排查会快很多。"
+        },
+        new HelpTopicVM
+        {
+            Category = "更新日志", Glyph = "\uE777", Title = "【第 59 轮更新】新功能：一键装好 Java",
+            Summary = "点一下就自动下载、装好并设为默认",
+            Body =
+                "新功能\n" +
+                "· 设置 → Java 环境里点一下「一键安装 Java 21」，启动器会自动下载、校验、装好并设为默认 Java——不用自己去官网找安装包，也不用改系统设置。\n" +
+                "· 之前已经装过的不会重复下载，直接帮你设为默认。\n" +
+                "· 历史更新记录搬到了单独的文件（CHANGELOG.md），首页说明更清爽；每一轮做了什么，在左侧「更新日志」页照样能看。\n\n" +
+                "优化\n" +
+                "· 安装 Java 时有进度条和状态文字，装完会明确告诉你结果。\n" +
+                "· 点「重新检测」也能看到启动器自己装好的 Java 了。\n\n" +
+                "如果你遇到问题，可在「设置 → 导出诊断包」，把文件附在反馈里，排查会快很多。"
+        },
         new HelpTopicVM
         {
             Category = "更新日志", Glyph = "\uE777", Title = "【第 58 轮更新】新功能：更新方式自己选",
@@ -123,6 +166,14 @@ public static class HelpContent
         },
 
         // ---- 常见问题 ----
+        new HelpTopicVM
+        {
+            Category = "常见问题", Glyph = "\uE7C3", Title = "CurseForge / OptiFine / 崩溃报告",
+            Summary = "新平台与崩溃卡片怎么用",
+            Body = "· CurseForge：内容中心 →「CurseForge」，填入自己的 API Key 后可搜索浏览；点「前往下载页」会在浏览器打开官方文件页（平台不允许第三方直接下载文件）。下载好的 .jar 放进 实例目录/mods/，整合包 .zip 用「本地管理 → 导入 .mrpack 整合包」。\n" +
+                   "· OptiFine：内容中心 →「OptiFine」选版本点「一键安装」，启动器会下载并打开官方安装器；在安装器里点 Install，并把目录设为启动器数据目录（路径会自动复制）。完成后用 实例管理 →「导入 .minecraft」导入。官网打不开时可用「选择本地安装器」。\n" +
+                   "· 崩溃报告：游戏异常退出时，日志页顶部出现红色卡片列出可能原因；用「一键导出诊断包」保存后附在反馈里，或点「前往求助」。"
+        },
         new HelpTopicVM
         {
             Category = "常见问题", Glyph = "\uE896", Title = "下载失败 / 速度慢",

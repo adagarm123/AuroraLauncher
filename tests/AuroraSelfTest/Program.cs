@@ -1052,22 +1052,240 @@ internal static class Program
                     $"display text round-trip failed for {mode}");
         });
 
-        Check("Guard: README round numbering is continuous", () =>
+        Check("JavaRuntimeService: Adoptium manifest parse + zip-slip guard (pure logic)", () =>
+        {
+            // Round-59 one-click Java 21: the manifest decides BOTH the URL
+            // and the integrity check, so it must fail closed on anything
+            // odd; extraction must never write outside our java/ folder.
+            const string hash = "A4DBAA05FCA4BD89D84584E58C459BD732EFEBB1722AF80AB13C6516832004F9";
+            var json = "[{\"binary\":{\"package\":{\"name\":\"OpenJDK21U-jdk_x64_windows_hotspot_21.0.13_9.zip\"," +
+                       "\"link\":\"https://github.com/adoptium/temurin21-binaries/releases/download/x/OpenJDK21U.zip\"," +
+                       "\"checksum\":\"" + hash + "\",\"size\":205421281}}," +
+                       "\"release_name\":\"jdk-21.0.13+9\",\"version\":{\"major\":21}}]";
+            var pkg = JavaRuntimeService.ParseLatest(json);
+            Assert(pkg != null, "a valid Adoptium asset must parse");
+            Assert(pkg!.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase), "must be a zip package");
+            Assert(pkg.Url.StartsWith("https://", StringComparison.Ordinal), "download link must be HTTPS");
+            Assert(pkg.Sha256 == hash && pkg.Size == 205421281, "checksum and size must be preserved verbatim");
+            Assert(pkg.ReleaseName == "jdk-21.0.13+9" && pkg.Major == 21, "release name / major must parse");
+
+            // Fail closed: no plain HTTP, no short/missing checksum, no non-zip.
+            Assert(JavaRuntimeService.ParseLatest(json.Replace("https://github.com", "http://github.com")) == null,
+                "plain HTTP link must be rejected");
+            Assert(JavaRuntimeService.ParseLatest(json.Replace(hash, "DEADBEEF")) == null,
+                "missing/short SHA-256 must be rejected");
+            Assert(JavaRuntimeService.ParseLatest(json.Replace(".zip\"", ".msi\"")) == null,
+                "non-zip packages must be rejected");
+            Assert(JavaRuntimeService.ParseLatest("{}") == null, "wrong JSON shape must be rejected");
+
+            // Zip-slip guard.
+            Assert(JavaRuntimeService.IsSafeEntryPath("jdk-21.0.13+9/bin/java.exe"), "normal entry must pass");
+            Assert(JavaRuntimeService.IsSafeEntryPath("jdk-21.0.13+9/lib/modules"), "nested entry must pass");
+            foreach (var bad in new[] { "../evil.exe", "a/../../evil.exe", "/abs/evil.exe", "C:\\evil.exe", "jdk:stream", "" })
+                Assert(!JavaRuntimeService.IsSafeEntryPath(bad), $"unsafe entry must be rejected: '{bad}'");
+        });
+
+        Check("CrashAnalyzer.BuildReport: all causes, case-insensitive, no-match fallback", () =>
+        {
+            // Round-60 crash card: it must list EVERY matching rule (a modpack
+            // crash often has two causes), not just the first one.
+            var lines = new[] {
+                "java.lang.UnsupportedClassVersionError: class file version 65.0",
+                "Duplicate mods: fabric-api found twice",
+                "some unrelated line" };
+            var r = CrashAnalyzer.BuildReport(-1, "测试实例", lines);
+            Assert(r.ExitCode == -1 && r.InstanceName == "测试实例", "exit code and instance must be preserved");
+            Assert(r.HasCauses && r.Causes.Count >= 2, "must report BOTH Java-version and duplicate-mod causes");
+            Assert(r.Causes.Any(c => c.Title == "Java 版本过低"), "Java version rule must match");
+            Assert(r.Causes.Any(c => c.Title == "检测到重复 Mod"), "duplicate mod rule must match");
+            Assert(CrashAnalyzer.BuildReport(1, "x", new[] { "duplicate mods" }).Causes.Count >= 1,
+                "matching must be case-insensitive");
+            var none = CrashAnalyzer.BuildReport(2, "x", new[] { "game closed normally" });
+            Assert(!none.HasCauses, "no rule → no causes (card shows the fallback hint)");
+            Assert(CrashAnalyzer.Analyze(new[] { "java.lang.UnsupportedClassVersionError" }) != null,
+                "legacy Analyze() must keep working");
+        });
+
+        Check("CurseForgeService: search parse + official-page URL builders (pure logic)", () =>
+        {
+            var json = "{\"data\":[" +
+                "{\"id\":123,\"name\":\"JEI\",\"summary\":\"Just Enough Items\",\"slug\":\"jei\"," +
+                "\"downloadCount\":1234567,\"links\":{\"websiteUrl\":\"https://www.curseforge.com/minecraft/mc-mods/jei\"}}," +
+                "{\"id\":0,\"name\":\"Malformed\"}]}";
+            var list = CurseForgeService.ParseSearch(json);
+            Assert(list.Count == 1, "entry without a valid id must be skipped");
+            Assert(list[0].Id == 123 && list[0].Name == "JEI" && list[0].Slug == "jei" && list[0].Downloads == 1234567,
+                "fields must parse verbatim");
+            Assert(CurseForgeService.BuildFilesPageUrl(list[0]).EndsWith("/files", StringComparison.Ordinal),
+                "download action must land on the official files page");
+            Assert(CurseForgeService.ParseSearch("{}").Count == 0, "wrong JSON shape must fail closed");
+            Assert(CurseForgeService.BuildWebSearchUrl("a b").Contains("a%20b", StringComparison.Ordinal),
+                "web search query must be URL-encoded");
+        });
+
+        Check("OptiFineService: downloads-page parse + ad-token URL parse (pure logic)", () =>
+        {
+            var html = "<a href=\"adloadx?f=OptiFine_1.21.1_HD_U_J1.jar\">A</a>" +
+                       "<a href=\"adloadx?f=OptiFine_1.20.1_HD_U_I6.jar\">B</a>" +
+                       "<a href=\"adloadx?f=OptiFine_1.21.1_HD_U_J1.jar\">dup</a>";
+            var builds = OptiFineService.ParseDownloadsPage(html);
+            Assert(builds.Count == 2, "duplicate installer links must be de-duplicated");
+            Assert(builds[0].McVersion == "1.21.1" && builds[0].FileName.EndsWith(".jar", StringComparison.Ordinal),
+                "MC version / file name must derive from the conventional naming");
+            Assert(builds[0].PageUrl.StartsWith("https://optifine.net/adloadx", StringComparison.Ordinal),
+                "ad page URL must be the official site");
+            Assert(OptiFineService.ParseDownloadsPage("no links here").Count == 0, "no links → empty list");
+
+            var ad = "<form action=\"downloadx\">" +
+                     "<input type=\"hidden\" name=\"f\" value=\"OptiFine_1.21.1_HD_U_J1.jar\">" +
+                     "<input type=\"hidden\" name=\"x\" value=\"ABC123\"></form>";
+            Assert(OptiFineService.ParseDownloadUrl(ad) ==
+                   "https://optifine.net/downloadx?f=OptiFine_1.21.1_HD_U_J1.jar&x=ABC123",
+                "hidden form fields must resolve to the official download URL");
+            Assert(OptiFineService.ParseDownloadUrl(
+                       "<a href=\"downloadx?f=OptiFine_1.20.1_HD_U_I6.jar&amp;x=ZZ9\">get</a>") ==
+                   "https://optifine.net/downloadx?f=OptiFine_1.20.1_HD_U_I6.jar&x=ZZ9",
+                "inline (HTML-escaped) link must resolve");
+            Assert(OptiFineService.ParseDownloadUrl("<html>nothing</html>") == null,
+                "missing token must fail closed instead of downloading the ad page");
+        });
+
+        Check("UpdateApplyArgs: visible updater handoff round-trips and fails closed", () =>
+        {
+            // Round-61: the launcher relaunches ITSELF as a visible updater
+            // host. A mangled handoff would either show nothing (black screen
+            // again) or overwrite the wrong file — parsing must fail closed.
+            var plan = new UpdateApplyPlan
+            {
+                OldPid = 4321,
+                TargetExe = @"C:\Program Files\Aurora\AuroraLauncher.exe",
+                StagedExe = @"D:\My Games\Aurora\update\AuroraLauncher.new.exe",
+                StagedInfo = @"D:\My Games\Aurora\update\build-info.txt"
+            };
+            Assert(plan.IsValid, "plan with absolute paths must be valid");
+            var token = UpdateApplyArgs.Build(plan);
+            Assert(token.Contains(@"C:\Program Files\Aurora", StringComparison.Ordinal),
+                "paths containing spaces must survive as ONE argv token");
+            Assert(UpdateApplyArgs.TryParse(new[] { "--other", token }, out var parsed) && parsed != null,
+                "host switch must be found among unrelated args");
+            Assert(parsed!.OldPid == plan.OldPid && parsed.TargetExe == plan.TargetExe &&
+                   parsed.StagedExe == plan.StagedExe && parsed.StagedInfo == plan.StagedInfo,
+                "round-trip must preserve every field");
+
+            foreach (var bad in new[]
+                     {
+                         "--apply-update|abc|C:\\a.exe|C:\\b.exe|C:\\i.txt",   // pid not a number
+                         "--apply-update|1|relative\\a.exe|C:\\b.exe|C:\\i.txt", // relative target
+                         "--apply-update|-4|C:\\a.exe|C:\\b.exe|C:\\i.txt",      // invalid pid
+                         "--apply-update|1|C:\\a.exe|C:\\b.exe",                 // truncated
+                         "--apply-update|1|C:\\a.exe|C:\\b.exe|C:\\i.txt|extra"  // extra field
+                     })
+                Assert(!UpdateApplyArgs.TryParse(new[] { bad }, out _),
+                    "malformed handoff must fail closed: " + bad);
+            Assert(!UpdateApplyArgs.TryParse(Array.Empty<string>(), out _), "no args → normal launch");
+            Assert(!new UpdateApplyPlan { OldPid = 0 }.IsValid, "missing paths/pid must be invalid");
+            Assert(UpdateApplier.MaxCopyAttempts >= 3, "copy must keep a bounded retry budget");
+
+            // Full swap rehearsal without a GUI: an already-dead PID, a temp
+            // "old exe", a staged payload and a real SHA-256 in build-info.
+            // The launch is injected, so no second launcher is spawned.
+            var sandbox = Path.Combine(Path.GetTempPath(), "aurora-swap-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                var stageDir = Path.Combine(sandbox, "update");
+                Directory.CreateDirectory(stageDir);
+                var stage = Path.Combine(stageDir, "AuroraLauncher.new.exe");
+                var info = Path.Combine(stageDir, "build-info.txt");
+                var target = Path.Combine(sandbox, "AuroraLauncher.exe");
+                const string payload = "new launcher payload";
+                File.WriteAllText(stage, payload);
+                File.WriteAllText(target, "old launcher");
+                var hash = Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(stage)));
+                File.WriteAllText(info, "build-time : test\r\nexe-sha256 : " + hash + "\r\n");
+                var swap = new UpdateApplyPlan
+                {
+                    OldPid = int.MaxValue, // guaranteed absent → wait resolves immediately
+                    TargetExe = target,
+                    StagedExe = stage,
+                    StagedInfo = info
+                };
+                var stages = new List<string>();
+                string? launched = null;
+                UpdateApplier.ApplyAsync(swap, (s, _) => stages.Add(s), default,
+                    p => { launched = p; return true; }).GetAwaiter().GetResult();
+                Assert(File.ReadAllText(target) == payload, "target exe must be replaced by the staged bytes");
+                Assert(launched == target, "new launcher must be relaunched from the TARGET path");
+                Assert(!File.Exists(stage), "staged copy must be swept after a successful swap");
+                Assert(File.Exists(Path.Combine(sandbox, "build-info.txt")), "build-info must be copied next to the new exe");
+                Assert(stages.Any(s => s.Contains("替换")) && stages.Any(s => s.Contains("重新启动")),
+                    "visible stage texts must cover copy and relaunch");
+
+                // Tamper with the staged file → fail closed, installed exe untouched.
+                File.WriteAllText(stage, "TAMPERED");
+                File.WriteAllText(target, "installed launcher");
+                var threw = false;
+                try
+                {
+                    UpdateApplier.ApplyAsync(swap, (_, _) => { }, default, _ => true).GetAwaiter().GetResult();
+                }
+                catch (IOException) { threw = true; }
+                Assert(threw, "a staged file that no longer matches its sha256 must fail closed");
+                Assert(File.ReadAllText(target) == "installed launcher", "a failed swap must not damage the installed exe");
+            }
+            finally
+            {
+                try { Directory.Delete(sandbox, recursive: true); } catch { /* best effort */ }
+            }
+        });
+
+        Check("Guard: CHANGELOG round numbering is continuous", () =>
         {
             // Round sections were lost/misnumbered twice (5, 16 lost; 44→46
-            // skip). The changelog is project memory — keep it gapless.
+            // skip). Round 59 moved all history into CHANGELOG.md — scan it
+            // there now, and make sure the archive keeps pace with releases:
+            // it must end exactly one round before the current build.
             var srcRoot = FindSourceRoot()!;
-            var readme = File.ReadAllText(Path.Combine(srcRoot, "README.md"));
+            var changelog = File.ReadAllText(Path.Combine(srcRoot, "CHANGELOG.md"));
             var nums = System.Text.RegularExpressions.Regex.Matches(
-                    readme, @"^## 更新补充（第 (\d+) 轮", System.Text.RegularExpressions.RegexOptions.Multiline)
+                    changelog, @"^## 更新补充（第 (\d+) 轮", System.Text.RegularExpressions.RegexOptions.Multiline)
                 .Select(m => int.Parse(m.Groups[1].Value)).ToList();
             Assert(nums.Count >= 40, $"too few round sections found ({nums.Count})");
             var gaps = new List<string>();
             for (int i = 1; i < nums.Count; i++)
                 if (nums[i] != nums[i - 1] + 1)
                     gaps.Add($"{nums[i - 1]}→{nums[i]}");
-            var gapText = string.Join("; ", gaps);
-            Assert(gaps.Count == 0, $"README round numbering has gaps: {gapText}");
+            Assert(gaps.Count == 0, $"CHANGELOG round numbering has gaps: {string.Join("; ", gaps)}");
+            Assert(nums.Count > 0 && nums[^1] == AuroraCore.BuildInfo.CurrentRound - 1,
+                $"CHANGELOG must end at round {AuroraCore.BuildInfo.CurrentRound - 1} (last = {nums.LastOrDefault()}) — " +
+                "rotate the previous README round into CHANGELOG.md on every release");
+
+            // Round-60 follow-up: the two docs LOOKED out of sync because the
+            // human-readable "history covers up to round N" lines still said
+            // 58 while the archive already ended at 59. Guard the handoff
+            // itself, not just the section numbering.
+            var readme = File.ReadAllText(Path.Combine(srcRoot, "README.md"));
+            var latest = System.Text.RegularExpressions.Regex.Match(
+                readme, @"^### 第 (\d+) 轮[：:]", System.Text.RegularExpressions.RegexOptions.Multiline);
+            Assert(latest.Success, "README must carry a '### 第 N 轮：...' latest-round section");
+            Assert(int.Parse(latest.Groups[1].Value) == AuroraCore.BuildInfo.CurrentRound,
+                $"README latest round ({latest.Groups[1].Value}) must equal BuildInfo.CurrentRound ({AuroraCore.BuildInfo.CurrentRound})");
+
+            var claims = new List<(string Doc, int Round)>();
+            foreach (var doc in new[] { ("README.md", readme), ("CHANGELOG.md", changelog) })
+            {
+                foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(
+                             doc.Item2, @"第\s*1\s*[–—-]\s*(\d+)\s*轮历史"))
+                    claims.Add((doc.Item1, int.Parse(m.Groups[1].Value)));
+                foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(
+                             doc.Item2, @"第\s*3\s*轮至第\s*(\d+)\s*轮逐轮补充"))
+                    claims.Add((doc.Item1, int.Parse(m.Groups[1].Value)));
+            }
+            Assert(claims.Count == 2, $"expected exactly 2 explicit history-range claims (README + CHANGELOG), got {claims.Count}");
+            foreach (var c in claims)
+                Assert(c.Round == nums[^1],
+                    $"{c.Doc} claims history up to round {c.Round}, but CHANGELOG actually ends at {nums[^1]} — " +
+                    "update the range statement when rotating rounds");
         });
 
         Console.WriteLine($"\n=== Result: {_passed} passed, {_failed} failed, {_skipped} skipped ===");

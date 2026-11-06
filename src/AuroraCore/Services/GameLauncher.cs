@@ -89,6 +89,30 @@ public static class CrashAnalyzer
         new("Exception in thread \"main\"", "主线程抛出异常", "启动失败，详情见上方游戏输出"),
     };
 
+    /// <summary>Structured triage result for the graphical crash card
+    /// (round-60): ALL matching rules, not just the first one — a modpack
+    /// crash often has both "missing dependency" and "duplicate mod".</summary>
+    public sealed record CrashFinding(string Title, string Suggestion);
+
+    public sealed record CrashReport(int ExitCode, string InstanceName, IReadOnlyList<CrashFinding> Causes)
+    {
+        public bool HasCauses => Causes.Count > 0;
+        public string Headline => "检测到游戏崩溃";
+    }
+
+    /// <summary>Case-insensitive match of EVERY rule against the captured log.
+    /// Pure logic (no IO) so the crash-card content is unit-testable.</summary>
+    public static CrashReport BuildReport(int exitCode, string instanceName, IEnumerable<string> lines)
+    {
+        var text = string.Join("\n", lines);
+        var causes = Rules
+            .Where(r => System.Text.RegularExpressions.Regex.IsMatch(text, r.Pattern,
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            .Select(r => new CrashFinding(r.Title, r.Suggestion))
+            .ToList();
+        return new CrashReport(exitCode, instanceName, causes);
+    }
+
     public static string? Analyze(IEnumerable<string> lines)
     {
         var text = string.Join("\n", lines);

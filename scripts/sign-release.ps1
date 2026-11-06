@@ -61,6 +61,8 @@ Set-Content (Join-Path $root "publish\latest.json") $json -Encoding utf8
 Write-Host "latest.json written:"
 Write-Host $json
 Write-Host ""
-Write-Host "Upload BOTH files to your feed host (URLs must match -DownloadUrl):"
-Write-Host "  publish\AuroraLauncher.exe -> $DownloadUrl"
-Write-Host "  publish\latest.json        -> (your latest.json URL, set as UpdateService.DefaultFeedUrl)"
+Write-Host "Signed manifest ready for EXE at: $DownloadUrl"
+Write-Host ""
+Write-Host "On a release tag, .github/workflows/release.yml uploads EXE + build-info.txt +"
+Write-Host "latest.json and deploys publish/ to Pages atomically - no manual upload needed."
+Write-Host "Local/offline signing only: -DownloadUrl must match the EXE's real hosted address."

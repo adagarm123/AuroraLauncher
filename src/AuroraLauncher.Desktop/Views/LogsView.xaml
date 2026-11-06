@@ -7,9 +7,64 @@
     <Grid Margin="24">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
-        <Grid Grid.Row="0" Margin="0,0,0,14">
+
+        <!-- ======== 图形化崩溃报告卡片（round-60）：替代在一堆日志里找原因 ======== -->
+        <Border Grid.Row="0" Margin="0,0,0,14" Padding="18" CornerRadius="12"
+                Background="{DynamicResource DangerSoftBrush}"
+                BorderBrush="{DynamicResource DangerBrush}" BorderThickness="1"
+                Visibility="{Binding HasCrashReport, Converter={StaticResource BoolToVis}}">
+            <StackPanel>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="{Binding LastCrashReport.Headline}" FontSize="22" FontWeight="Bold"
+                               Foreground="{DynamicResource DangerBrush}" VerticalAlignment="Center"/>
+                    <Button Grid.Column="1" Content="关闭" Command="{Binding DismissCrashReportCommand}" Padding="12,5"/>
+                </Grid>
+                <TextBlock Text="{Binding LastCrashReport.Summary}" FontSize="12.5" Margin="0,6,0,12"
+                           Foreground="{DynamicResource TextMutedBrush}" TextWrapping="Wrap"/>
+                <TextBlock Text="可能的原因" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                <ItemsControl ItemsSource="{Binding LastCrashReport.Causes}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="{DynamicResource PanelBrush}" CornerRadius="8" Padding="12,8" Margin="0,0,0,6">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Border Width="22" Height="22" CornerRadius="11" Background="{DynamicResource DangerBrush}" Margin="0,0,12,0">
+                                        <TextBlock Text="{Binding Index}" Foreground="White" FontSize="11" FontWeight="Bold"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="13"/>
+                                        <TextBlock Text="{Binding Suggestion}" FontSize="12" TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource TextMutedBrush}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock Text="{Binding LastCrashReport.Fallback}" FontSize="12.5" TextWrapping="Wrap"
+                           Foreground="{DynamicResource TextMutedBrush}" Margin="0,2,0,0"/>
+                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                    <Button Content="一键导出诊断包" Command="{Binding ExportDiagnosticsCommand}"
+                            Style="{StaticResource PrimaryButton}" Padding="16,7"/>
+                    <Button Content="前往求助" Command="{Binding OpenHelpLinkCommand}" Padding="16,7" Margin="10,0,0,0"/>
+                    <TextBlock Text="下方仍是完整日志（已自动切到只看错误）" FontSize="11.5"
+                               Foreground="{DynamicResource TextMutedBrush}" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <Grid Grid.Row="1" Margin="0,0,0,14">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
@@ -34,7 +89,7 @@
             </StackPanel>
         </Grid>
         <!-- ListBox 自带滚动（虚拟化在此层生效）；外层不再套 ScrollViewer -->
-        <Border Grid.Row="1" CornerRadius="12" Background="#12131B" BorderBrush="#262A3A" BorderThickness="1" Padding="14"
+        <Border Grid.Row="2" CornerRadius="12" Background="#12131B" BorderBrush="#262A3A" BorderThickness="1" Padding="14"
                 Effect="{StaticResource CardShadow}">
             <ListBox x:Name="LogList" ItemsSource="{Binding LogsView}" Background="Transparent" BorderThickness="0"
                      VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"

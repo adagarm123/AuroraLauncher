@@ -38,9 +38,11 @@ public sealed class UpdateManifest
 ///    signature-verified manifest.
 ///
 /// Update flow: silent check on startup → background download into
-/// root/update/ (staged, SHA-256 verified) → on the NEXT startup a detached
-/// cmd script swaps the staged exe over the running one (the running exe is
-/// locked, so the swap must happen after exit) and relaunches.
+/// root/update/ (staged, SHA-256 verified) → on the NEXT startup a VISIBLE
+/// updater host (a temporary copy of the staged exe, so it does not lock the
+/// file it must replace) shows a progress window while it waits for the old
+/// process to exit, re-verifies the package, swaps the exe and relaunches.
+/// The old hidden cmd script remains only as a fallback if the host fails.
 ///
 /// Author workflow: scripts/publish.ps1 → scripts/sign-release.ps1 → upload
 /// publish/AuroraLauncher.exe + publish/latest.json to the feed host. See
@@ -185,32 +187,71 @@ public sealed class UpdateService
         _log.Info("Update", $"第 {manifest.Round} 轮更新包已下载并校验通过，下次启动时自动换装。");
     }
 
-    /// <summary>Swaps the staged exe over the running one via a detached cmd
-    /// script (the running exe is locked — the swap happens after we exit)
-    /// and relaunches. The caller exits immediately afterwards.</summary>
+    /// <summary>Temporary copy the updater host runs from. A running exe is
+    /// locked on Windows, so the host must NOT be the file it replaces.</summary>
+    public static string HostExePath => Path.Combine(LauncherConfig.Instance.RootDirectory, "update", "updater.exe");
+
+    /// <summary>Round-61: launches a VISIBLE updater host and returns; the
+    /// caller exits right away. The host shows a borderless progress window
+    /// for the whole wait → verify → copy → relaunch sequence, so a 63 MB
+    /// swap no longer looks like a crash. Falls back to the old hidden cmd
+    /// script only when the host cannot be started at all.</summary>
     public static void ApplyStagedAndRestart()
     {
         if (!HasStagedUpdate()) return;
         var exe = Environment.ProcessPath;
         if (string.IsNullOrEmpty(exe)) return;
-        var stageDir = Path.GetDirectoryName(StagedExePath)!;
+        var plan = new UpdateApplyPlan
+        {
+            OldPid = Environment.ProcessId,
+            TargetExe = exe,
+            StagedExe = StagedExePath,
+            StagedInfo = StagedInfoPath
+        };
+        try
+        {
+            TryDelete(HostExePath);
+            File.Copy(StagedExePath, HostExePath, overwrite: true);
+            var psi = new ProcessStartInfo(HostExePath) { UseShellExecute = false };
+            psi.ArgumentList.Add(UpdateApplyArgs.Build(plan));
+            Process.Start(psi);
+            Logger.Instance.Info("Update", "已启动可见的更新器窗口，等待旧进程退出后换装。");
+            return;
+        }
+        catch (Exception ex)
+        {
+            Logger.Instance.Warn("Update", "可见更新器启动失败，回退到隐藏脚本: " + ex.Message);
+            ApplyStagedAndRestartLegacy(plan);
+        }
+    }
+
+    /// <summary>Best-effort sweep of last run's updater copy on a normal
+    /// startup (it can no longer be locked once the host has exited).</summary>
+    public static void CleanupUpdaterHost()
+    {
+        TryDelete(HostExePath);
+    }
+
+    private static void ApplyStagedAndRestartLegacy(UpdateApplyPlan plan)
+    {
+        var stageDir = Path.GetDirectoryName(plan.StagedExe)!;
         var script = Path.Combine(stageDir, "apply-update.cmd");
-        var infoDst = Path.Combine(Path.GetDirectoryName(exe)!, "build-info.txt");
+        var infoDst = Path.Combine(Path.GetDirectoryName(plan.TargetExe)!, "build-info.txt");
         var bat =
             "@echo off\r\n" +
             "setlocal enabledelayedexpansion\r\n" +
             "timeout /t 2 /nobreak >nul\r\n" +
             "set /a n=0\r\n" +
             ":retry\r\n" +
-            "copy /y \"" + StagedExePath + "\" \"" + exe + "\" >nul 2>&1\r\n" +
+            "copy /y \"" + plan.StagedExe + "\" \"" + plan.TargetExe + "\" >nul 2>&1\r\n" +
             "if errorlevel 1 (\r\n" +
             "  set /a n+=1\r\n" +
             "  if !n! lss 10 (timeout /t 2 /nobreak >nul & goto retry)\r\n" +
             "  exit /b 1\r\n" +
             ")\r\n" +
-            "if exist \"" + StagedInfoPath + "\" copy /y \"" + StagedInfoPath + "\" \"" + infoDst + "\" >nul 2>&1\r\n" +
-            "del \"" + StagedExePath + "\" 2>nul\r\n" +
-            "start \"\" \"" + exe + "\"\r\n";
+            "if exist \"" + plan.StagedInfo + "\" copy /y \"" + plan.StagedInfo + "\" \"" + infoDst + "\" >nul 2>&1\r\n" +
+            "del \"" + plan.StagedExe + "\" 2>nul\r\n" +
+            "start \"\" \"" + plan.TargetExe + "\"\r\n";
         File.WriteAllText(script, bat);
         Process.Start(new ProcessStartInfo("cmd.exe", "/c \"" + script + "\"")
         {

@@ -183,6 +183,15 @@ public class MainViewModel : ViewModelBase
                 ContentKind = kind;
                 ShowContentDetail = false;
                 if (kind == "本地管理") { ScanMods(); return; }
+                // Round-60: these two kinds are NOT Modrinth categories —
+                // never run the Modrinth search/category pipeline for them.
+                if (kind == "CurseForge")
+                {
+                    if (CurseForgeResults.Count == 0)
+                        CurseForgeStatus = "输入关键词并填写 API Key 后点「搜索」；没有 Key 也可直接点「网页搜索」。";
+                    return;
+                }
+                if (kind == "OptiFine") { await LoadOptiFineBuildsAsync(); return; }
                 _searchPage = 0;
                 await LoadContentCategoriesAsync(ParseContentType(kind));
                 await SearchContentAsync();
@@ -211,7 +220,19 @@ public class MainViewModel : ViewModelBase
         NavigateCommand = new RelayCommand(o => Navigate(o as string));
         UseJavaCommand = new RelayCommand(o => UseJava(o as string));
         ReloadJavaListCommand = new RelayCommand(async _ => await LoadJavaListAsync());
+        InstallJava21Command = new RelayCommand(async _ => await InstallJava21Async());
+        DismissCrashReportCommand = new RelayCommand(_ => DismissCrashReport());
+        OpenHelpLinkCommand = new RelayCommand(_ => OpenHelpLink());
+        SearchCurseForgeCommand = new RelayCommand(async _ => await SearchCurseForgeAsync());
+        OpenCurseForgeItemCommand = new RelayCommand(OpenCurseForgeItem);
+        OpenCurseForgeWebCommand = new RelayCommand(_ => OpenUrl(CurseForgeService.BuildWebSearchUrl(CurseForgeQuery)));
+        OpenCurseForgeKeyPageCommand = new RelayCommand(_ => OpenUrl(CurseForgeService.KeyApplyUrl));
+        LoadOptiFineBuildsCommand = new RelayCommand(async _ => await LoadOptiFineBuildsAsync());
+        InstallOptiFineCommand = new RelayCommand(async _ => await InstallOptiFineAsync());
+        OpenOptiFineWebCommand = new RelayCommand(_ => OpenUrl(OptiFineService.WebUrl));
+        PickLocalOptiFineCommand = new RelayCommand(async _ => await PickLocalOptiFineAsync());
         CheckUpdateCommand = new RelayCommand(_ => _ = CheckForUpdateAsync());
+        RestartToApplyCommand = new RelayCommand(_ => RestartToApply());
 
         // ---- 自动更新（round-57）：启动时若已下载好更新包，先换装再继续 ----
         if (UpdateService.HasStagedUpdate())
@@ -260,6 +281,11 @@ public class MainViewModel : ViewModelBase
     private string _updateStatusText = "";
     public string UpdateStatusText { get => _updateStatusText; set => SetProperty(ref _updateStatusText, value); }
 
+    /// <summary>True once a verified update package is waiting to be applied.
+    /// Drives the 「立即重启并应用更新」 button in 设置 → 更新 (round-61).</summary>
+    private bool _stagedUpdateReady;
+    public bool StagedUpdateReady { get => _stagedUpdateReady; set => SetProperty(ref _stagedUpdateReady, value); }
+
     /// <summary>Startup check (round-58): every launch checks unless the user
     /// picked mode 3. Mode 1 downloads automatically; mode 2 shows the
     /// two-button reminder; failures are silent so the check never annoys.</summary>
@@ -279,7 +305,7 @@ public class MainViewModel : ViewModelBase
 
             if (action == UpdateAction.AutoDownload)
             {
-                ShowToast($"发现新版本（第 {info.Round} 轮），正在后台自动更新...");
+                ShowToast($"发现新版本（第 {info.Round} 轮），正在后台下载…（设置 → 更新 可查看进度）");
                 await DownloadUpdateAsync(info, applyImmediately: false).ConfigureAwait(true);
             }
             else if (ShowUpdateDialog(info))
@@ -308,6 +334,22 @@ public class MainViewModel : ViewModelBase
             AddLog("[Update] 更新提醒弹窗显示失败: " + ex.Message);
             return false;
         }
+    }
+
+    /// <summary>Round-61: explicit "apply now" action. The updater host shows
+    /// a visible progress window, so the user always knows the short gap is
+    /// an intentional install, not a crash.</summary>
+    private void RestartToApply()
+    {
+        if (!UpdateService.HasStagedUpdate())
+        {
+            UpdateStatusText = "没有待安装的更新包，可先点「检查更新」";
+            return;
+        }
+        UpdateStatusText = "正在打开更新窗口，启动器即将重启…";
+        ShowToast("正在应用更新并重启，期间会显示进度窗口…");
+        UpdateService.ApplyStagedAndRestart();
+        Environment.Exit(0);
     }
 
     /// <summary>Manual 「检查更新」 from Settings: shows a progress bar while
@@ -368,21 +410,31 @@ public class MainViewModel : ViewModelBase
                 var total = p.TotalBytes > 0 ? p.TotalBytes : info.Size;
                 var pct = total > 0 ? Math.Clamp(p.DownloadedBytes * 100.0 / total, 0, 100) : 0;
                 UpdateProgress = pct;
-                UpdateStatusText = $"正在下载更新 {pct:0}%";
+                const double mb = 1024.0 * 1024.0;
+                var size = total > 0
+                    ? $"{p.DownloadedBytes / mb:0.0} / {total / mb:0.0} MB"
+                    : "正在获取文件大小";
+                var speed = p.SpeedBytesPerSec >= mb
+                    ? $"{p.SpeedBytesPerSec / mb:0.0} MB/s"
+                    : $"{p.SpeedBytesPerSec / 1024.0:0} KB/s";
+                UpdateStatusText = $"正在下载更新 {pct:0}%（{size} · {speed}）";
+                Status = UpdateStatusText; // main status bar follows the download too
             }), _updateCts.Token).ConfigureAwait(true);
             UpdateProgress = 100;
             if (applyImmediately)
             {
-                UpdateStatusText = "更新下载完成，启动器即将重启...";
-                ShowToast("更新下载完成，启动器即将重启以完成更新…");
-                await Task.Delay(1800).ConfigureAwait(true);
+                UpdateStatusText = "更新下载完成，即将显示安装进度窗口…";
+                Status = UpdateStatusText;
+                ShowToast("更新下载完成，接下来会显示安装进度窗口…");
+                await Task.Delay(1200).ConfigureAwait(true);
                 UpdateService.ApplyStagedAndRestart();
                 Environment.Exit(0);
             }
             else
             {
-                UpdateStatusText = "新版本已就绪，重启启动器即可自动完成更新";
-                ShowToast("新版本已就绪：重启启动器即可自动完成更新。");
+                StagedUpdateReady = true;
+                UpdateStatusText = "新版本已就绪：点「立即重启并应用更新」，或下次启动时自动完成";
+                ShowToast("新版本已就绪：重启时会显示安装进度窗口。");
                 Status = UpdateStatusText;
             }
         }
@@ -864,7 +916,19 @@ public class MainViewModel : ViewModelBase
     public RelayCommand NavigateCommand { get; }
     public RelayCommand UseJavaCommand { get; }
     public RelayCommand ReloadJavaListCommand { get; }
+    public RelayCommand InstallJava21Command { get; }
+    public RelayCommand DismissCrashReportCommand { get; }
+    public RelayCommand OpenHelpLinkCommand { get; }
+    public RelayCommand SearchCurseForgeCommand { get; }
+    public RelayCommand OpenCurseForgeItemCommand { get; }
+    public RelayCommand OpenCurseForgeWebCommand { get; }
+    public RelayCommand OpenCurseForgeKeyPageCommand { get; }
+    public RelayCommand LoadOptiFineBuildsCommand { get; }
+    public RelayCommand InstallOptiFineCommand { get; }
+    public RelayCommand OpenOptiFineWebCommand { get; }
+    public RelayCommand PickLocalOptiFineCommand { get; }
     public RelayCommand CheckUpdateCommand { get; }
+    public RelayCommand RestartToApplyCommand { get; }
 
     private CancellationTokenSource? _cts;
 
@@ -892,6 +956,7 @@ public class MainViewModel : ViewModelBase
         AutoInstallFabricApi = c.AutoInstallFabricApi;
         UpdateModeText = UpdatePolicy.DisplayText(c.UpdateMode);
         UpdateFeedUrlText = c.UpdateFeedUrl ?? "";
+        CurseForgeApiKeyText = c.CurseForgeApiKey ?? "";
         UpdateStatusText = $"当前第 {BuildInfo.CurrentRound} 轮 · 更新方式：{UpdateModeText}";
         WindowW = c.WindowWidth; WindowH = c.WindowHeight;
         ExtraJvm = c.ExtraJvmArgs;
@@ -935,6 +1000,286 @@ public class MainViewModel : ViewModelBase
 
     // ---- Java environment (settings) ----
     public ObservableCollection<JavaInfoVM> JavaList { get; } = new();
+
+    // ---- One-click Java 21 (round-59) ----
+    private readonly JavaRuntimeService _javaRuntime = new();
+    private CancellationTokenSource? _javaCts;
+
+    private bool _isInstallingJava;
+    public bool IsInstallingJava { get => _isInstallingJava; set => SetProperty(ref _isInstallingJava, value); }
+
+    private double _javaInstallProgress;
+    public double JavaInstallProgress { get => _javaInstallProgress; set => SetProperty(ref _javaInstallProgress, value); }
+
+    private string _javaInstallStatus = "";
+    public string JavaInstallStatus { get => _javaInstallStatus; set => SetProperty(ref _javaInstallStatus, value); }
+
+    /// <summary>One click: Adoptium API → background download (NetRouting +
+    /// DownloadEngine) → SHA-256 verify → silent extract into our own java/
+    /// dir → persist as the launcher's default Java. Idempotent, no system
+    /// changes, every failure surfaces as a clear status message.</summary>
+    public async Task InstallJava21Async()
+    {
+        if (IsInstallingJava) return;
+        IsInstallingJava = true;
+        JavaInstallProgress = 0;
+        JavaInstallStatus = "正在获取 Java 21 版本信息...";
+        Status = JavaInstallStatus;
+        _javaCts = new CancellationTokenSource();
+        try
+        {
+            JavaPackage? pkg = null;
+            try { pkg = await _javaRuntime.ResolveAsync(_javaCts.Token).ConfigureAwait(true); }
+            catch (Exception ex)
+            {
+                // API 暂时不可达：本地已装过就直接复用，不打扰用户。
+                var offline = _javaRuntime.FindAlreadyInstalled();
+                if (offline != null)
+                {
+                    ApplyInstalledJava(offline, true);
+                    JavaInstallStatus = "更新源暂时不可达，已把本机已安装的 Java 设为默认";
+                    return;
+                }
+                throw new IOException("无法连接 Adoptium 更新源：" + ex.Message, ex);
+            }
+            if (pkg == null)
+            {
+                JavaInstallStatus = "未找到适用于 Windows x64 的 Java 21 安装包";
+                Status = JavaInstallStatus;
+                return;
+            }
+
+            JavaInstallStatus = $"准备下载 {pkg.ReleaseName}...";
+            var result = await _javaRuntime.InstallAsync(pkg, p => Dispatch(() =>
+            {
+                var total = p.TotalBytes > 0 ? p.TotalBytes : pkg.Size;
+                var pct = total > 0 ? Math.Clamp(p.DownloadedBytes * 100.0 / total, 0, 100) : 0;
+                JavaInstallProgress = pct;
+                JavaInstallStatus = p.Message ?? $"正在下载 Java 21 {pct:0}%";
+            }), _javaCts.Token).ConfigureAwait(true);
+
+            JavaInstallProgress = 100;
+            ApplyInstalledJava(result.JavaExecutable, result.AlreadyInstalled);
+        }
+        catch (OperationCanceledException)
+        {
+            JavaInstallStatus = "已取消 Java 安装";
+            Status = JavaInstallStatus;
+        }
+        catch (Exception ex)
+        {
+            JavaInstallStatus = "Java 安装失败: " + ex.Message;
+            Status = JavaInstallStatus;
+            AddLog("[Java] " + JavaInstallStatus);
+        }
+        finally
+        {
+            _javaCts = null;
+            IsInstallingJava = false;
+        }
+    }
+
+    private void ApplyInstalledJava(string javaExe, bool alreadyInstalled)
+    {
+        JavaPath = javaExe;
+        var c = LauncherConfig.Instance;
+        c.JavaPath = javaExe;
+        c.Save();
+        _ = LoadJavaListAsync();
+        JavaInstallStatus = alreadyInstalled
+            ? "Java 21 已安装，已设为启动器默认 Java"
+            : "Java 21 安装完成，已设为启动器默认 Java";
+        Status = JavaInstallStatus;
+        ShowToast(JavaInstallStatus);
+    }
+
+    // ---- Graphical crash report card (round-60) ----
+    public const string HelpUrl = "https://github.com/adagarm123/AuroraLauncher/issues";
+
+    private CrashReportVM? _lastCrashReport;
+    public CrashReportVM? LastCrashReport
+    {
+        get => _lastCrashReport;
+        private set
+        {
+            if (SetProperty(ref _lastCrashReport, value)) OnPropertyChanged(nameof(HasCrashReport));
+        }
+    }
+
+    public bool HasCrashReport => LastCrashReport != null;
+
+    private void DismissCrashReport() => LastCrashReport = null;
+
+    private void OpenHelpLink()
+    {
+        OpenUrl(HelpUrl);
+        Status = "已打开求助页面（附上诊断包会更快得到帮助）";
+    }
+
+    private void OpenUrl(string url)
+    {
+        try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
+        catch (Exception ex) { Status = "无法打开链接: " + ex.Message; }
+    }
+
+    /// <summary>Builds a friendly crash card from the structured triage,
+    /// switches the log page to errors-only and navigates there. Replaces the
+    /// old modal "go read the console" message box.</summary>
+    private void ShowCrashCard(int exit, string instanceName)
+    {
+        var report = CrashAnalyzer.BuildReport(exit, instanceName, Logs);
+        var vm = new CrashReportVM(report.ExitCode, report.InstanceName);
+        var i = 1;
+        foreach (var c in report.Causes)
+            vm.Causes.Add(new CrashCauseVM(i++, c.Title, c.Suggestion));
+
+        LastCrashReport = vm;
+        ShowErrorsOnly = true;
+        Navigate("Logs");
+        Status = report.HasCauses
+            ? $"游戏崩溃：匹配到 {report.Causes.Count} 个可能原因，已生成崩溃报告卡片"
+            : "游戏崩溃：已生成崩溃报告卡片（未匹配到已知原因）";
+        AddLog($"[Crash] 游戏异常退出（代码 {exit}），匹配 {report.Causes.Count} 条规则；卡片已显示在日志页。");
+        ShowToast("检测到游戏崩溃，日志页已生成崩溃报告");
+    }
+
+    // ---- CurseForge browse (round-60) ----
+    private readonly CurseForgeService _curseForge = new();
+    public ObservableCollection<CurseForgeItemVM> CurseForgeResults { get; } = new();
+    public string CurseForgeQuery { get; set; } = "";
+    public string CurseForgeApiKeyText { get; set; } = "";
+
+    private string _curseForgeStatus = "CurseForge 要求自备 API Key；没有 Key 也可以直接用网页搜索。";
+    public string CurseForgeStatus { get => _curseForgeStatus; set => SetProperty(ref _curseForgeStatus, value); }
+
+    private bool _isCurseForgeBusy;
+    public bool IsCurseForgeBusy { get => _isCurseForgeBusy; set => SetProperty(ref _isCurseForgeBusy, value); }
+
+    public async Task SearchCurseForgeAsync()
+    {
+        if (IsCurseForgeBusy) return;
+        IsCurseForgeBusy = true;
+        CurseForgeStatus = "正在搜索 CurseForge…";
+        try
+        {
+            var c = LauncherConfig.Instance;
+            c.CurseForgeApiKey = string.IsNullOrWhiteSpace(CurseForgeApiKeyText) ? null : CurseForgeApiKeyText.Trim();
+            c.Save();
+            var list = await _curseForge.SearchAsync(CurseForgeQuery, c.CurseForgeApiKey ?? "").ConfigureAwait(true);
+            Dispatch(() =>
+            {
+                CurseForgeResults.Clear();
+                foreach (var m in list) CurseForgeResults.Add(new CurseForgeItemVM(m));
+            });
+            CurseForgeStatus = list.Count == 0
+                ? "没有找到匹配项目，可换个关键词或用网页搜索"
+                : $"找到 {list.Count} 个项目 · 点「前往下载页」在浏览器下载，再到「本地管理」导入";
+        }
+        catch (Exception ex) { CurseForgeStatus = "搜索失败：" + ex.Message; }
+        finally { IsCurseForgeBusy = false; }
+    }
+
+    private void OpenCurseForgeItem(object? o)
+        => OpenUrl(o is CurseForgeItemVM item
+            ? CurseForgeService.BuildFilesPageUrl(item.Model)
+            : CurseForgeService.WebBase);
+
+    // ---- OptiFine one-click installer (round-60) ----
+    private readonly OptiFineService _optiFine = new();
+    public ObservableCollection<OptiFineItemVM> OptiFineBuilds { get; } = new();
+
+    private OptiFineItemVM? _selectedOptiFineBuild;
+    public OptiFineItemVM? SelectedOptiFineBuild
+    {
+        get => _selectedOptiFineBuild;
+        set => SetProperty(ref _selectedOptiFineBuild, value);
+    }
+
+    private string _optiFineStatus = "从 OptiFine 官网获取版本列表；也可直接选择本地下载好的安装器。";
+    public string OptiFineStatus { get => _optiFineStatus; set => SetProperty(ref _optiFineStatus, value); }
+
+    private bool _isOptiFineBusy;
+    public bool IsOptiFineBusy { get => _isOptiFineBusy; set => SetProperty(ref _isOptiFineBusy, value); }
+
+    public async Task LoadOptiFineBuildsAsync()
+    {
+        if (IsOptiFineBusy || OptiFineBuilds.Count > 0) return;
+        IsOptiFineBusy = true;
+        OptiFineStatus = "正在获取 OptiFine 版本列表…";
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+            var html = await NetRouting.GetStringAsync(OptiFineService.WebUrl, null, timeout.Token,
+                perRouteTimeoutSec: 8, rounds: 1, logTag: "OptiFine").ConfigureAwait(true);
+            var builds = OptiFineService.ParseDownloadsPage(html);
+            Dispatch(() =>
+            {
+                OptiFineBuilds.Clear();
+                foreach (var b in builds) OptiFineBuilds.Add(new OptiFineItemVM(b));
+                SelectedOptiFineBuild = OptiFineBuilds.FirstOrDefault();
+            });
+            OptiFineStatus = builds.Count == 0
+                ? "官网未解析出版本（页面结构可能变化），可点「打开官网」或「选择本地安装器」"
+                : $"找到 {builds.Count} 个版本 · 选一个后点「一键安装」";
+        }
+        catch (Exception ex)
+        {
+            OptiFineStatus = "获取失败：" + ex.Message + "（可改用「打开官网」或「选择本地安装器」）";
+        }
+        finally { IsOptiFineBusy = false; }
+    }
+
+    public async Task InstallOptiFineAsync()
+    {
+        if (SelectedOptiFineBuild is not { } item)
+        {
+            OptiFineStatus = "请先选择一个 OptiFine 版本";
+            return;
+        }
+        if (IsOptiFineBusy) return;
+        IsOptiFineBusy = true;
+        try
+        {
+            OptiFineStatus = "正在下载 OptiFine 官方安装器…";
+            var cache = Path.Combine(LauncherConfig.Instance.RootDirectory, "cache", "optifine");
+            var jar = await _optiFine.DownloadInstallerAsync(item.Build, cache).ConfigureAwait(true);
+            await LaunchInstallerAsync(jar, fromWebsite: false).ConfigureAwait(true);
+        }
+        catch (Exception ex) { OptiFineStatus = "安装失败：" + ex.Message; }
+        finally { IsOptiFineBusy = false; }
+    }
+
+    public async Task PickLocalOptiFineAsync()
+    {
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "选择 OptiFine 安装器",
+            Filter = "OptiFine 安装器 (*.jar)|*.jar"
+        };
+        if (dlg.ShowDialog() != true) return;
+        if (!OptiFineService.IsValidInstaller(dlg.FileName))
+        {
+            OptiFineStatus = "所选文件不是有效的 OptiFine 安装器（.jar）";
+            return;
+        }
+        await LaunchInstallerAsync(dlg.FileName, fromWebsite: true).ConfigureAwait(true);
+    }
+
+    private async Task LaunchInstallerAsync(string jarPath, bool fromWebsite)
+    {
+        var java = (await _svc.FindJavaAsync().ConfigureAwait(true))
+            .OrderByDescending(j => j.Major).FirstOrDefault();
+        if (java == null)
+            throw new InvalidOperationException("未检测到 Java，请先在 设置 → Java 环境 一键安装 Java 21");
+        if (!OptiFineService.LaunchInstaller(java.JavaExecutable, jarPath))
+            throw new InvalidOperationException("安装器启动失败，请检查 Java 是否可用");
+        var root = LauncherConfig.Instance.RootDirectory;
+        try { System.Windows.Clipboard.SetText(root); } catch { /* clipboard busy */ }
+        OptiFineStatus = (fromWebsite ? "本地安装器" : "官方安装器") +
+            $" 已打开：请点 Install，并把安装目录设为 {root}（路径已复制）。完成后用「实例管理 → 导入 .minecraft」导入。";
+        ShowToast("OptiFine 官方安装器已打开，按提示点 Install 即可");
+        AddLog("[OptiFine] " + OptiFineStatus);
+    }
 
     public async Task LoadJavaListAsync()
     {
@@ -1262,9 +1607,9 @@ public class MainViewModel : ViewModelBase
                               $" · {modContext}";
 
             var exit = await _svc.LaunchAsync(spec, line => Dispatch(() => AddLog(line)), CancellationToken.None, contextLine);
-            var crash = CrashAnalyzer.Analyze(Logs);
             if (exit == 0)
             {
+                LastCrashReport = null;
                 Status = $"游戏已正常退出: {SelectedInstance.Name}";
                 Dispatch(() => System.Windows.MessageBox.Show(
                     Application.Current.MainWindow,
@@ -1273,16 +1618,9 @@ public class MainViewModel : ViewModelBase
             }
             else
             {
-                Status = crash != null ? $"游戏退出(代码 {exit})，可能原因: {crash}" : $"游戏已退出，代码 {exit}";
-                // Crash triage: auto-switch the Logs page to errors-only so
-                // the user never has to discover the toggle themselves.
-                ShowErrorsOnly = true;
-                Navigate("Logs");
-                await Task.Delay(150); // let the page switch render before the modal dialog
-                Dispatch(() => System.Windows.MessageBox.Show(
-                    Application.Current.MainWindow,
-                    $"游戏异常退出（代码 {exit}）。{(crash != null ? $"\n\n可能原因：{crash}" : "")}\n\n已为你打开「日志」页并只显示错误。\n崩溃摘要已写入日志文件，可直接复制反馈。",
-                    "Aurora Launcher", MessageBoxButton.OK, MessageBoxImage.Warning));
+                // Round-60: a friendly graphical card replaces the old
+                // "go read the black console" warning dialog.
+                ShowCrashCard(exit, SelectedInstance?.Name ?? "未知实例");
             }
         }
         catch (OperationCanceledException) { Status = "已取消（未完成的临时文件已清理）"; }

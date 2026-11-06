@@ -66,6 +66,29 @@
                     <TextBlock Text="MC 1.17+ 需要 Java 16 及以上；留空 Java 路径时启动器会自动选择合适的运行时。"
                                Style="{StaticResource FieldLabel}" TextWrapping="Wrap"/>
 
+                    <!-- 一键安装 Java 21（round-59）：后台下载 + SHA-256 校验 + 静默解压 + 自动设为默认 -->
+                    <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                        <Button Content="一键安装 Java 21" Command="{Binding InstallJava21Command}"
+                                Style="{StaticResource PrimaryButton}" Padding="16,7"/>
+                        <TextBlock Text="从 Adoptium 官方源下载，自动校验并设为默认 Java（不改动系统环境变量）"
+                                   Style="{StaticResource FieldLabel}" Margin="12,0,0,0" VerticalAlignment="Center"
+                                   TextWrapping="Wrap" MaxWidth="380"/>
+                    </StackPanel>
+                    <TextBlock Text="{Binding JavaInstallStatus}" Style="{StaticResource FieldLabel}"
+                               TextWrapping="Wrap" Margin="0,8,0,0"/>
+                    <ProgressBar Value="{Binding JavaInstallProgress}" Maximum="100" Height="6" Margin="0,6,0,0">
+                        <ProgressBar.Style>
+                            <Style TargetType="ProgressBar">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsInstallingJava}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ProgressBar.Style>
+                    </ProgressBar>
+
                     <!-- 一键诊断包：报 bug 时附上即可，省去十轮问答 -->
                     <Button Content="导出诊断包" Command="{Binding ExportDiagnosticsCommand}" Padding="10,4"
                             HorizontalAlignment="Left" Margin="0,14,0,0"/>
@@ -143,7 +166,11 @@
 
                     <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
                         <Button Content="检查更新" Command="{Binding CheckUpdateCommand}" Style="{StaticResource PrimaryButton}" Padding="16,7"/>
-                        <TextBlock Text="手动检查不受上面开关限制" Style="{StaticResource FieldLabel}"
+                        <Button Content="立即重启并应用更新" Command="{Binding RestartToApplyCommand}"
+                                Visibility="{Binding StagedUpdateReady, Converter={StaticResource BoolToVis}}"
+                                Style="{StaticResource PrimaryButton}" Padding="16,7" Margin="10,0,0,0"/>
+                        <TextBlock Text="手动检查不受上面开关限制；下载时会显示进度、速度和已下载大小"
+                                   Style="{StaticResource FieldLabel}" TextWrapping="Wrap"
                                    Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
 

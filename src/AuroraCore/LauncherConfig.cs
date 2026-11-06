@@ -58,6 +58,11 @@ public sealed class LauncherConfig
     /// config.json 中调低以避免误切。0 = 关闭看门狗。</summary>
     public int SlowTransferKBsPerSec { get; set; } = 16;
 
+    /// <summary>CurseForge API key supplied by the USER (round-60). CurseForge
+    /// requires a per-developer `x-api-key`; no key is bundled with the app.
+    /// This is a public API key, not an account credential.</summary>
+    public string? CurseForgeApiKey { get; set; }
+
     /// <summary>用户已读过的更新日志轮次——启动时若小于最新轮次则轻提示一次
     /// （访问「更新日志」页即标记已读）。</summary>
     public int ChangelogSeenRound { get; set; }
@@ -83,10 +88,13 @@ public sealed class LauncherConfig
     public string AssetObjectsDir => Path.Combine(AssetsDir, "objects");
     public string InstancesDir => Path.Combine(RootDirectory, "instances");
     public string LogsDir => Path.Combine(RootDirectory, "logs");
+    /// <summary>Launcher-managed JDKs installed by the one-click Java button
+    /// (round-59). Never written to Program Files or system env vars.</summary>
+    public string JavaRuntimesDir => Path.Combine(RootDirectory, "java");
 
     public void EnsureDirectories()
     {
-        foreach (var d in new[] { RootDirectory, VersionsDir, LibrariesDir, AssetsDir, AssetIndexesDir, AssetObjectsDir, InstancesDir, LogsDir })
+        foreach (var d in new[] { RootDirectory, VersionsDir, LibrariesDir, AssetsDir, AssetIndexesDir, AssetObjectsDir, InstancesDir, LogsDir, JavaRuntimesDir })
             PathEx.EnsureDirectory(d);
     }
 

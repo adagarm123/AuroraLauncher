@@ -40,6 +40,10 @@ public sealed class JavaFinder
     {
         var found = new Dictionary<string, JavaInstallation>(StringComparer.OrdinalIgnoreCase);
         var dirs = new List<string>(ScanRoots);
+        // Round-59: JDKs installed by the launcher's one-click button live in
+        // our own data dir — include it so 「重新检测」 lists them too. Added
+        // dynamically so a custom RootDirectory (loaded from config) is used.
+        dirs.Add(LauncherConfig.Instance.JavaRuntimesDir);
         // Registry-based discovery (Temurin / Adoptium / Oracle).
         TryAddFromRegistry(found);
 

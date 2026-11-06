@@ -41,11 +41,11 @@
 
 ## 结论
 
-**69 个交互元素全部有功能反馈路径，无死按钮。**（Views 52 + MainWindow 17，含首次启动引导 7 个按钮；第 48 轮全量重数修正，第 55 轮 +1、第 57 轮 +1、第 58 轮 +2，见下节）
+**86 个交互元素全部有功能反馈路径，无死按钮。**（Views 69 + MainWindow 17，含首次启动引导 7 个按钮；第 48 轮全量重数修正，第 55 轮 +1、第 57 轮 +1、第 58 轮 +2、第 59 轮 +1、第 60 轮 +13、第 61 轮 +3，见下节）
 
-- 直接 Command 绑定：**50 个**（全部核对存在于 MainViewModel；含 `DataContext.` 相对源绑定与主题切换按钮 ×2）
-- 事件处理器元素：**4 个**（LogsView 只看错误 Checked/Unchecked → `ErrorsOnly_Changed`；ModsView 定位适配版本 Click → `OnJumpToCompatible`；UpdateDialog 立即更新 / 关闭 Click → `UpdateNow_Click` / `Close_Click`，均已核对存在于对应 code-behind）
-- 样式 Setter 提供 Command：**15 个**（`NavItem` → NavigateCommand ×9；`SubNavItem` → SelectContentKindCommand ×6；样式命令已独立核对，不依赖元素引用）
+- 直接 Command 绑定：**63 个**（全部核对存在于 MainViewModel；含 `DataContext.` 相对源绑定与主题切换按钮 ×2）
+- 事件处理器元素：**6 个**（LogsView 只看错误 Checked/Unchecked → `ErrorsOnly_Changed`；ModsView 定位适配版本 Click → `OnJumpToCompatible`；UpdateDialog 立即更新 / 关闭 → `UpdateNow_Click` / `Close_Click`；UpdateApplyingWindow 重试 / 关闭 → `Retry_Click` / `Close_Click`，均已核对存在于对应 code-behind）
+- 样式 Setter 提供 Command：**17 个**（`NavItem` → NavigateCommand ×9；`SubNavItem` → SelectContentKindCommand ×8；样式命令已独立核对，不依赖元素引用）
 - 静态命令（非绑定，如滚动条模板内 `ScrollBar.PageUpCommand`）：XAML 解析期即报错，不属静默失败类，核对后放行
 - 本轮新增发现：**3 个死代码候选命令**（见上节 WARN）
 
@@ -63,7 +63,10 @@
 
 > **第 55 轮更新**：新增独立「更新日志」页面与侧栏导航按钮——元素 65→**66**（MainWindow 16→**17**），NavItem 样式命令 8→**9**（样式命令合计 14→**15**）；直接绑定与事件处理器不变。
 > **第 57 轮更新**：设置页「更新」卡片新增「检查更新」按钮——66→**67**，直接绑定 49→**50**。
-> **第 58 轮更新**：新增更新提醒弹窗 UpdateDialog（立即更新 / 关闭两个按钮，均为事件处理器）——67→**69**，事件处理器元素 2→**4**。当前闭合：**50 + 15 + 4 = 69**。
+> **第 58 轮更新**：新增更新提醒弹窗 UpdateDialog（立即更新 / 关闭两个按钮，均为事件处理器）——67→**69**，事件处理器元素 2→**4**。
+> **第 59 轮更新**：设置页 Java 卡片新增「一键安装 Java 21」按钮——69→**70**，直接绑定 50→**51**。
+> **第 61 轮更新**：设置页新增「立即重启并应用更新」按钮（直接绑定 +1）、更新安装窗口新增「重试 / 关闭」两个按钮（事件处理器 +2）——83→**86**，直接绑定 62→**63**，事件处理器元素 4→**6**。当前闭合：**63 + 17 + 6 = 86**。
+> **第 60 轮更新**：日志页崩溃卡片（关闭 / 一键导出诊断包 / 前往求助，3 个）+ 内容中心新增 CurseForge / OptiFine 两个子导航与两个面板（10 个：CurseForge 申请 Key / 搜索 / 网页搜索 / 前往下载页；OptiFine 刷新版本 / 一键安装 / 打开官网 / 选择本地安装器；子导航 ×2）——70→**83**，直接绑定 51→**62**，SubNavItem 6→**8**（样式命令 15→**17**）。当前闭合：**62 + 17 + 4 = 83**。
 
 ### 数字链闭合（原 66 → 现 65 的逐项分解）
 
@@ -88,7 +91,7 @@
 
 两个死按钮均由第 21 项防线测试（XAML Command 绑定全量核对）在上线当日抓出。
 
-## 逐页清单（Views 52 项 + MainWindow 17 项）
+## 逐页清单（Views 69 项 + MainWindow 17 项）
 
 ### 首页 HomeView（5）
 | 元素 | 绑定 | 状态 |
@@ -124,10 +127,10 @@
 | 导出启动脚本 | `ExportLaunchScriptCommand` | ✅ |
 | 补全文件 | `RepairInstanceCommand` | ✅ |
 
-### 内容中心 ModsView（17）
+### 内容中心 ModsView（27）
 | 元素 | 绑定 | 状态 |
 |------|------|------|
-| 子导航卡片：模组 / 整合包 / 数据包 / 光影包 / 资源包 / 本地管理 ×6 | `SubNavItem` 样式 → `SelectContentKindCommand` | ✅ |
+| 子导航卡片：模组 / 整合包 / 数据包 / 资源包 / 光影包 / CurseForge / OptiFine / 本地管理 ×8 | `SubNavItem` 样式 → `SelectContentKindCommand` | ✅（第 60 轮 +2） |
 | 搜索 | `SearchContentCommand` | ✅ |
 | 结果卡片 / 整合包卡片 → 打开详情 | `OpenContentDetailCommand` ×2 | ✅ |
 | 分页：第一页 / 上一页 / 下一页 / 最后一页 | `SearchFirstPageCommand` 等 ×4 | ✅ |
@@ -135,6 +138,8 @@
 | 在 Modrinth 打开 | `OpenModrinthPageCommand` | ✅（第 40 轮修复） |
 | 定位适配版本 | Click `OnJumpToCompatible` | ✅ |
 | 安装此版本（适配行） | `InstallSpecificVersionCommand` | ✅ |
+| CurseForge：申请 Key / 搜索 / 网页搜索 / 前往下载页 | `OpenCurseForgeKeyPageCommand` / `SearchCurseForgeCommand` / `OpenCurseForgeWebCommand` / `OpenCurseForgeItemCommand` | ✅（第 60 轮） |
+| OptiFine：刷新版本 / 一键安装 / 打开官网 / 选择本地安装器 | `LoadOptiFineBuildsCommand` / `InstallOptiFineCommand` / `OpenOptiFineWebCommand` / `PickLocalOptiFineCommand` | ✅（第 60 轮） |
 
 ### Mod 管理（ModsView 下半区，3）
 | 元素 | 绑定 | 状态 |
@@ -143,7 +148,7 @@
 | 刷新 | `ScanModsCommand` | ✅ |
 | 导入 .mrpack 整合包 | `ImportMrpackCommand` | ✅ |
 
-### 设置 SettingsView（7）
+### 设置 SettingsView（9）
 | 元素 | 绑定 | 状态 |
 |------|------|------|
 | 打开文件夹 | `OpenRootDirectoryCommand` | ✅ |
@@ -152,6 +157,8 @@
 | 导出诊断包 | `ExportDiagnosticsCommand` | ✅ |
 | 切换主题 | `SwitchThemeCommand`（直接绑定） | ✅ |
 | 检查更新 | `CheckUpdateCommand` | ✅（第 57 轮） |
+| 立即重启并应用更新 | `RestartToApplyCommand` | ✅（第 61 轮，仅待装更新就绪时可见） |
+| 一键安装 Java 21 | `InstallJava21Command` | ✅（第 59 轮） |
 | 保存设置 | `ApplySettingsCommand` | ✅ |
 
 ### 更新提醒弹窗 UpdateDialog（2）
@@ -160,10 +167,19 @@
 | 立即更新 | Click → `UpdateNow_Click` | ✅（第 58 轮） |
 | 关闭 | Click → `Close_Click` | ✅（第 58 轮） |
 
-### 日志 LogsView（1）
+### 更新安装窗口 UpdateApplyingWindow（2）
+| 元素 | 绑定 | 状态 |
+|------|------|------|
+| 重试 | Click → `Retry_Click` | ✅（第 61 轮，仅失败时可见） |
+| 关闭 | Click → `Close_Click` | ✅（第 61 轮，仅失败时可见） |
+
+### 日志 LogsView（4）
 | 元素 | 绑定 | 状态 |
 |------|------|------|
 | 只看错误（ToggleButton） | Checked/Unchecked → `ErrorsOnly_Changed` | ✅ |
+| 崩溃卡片：关闭 | `DismissCrashReportCommand` | ✅（第 60 轮） |
+| 崩溃卡片：一键导出诊断包 | `ExportDiagnosticsCommand` | ✅（第 60 轮） |
+| 崩溃卡片：前往求助 | `OpenHelpLinkCommand` | ✅（第 60 轮） |
 
 ### MainWindow（17，含首次启动引导）
 | 元素 | 绑定 | 状态 |
@@ -177,7 +193,7 @@
 | 引导：一键安装 | `FirstRunInstallCommand` | ✅ |
 | 引导：稍后再说 / 完成 | `FirstRunSkipCommand` / `FirstRunDoneCommand` | ✅ |
 
-> 页面合计核对：Home 5 + Download 2 + Downloads 2 + Instances 13 + 内容中心 17 + Mod 管理 3 + Settings 7 + Logs 1 + UpdateDialog 2 = **52**（Views）+ **17**（MainWindow）= **69**，与分类合计 50 + 15 + 4 一致。
+> 页面合计核对：Home 5 + Download 2 + Downloads 2 + Instances 13 + 内容中心 27 + Mod 管理 3 + Settings 9 + Logs 4 + UpdateDialog 2 + UpdateApplyingWindow 2 = **69**（Views）+ **17**（MainWindow）= **86**，与分类合计 63 + 17 + 6 一致。
 
 ## 附带反馈保障（第 40 轮同步加入，历史记录）
 
