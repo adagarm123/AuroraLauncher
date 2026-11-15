@@ -435,6 +435,11 @@ public sealed class ModLoaderInstaller
                 log?.Invoke($"[ModLoader] 注意：安装器将使用 Java {java.Major}，而 MC {mcVersion} 通常用 Java {recommendedMajor}。" +
                             "若安装失败，请换用该版本的 Java 再试。");
 
+            // Round-95: must happen BEFORE the installer JVM starts — it is the
+            // only chance to put jsr305 / trove / forge-universal on disk with
+            // our own mirror-aware downloader. Locked by a guard test.
+            await PrefillInstallerLibrariesAsync(jarPath, gameRoot, log, ct).ConfigureAwait(false);
+
             await RunJavaAsync(java.JavaExecutable, $"-jar \"{jarPath}\" {args}", gameRoot, log, ct).ConfigureAwait(false);
 
             // Detect the newly created loader version directory.
@@ -444,9 +449,21 @@ public sealed class ModLoaderInstaller
             var detected = created.FirstOrDefault(n =>
                 n!.Contains(type.ToString(), StringComparison.OrdinalIgnoreCase) ||
                 (versionIdHint != null && n!.Contains(versionIdHint, StringComparison.OrdinalIgnoreCase)));
-            result.VersionId = detected ?? versionIdHint;
-            result.Success = !string.IsNullOrEmpty(result.VersionId);
-            if (!result.Success) result.Error = "Installer ran but no loader version directory was detected.";
+
+            // Round-95: success means a REAL profile on disk. Previously the
+            // installer's URL *hint* ("forge-1.20.1-47.4.22") was stored as the
+            // installed version even when nothing was produced — that id then
+            // poisoned every later launch with "not found in manifest".
+            var profileOk = detected is { Length: > 0 } d &&
+                File.Exists(Path.Combine(gameRoot, "versions", d, d + ".json"));
+            result.VersionId = profileOk ? detected : null;
+            result.Success = profileOk;
+            if (!profileOk)
+                result.Error = $"安装器运行结束，但没有生成可用的加载器版本文件（期望 versions/{detected ?? versionIdHint}/…json）。" +
+                               (versionIdHint != null
+                                   ? $"提示 id「{versionIdHint}」只是从下载地址推导出来的，不能当作已安装版本。"
+                                   : "") +
+                               "请查看日志页的安装器输出，检查网络/代理后重试。";
         }
         catch (Exception ex)
         {
@@ -613,6 +630,82 @@ public sealed class ModLoaderInstaller
         if (rest.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
             rest = rest[..^suffix.Length];
         return rest;
+    }
+
+    /// <summary>Round-95: pre-fetch the libraries listed inside the installer
+    /// jar through our route-aware engine. Every candidate is OPTIONAL
+    /// (Required=false), so a dead overseas maven host can never abort the
+    /// install before the installer even starts — the installer simply retries
+    /// itself for whatever we could not get.</summary>
+    private async Task PrefillInstallerLibrariesAsync(string jarPath, string gameRoot,
+        Action<string>? log, CancellationToken ct)
+    {
+        var libs = new List<InstallerLibrary>();
+        try
+        {
+            using var zip = System.IO.Compression.ZipFile.OpenRead(jarPath);
+            foreach (var name in InstallerDependencies.ProfileFiles)
+            {
+                var entry = zip.GetEntry(name);
+                if (entry == null) continue;
+                using var stream = entry.Open();
+                using var reader = new StreamReader(stream);
+                libs.AddRange(InstallerDependencies.Parse(await reader.ReadToEndAsync().ConfigureAwait(false)));
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.Warn("ModLoader", $"预填充：无法读取安装器内的依赖清单（{ex.Message}），交给安装器自行下载。");
+            return;
+        }
+
+        // installer_profile.json and version.json overlap — one artifact per
+        // path, preferring the entry that carries a checksum.
+        var unique = libs.GroupBy(l => l.RelativePath, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderByDescending(l => string.IsNullOrEmpty(l.Sha1) ? 0 : 1).First())
+            .ToList();
+        if (unique.Count == 0) return;
+
+        var libRoot = Path.Combine(gameRoot, "libraries");
+        try { Directory.CreateDirectory(libRoot); } catch { /* best effort */ }
+        string Dest(InstallerLibrary l) =>
+            Path.Combine(libRoot, l.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+
+        var pending = unique.Where(l => !File.Exists(Dest(l))).ToList();
+        if (pending.Count == 0)
+        {
+            _log.Info("ModLoader", $"预填充：{unique.Count} 个依赖已在本地");
+            return;
+        }
+
+        for (int round = 0; round < 3 && pending.Count > 0; round++)
+        {
+            var entries = pending
+                .Select(l => (Lib: l, Urls: InstallerDependencies.CandidateUrls(l)))
+                .Where(x => round < x.Urls.Count)
+                .Select(x => new DownloadEntry
+                {
+                    Url = x.Urls[round],
+                    Destination = Dest(x.Lib),
+                    ExpectedSha1 = string.IsNullOrWhiteSpace(x.Lib.Sha1) ? null : x.Lib.Sha1,
+                    ExpectedSize = x.Lib.Size > 0 ? x.Lib.Size : null,
+                    Required = false,
+                    DisplayName = Path.GetFileName(x.Lib.RelativePath),
+                    Category = "installer-lib"
+                }).ToList();
+            if (entries.Count == 0) break;
+            try { await _engine.DownloadAsync(entries, null, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _log.Warn("ModLoader", $"预填充第 {round + 1} 轮失败（{ex.Message}），继续交给安装器。");
+            }
+            pending = pending.Where(l => !File.Exists(Dest(l))).ToList();
+        }
+
+        var filled = unique.Count - pending.Count;
+        log?.Invoke($"[ModLoader] 预填充安装器依赖：{filled}/{unique.Count} 个已在本地" +
+                    (pending.Count > 0 ? $"（还有 {pending.Count} 个没下到，安装器会再试一次）" : ""));
     }
 
     private async Task<int> RunJavaAsync(string java, string arguments, string workingDir, Action<string>? log, CancellationToken ct)

@@ -1,6 +1,6 @@
 # 路线图 / 开发状态（Roadmap）
 
-> 更新于 2026-11-15（第 94 轮）。当前基线：**自测 130/130 通过**（Unit 123 离线·连跑 20 次实测无抖动 / All 130 含网络集成），真实机器端到端验证完成（Fabric 1.21 成功启动；Forge 1.20.1-47.4.22 安装器实跑通过）。
+> 更新于 2026-11-15（第 95 轮）。当前基线：**自测 136/136 通过**（Unit 129 离线·连跑 20 次实测无抖动 / All 136 含网络集成），真实机器端到端验证完成（Fabric 1.21 成功启动；Forge 1.20.1-47.4.22 安装器实跑通过）。
 
 ## 已完成（全部真实验证）
 
@@ -117,6 +117,7 @@
   - 首页必须有具名滚动容器（纵向 `Auto`、禁横向），hero 区不得被包进去，实例列表必须带 `MaxHeight`；设置页/帮助页的滚动容器不得被重构掉（第 91 轮）；
   - 加载器/整合包不完整不得启动：`LaunchReadiness` 不可覆盖的分支（加载器缺失）与可覆盖的分支（模组缺失）必须分开；`BuildLaunchSpecAsync` 不得为加载器实例构建原版命令行；导入必须在下载之前写入 `ExpectedModCount` + 清单；性能采样不得退回 `Task.Run`，且「未采集到」不得写成数字（第 92 轮）；
   - 异步命令必须自带防重入（`RelayCommand` 的 `CommandGate`）；**禁止 `new RelayCommand(_ => _ = XxxAsync())` 这种「火后不管」写法**（命令秒回，门形同虚设）；耗时按钮的 `Content` 必须绑 `IsRunning`（第 93 轮）；
+  - 本地版本 JSON 优先；第三方加载器 id 缺本地 profile 时不得请求 Mojang 官方清单；安装器「成功」必须校验 `versions/<id>/<id>.json` 真实存在，且跑 JVM 前必须预填充 installer jar 的依赖（第 95 轮）；
   - 跑 Forge/NeoForge 安装器前必须 `LauncherProfiles.Ensure(gameRoot)`（缺文件安装器直接 exit 1），且补文件逻辑全文件只允许一处；安装器参数的目标目录必须用传入的 `gameRoot`，不得读全局配置（第 94 轮）；
   - 模糊白名单：`BlurEffect` 只允许 MainWindow 的 `Glass*` 元素、DataTemplate 内一律违规，C# 侧只允许 `GlassBlur*`；`DropShadowEffect` / `BitmapCache` / 样式级 Effect 仍全禁（第 80 轮，改写自第 67 轮的全禁规则）；
   - 唤醒只在界面线程调度、应答 == 窗口已显示、托盘动作移出菜单消息循环、4 秒退出看门狗 + 显式释放互斥（第 76 轮）；

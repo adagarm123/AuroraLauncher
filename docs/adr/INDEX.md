@@ -22,3 +22,4 @@
 | [ADR-0014](ADR-0014-launch-readiness-and-modpack-expectation.md) | 启动前判定加载器与整合包（预期先落盘；加载器缺失不可覆盖；运行结果必须带退出码） | 已采纳（含防线测试） |
 | [ADR-0015](ADR-0015-command-reentry-guard.md) | 命令层防重入（门在命令里，异步默认开；禁止「火后不管」；文案随状态变） | 已采纳（含防线测试） |
 | [ADR-0016](ADR-0016-forge-installer-launcher-profiles.md) | 给官方加载器安装器补 `launcher_profiles.json`（缺→建 / 好→不动 / 坏→备份重建） | 已采纳（含实跑验证） |
+| [ADR-0017](ADR-0017-version-source-and-installer-dependencies.md) | 版本来源与安装器依赖（本地优先；第三方 id 不查官方清单；依赖预填充且成功要验真） | 已采纳（含防线测试） |

@@ -109,8 +109,26 @@ public sealed class GameInstaller
     /// <summary>JSON-only check for loader versions: Fabric/Quilt/Forge
     /// versions have NO client jar of their own (they inherit the vanilla
     /// one), so requiring it here made every launch re-run the repair.</summary>
-    public bool IsVersionJsonInstalled(string versionId) =>
-        File.Exists(VersionJsonPath(versionId)) && new FileInfo(VersionJsonPath(versionId)).Length > 128;
+    /// <summary>Round-95: "installed" means real JSON with a mainClass. A
+    /// truncated profile left behind by a failed Forge installer used to count
+    /// as installed (>128 bytes), which made the launch gate believe the loader
+    /// was present and sent a loader-shaped id into the vanilla pipeline.
+    /// Read the raw document here: the VersionJson guard deliberately allows
+    /// only VersionResolver to materialise that model.</summary>
+    public bool IsVersionJsonInstalled(string versionId)
+    {
+        var path = VersionJsonPath(versionId);
+        if (!File.Exists(path) || new FileInfo(path).Length <= 128) return false;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+            return doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                   doc.RootElement.TryGetProperty("mainClass", out var m) &&
+                   m.ValueKind == System.Text.Json.JsonValueKind.String &&
+                   !string.IsNullOrWhiteSpace(m.GetString());
+        }
+        catch { return false; }
+    }
 
     /// <summary>Deeper check than <see cref="IsInstalled"/>: client jar, version
     /// JSON and extracted natives must all be present (used for the pre-launch
@@ -133,6 +151,12 @@ public sealed class GameInstaller
         bool includeAssets = true,
         Action<string>? onStage = null)
     {
+        // Round-95: a loader-shaped id without a local profile must never reach
+        // the vanilla manifest lookup. This is the exact path that produced
+        // "Version 'forge-1.20.1-47.4.22' not found in manifest." at launch.
+        if (VersionSourcePolicy.IsThirdPartyLoader(versionId) && !File.Exists(VersionJsonPath(versionId)))
+            throw new InvalidOperationException(VersionSourcePolicy.LoaderMissingHint(versionId));
+
         _log.Info("Install", $"Installing Minecraft {versionId} ...");
 
         // ---- Stage: resolve + persist version JSON ----

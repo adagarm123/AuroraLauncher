@@ -252,6 +252,14 @@ public sealed class LauncherService
             instance.LoaderVersion = result.LoaderVersion ?? instance.LoaderVersion;
         }
 
+        // Round-95: never hand a loader-shaped id with no usable profile to the
+        // vanilla installer. If the loader step above could not produce one,
+        // fail with an actionable hint instead of "not found in manifest".
+        if (instance.ResolvedVersionId is { Length: > 0 } pending &&
+            VersionSourcePolicy.IsThirdPartyLoader(pending) &&
+            !_installer.IsVersionJsonInstalled(pending))
+            throw new InvalidOperationException(VersionSourcePolicy.LoaderMissingHint(pending));
+
         // The loader profile may have arrived, but its own libraries still need
         // to be fetched (the Forge installer leaves that to us).
         if (instance.ResolvedVersionId is { Length: > 0 } installed &&

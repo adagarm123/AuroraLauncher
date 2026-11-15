@@ -113,6 +113,13 @@ public static class LauncherProfiles
             installerTail.Contains("UnsupportedClassVersionError", StringComparison.OrdinalIgnoreCase))
             return "安装器用的 Java 版本不对。请安装对应版本的 Java（1.16 及以下用 8，1.17–1.20.4 用 17，1.20.5+ 用 21），" +
                    "并在设置里指定它。";
+        // Round-95: "These libraries failed to download. Try again. <coords>"
+        // is the most common Forge failure on a flaky network. Name the exact
+        // artifacts and say what the launcher already tried, instead of
+        // dumping six lines of maven noise at the user.
+        var dependencyFailure = InstallerDependencies.ExplainDependencyFailure(installerTail);
+        if (dependencyFailure != null) return dependencyFailure;
+
         if (installerTail.Contains("Could not download", StringComparison.OrdinalIgnoreCase) ||
             installerTail.Contains("UnknownHostException", StringComparison.OrdinalIgnoreCase))
             return "安装器在下载它自己的依赖时断网了。检查网络/代理后重试（安装器不经过启动器的镜像线路）。";

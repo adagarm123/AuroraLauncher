@@ -18,12 +18,23 @@ public static class HelpContent
     /// <summary>Round number of the newest entry in <see cref="Changelog"/> —
     /// bump together with the changelog entry; drives the one-time "已更新"
     /// startup toast (dismissed permanently once the user opens the page).</summary>
-    public const int LatestChangelogRound = 94;
+    public const int LatestChangelogRound = 95;
     /// <summary>更新日志（说人话版本：无技术名词、用户视角）——独立页面
     /// 「更新日志」使用；模板见 docs/release-notes-template.md。
     /// 每轮发布时在此置顶新增一条。</summary>
     public static IEnumerable<HelpTopicVM> Changelog() => new[]
     {
+        new HelpTopicVM
+        {
+            Category = "更新日志", Glyph = "\uE777", Title = "【第 95 轮更新】Forge 装一半、启动时报 not found in manifest",
+            Summary = "安装器依赖改用启动器线路预补齐；假版本 id 不再去查官方清单",
+            Body = "你这次给的全链路日志里是两件事叠在一起。\n\n" +
+                   "1) 装 Forge 时安装器自己报「These libraries failed to download ... com.google.code.findbugs:jsr305:3.0.2」然后退出码 1。它用自己的 JVM 网络库去 maven.creeperhost.net 拉依赖，不走启动器的镜像线路；日志里同期就有镜像 502、线路来回切，所以是网络波动，不是 Java 25 的锅（上一轮用同一台机器的 Java 25 装成功过）。\n\n" +
+                   "2) 点启动时报「Version 'forge-1.20.1-47.4.22' not found in manifest.」。走的是「补全文件」路径：实例里存了一个从安装器下载地址推导出来的假 id，磁盘上却没有对应的版本文件，于是本地优先落空、回落到 Mojang 官方清单 —— 而第三方加载器永远不在官方清单里。\n\n" +
+                   "已修：本地版本文件一律优先（零网络）；第三方 id 缺本地文件时直接说「加载器没装好，请补全」，绝不再问官方清单；损坏/空壳的版本 JSON 不再被当成已安装；安装器只有真正生成 versions/<id>/<id>.json 才算成功，不许再把假 id 写进实例。\n\n" +
+                   "另外：跑安装器之前，启动器会先读安装器 jar 里的依赖清单，用镜像 → Maven Central → 原地址把 jsr305 这类库预先补到 libraries/，补不到也不影响安装器自己再试；失败时会点名具体缺哪个库，不再甩六行 maven 输出。\n\n" +
+                   "升级后点「实例管理 → 补全文件」即可重跑；不用再手动建 launcher_profiles.json（上一轮已自动补）。"
+        },
         new HelpTopicVM
         {
             Category = "更新日志", Glyph = "\uE777", Title = "【第 94 轮更新】Forge / NeoForge 装不上的问题修好了",

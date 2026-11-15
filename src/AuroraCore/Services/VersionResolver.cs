@@ -92,6 +92,12 @@ public sealed class VersionResolver
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                // Round-95: a broken local loader profile is an install-state
+                // problem, NOT a reason to ask Mojang for a version that will
+                // never be there. Say what to repair instead of dying with
+                // "… not found in manifest.".
+                if (VersionSourcePolicy.IsThirdPartyLoader(versionId))
+                    throw new InvalidOperationException(VersionSourcePolicy.CorruptLocalHint(versionId), ex);
                 _log.Warn("Resolver", $"Local version JSON for {versionId} is unreadable ({ex.Message}); trying manifest.");
                 raw = JsonHelper.Deserialize<VersionJson>(await _manifest.GetVersionJsonRawAsync(versionId, ct).ConfigureAwait(false));
             }

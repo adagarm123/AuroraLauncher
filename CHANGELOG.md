@@ -1,6 +1,6 @@
 # 更新日志（CHANGELOG）
 
-> 完整历史变更记录：**第 1–2 轮交付说明 + 第 3 轮至第 93 轮逐轮补充**（末轮始终为当前版本的前一轮）。
+> 完整历史变更记录：**第 1–2 轮交付说明 + 第 3 轮至第 94 轮逐轮补充**（末轮始终为当前版本的前一轮）。
 > 本文件由 `README.md` 的历史章节整体搬迁而来，正文保持原样（未改写、未删减）。
 >
 > - **最新一轮**始终放在 [README](README.md) 的「最新一轮的更新内容」章节。
@@ -1865,3 +1865,67 @@ BattleArmory TACZ  loader=Forge  resolved=(null)                      mods=0 →
 **仍需你实测**：真实窗口里连点那些按钮的手感（尤其「补全文件」这种要下载几分钟的操作，按钮会一直灰着、文案停在「补全中…」）。
 
 **配套**：`BuildInfo.CurrentRound` → 93、应用内更新日志置顶第 93 轮、第 92 轮归档进 CHANGELOG。
+
+## 更新补充（第 94 轮：Forge / NeoForge 装不上（缺 launcher_profiles.json））
+
+### 第 94 轮：Forge / NeoForge 装不上（缺 launcher_profiles.json）（2026-11-15）
+
+**你截图里的现象**：导入整合包到「安装 Forge 加载器」这一步失败，日志里 `Installer exited with code 1`，末尾写着 `There is no Minecraft launcher profile in "…\AuroraLauncher", you need to run the launcher first!`
+
+**根因（你的判断是对的）**：Forge / NeoForge 的官方安装器启动后第一件事是确认目标目录「像一个 Minecraft 安装目录」，判断依据就是 `launcher_profiles.json`。我们一直用自己的实例格式，数据根目录里从来没有这个文件 —— 安装器直接以 1 退出。**这也是上一轮「整合包只装到原版」的另一半原因**：加载器从来没装成功过。
+
+**我先复现，再修，再复验**
+
+用一个干净目录、只放 `versions/1.20.1/1.20.1.json`（安装器要靠它打补丁）和安装器本身：
+
+```
+不补 launcher_profiles.json：exit=1
+  Target Directory: C:\…\forge-probe
+  There is no Minecraft launcher profile in "C:\…\forge-probe", you need to run the launcher first!
+  There was an error during installation
+
+用启动器自己的代码补上（--profiles-ensure）：
+  [profiles] …\launcher_profiles.json created=True repaired=False hasProfiles=True
+
+再跑一次：exit=0
+  Patching net/minecraft/… 1/1 …（大量打补丁输出）
+  Injecting profile
+  Successfully installed client into launcher.
+  versions/ 里出现 1.20.1-forge-47.4.22
+```
+
+**改法**
+
+- 新增 `LauncherProfiles.Ensure(root)`：安装器启动前检查目标目录 ——
+  - **缺** → 写一个最小但结构完整的文件（`profiles` + `selectedProfile` + `clientToken` + `authenticationDatabase` + `launcherVersion`）；
+  - **已存在且合法** → 一个字都不动（你自己或官方启动器写的不会被覆盖）；
+  - **存在但不可用**（空文件、`{}`、被截断）→ 先备份成 `.bak` 再重建；
+  - 写入走临时文件 + 移动，安装器不会读到半截 JSON。
+- 失败原因翻译：`LauncherProfiles.Explain(tail)` 认出「缺 profile / Java 版本不对 / 安装器自己断网」三种，直接在错误里说人话，不再把整段 maven 输出丢给用户。
+- Java 版本预警：当安装器要用的 Java 比该版本推荐的高出两档以上（例如 1.20.1 用 Java 25），日志先提醒一句 —— 这条只是提示，不是你这次失败的原因（我用 Java 25 装成功了）。
+- **顺手修的隐患**：安装器参数里的目标目录原来读全局配置，而不是调用方传进来的 `gameRoot`。便携模式或测试里传别的目录时，文件会写到错的地方。现在统一用 `gameRoot`。
+
+**端到端验证（不是只测函数）**
+
+新增 `--forge-install-smoke`：在隔离目录里用**启动器自己的安装流程**（`ModLoaderInstaller.InstallAsync`）装 Forge 1.20.1-47.4.22：
+
+```
+[forge-install] Java 25 (Microsoft) @ …jdk-25.0.3.9-hotspot\bin\java.exe
+[forge-install] SMOKE OK：1.20.1-forge-47.4.22 安装成功（180 秒）
+[forge-install] launcher_profiles.json 已自动补上：…\aurora-forge-install-f26b81\launcher_profiles.json
+```
+
+顺带证明了版本目录检测也是对的（`VersionId=1.20.1-forge-47.4.22` 且它的 JSON 真的存在）。
+
+**验证汇总**
+
+- `--unit` **123/123**、`--all` **130/130**（新增 #123 配置文件三态：缺→建、好→不动、坏→备份重建 + 失败翻译；#124 守卫：必须「先补文件再启动安装器」，且只允许一处补文件调用）
+- `--forge-install-smoke` 通过（需要网络，不进 CI）
+- 其余八个冒烟全绿
+- 发布：EXE + 93→94 补丁 + 签名清单（见文末）
+
+**你之前失败的那个实例**：重新导入一次整合包即可；只想补加载器就点「实例管理 → 补全文件」（现在它会先补 profile 再跑安装器）。
+
+**仍需你实测**：真实导入一个 Forge 整合包走完整条链（加载器 + 模组），以及 NeoForge 版本（用的是同一个安装器通道，但我只实测了 Forge 1.20.1）。
+
+**配套**：`BuildInfo.CurrentRound` → 94、应用内更新日志置顶第 94 轮、第 93 轮归档进 CHANGELOG、新增 ADR-0016。

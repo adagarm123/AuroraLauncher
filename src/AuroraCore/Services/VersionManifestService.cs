@@ -53,8 +53,27 @@ public sealed class VersionManifestService
         return entry;
     }
 
+    /// <summary>Round-95: local version JSON is authoritative and costs zero
+    /// network. A third-party loader id is NEVER in the Mojang manifest —
+    /// asking for it produced "Version 'forge-1.20.1-47.4.22' not found in
+    /// manifest." after a failed install, which told the user nothing.
+    /// The order (local → loader guard → manifest) is locked by a test.</summary>
     public async Task<string> GetVersionJsonRawAsync(string versionId, CancellationToken ct = default)
     {
+        var localPath = Path.Combine(LauncherConfig.Instance.VersionsDir, versionId, versionId + ".json");
+        if (File.Exists(localPath))
+        {
+            var local = File.ReadAllText(localPath);
+            if (!string.IsNullOrWhiteSpace(local))
+            {
+                _log.Info("Manifest", $"Using local version JSON for {versionId} (no network)");
+                return local;
+            }
+        }
+
+        if (VersionSourcePolicy.IsThirdPartyLoader(versionId))
+            throw new InvalidOperationException(VersionSourcePolicy.LoaderMissingHint(versionId));
+
         var entry = await GetEntryAsync(versionId, ct).ConfigureAwait(false);
         // Round-71: entry.Url is the OFFICIAL URL. Rewriting it to the mirror here
         // made NetRouting collapse both routes onto the same dead host.

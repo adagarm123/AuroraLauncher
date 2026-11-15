@@ -4984,6 +4984,146 @@ internal static class Program
             Assert(ensureCalls == 1, $"补文件只应有一处，实际 {ensureCalls} 处");
         });
 
+        Check("VersionSourcePolicy: 本地优先 / 第三方加载器 id 不得查官方清单（第 95 轮）", () =>
+        {
+            Assert(VersionSourcePolicy.Decide("1.20.1", true) == VersionSource.Local,
+                "本地有版本 JSON 就必须直接用，零网络");
+            Assert(VersionSourcePolicy.Decide("1.20.1", false) == VersionSource.Official,
+                "原版 id 且本地没有 → 才允许查官方清单");
+            foreach (var id in new[] { "forge-1.20.1-47.4.22", "1.20.1-forge-47.4.22",
+                         "neoforge-21.1.72", "fabric-loader-0.20.1-1.21", "quilt-loader-0.26.0-1.21" })
+            {
+                Assert(VersionSourcePolicy.IsThirdPartyLoader(id), $"{id} 应识别为第三方加载器");
+                Assert(VersionSourcePolicy.Decide(id, false) == VersionSource.LoaderProfileMissing,
+                    $"{id} 缺本地文件时应判定为「加载器没装好」，而不是去查官方清单");
+                Assert(VersionSourcePolicy.Decide(id, true) == VersionSource.Local,
+                    $"{id} 有本地文件时照常本地优先");
+            }
+            Assert(!VersionSourcePolicy.IsThirdPartyLoader("1.20.1"), "原版版本号不能被误判");
+            Assert(!VersionSourcePolicy.IsThirdPartyLoader("1.20.1-pre1"), "快照版本号不能被误判");
+            Assert(VersionSourcePolicy.LoaderMissingHint("forge-1.20.1-47.4.22").Contains("补全文件"),
+                "错误提示必须给出下一步动作");
+        });
+
+        Check("InstallerDependencies: Maven 坐标 / 依赖清单 / 多线路候选（第 95 轮）", () =>
+        {
+            Assert(InstallerDependencies.MavenPath("com.google.code.findbugs:jsr305:3.0.2") ==
+                   "com/google/code/findbugs/jsr305/3.0.2/jsr305-3.0.2.jar", "基础坐标转路径");
+            Assert(InstallerDependencies.MavenPath("net.minecraftforge:forge:1.20.1-47.4.22:client") ==
+                   "net/minecraftforge/forge/1.20.1-47.4.22/forge-1.20.1-47.4.22-client.jar", "带 classifier");
+            Assert(InstallerDependencies.MavenPath("a:b:1@zip") == "a/b/1/b-1.zip", "带扩展名后缀");
+            Assert(InstallerDependencies.MavenPath("garbage") == null, "非法坐标返回 null");
+
+            var json = "{\"libraries\":[" +
+                "{\"name\":\"com.google.code.findbugs:jsr305:3.0.2\",\"downloads\":{\"artifact\":{" +
+                "\"path\":\"com/google/code/findbugs/jsr305/3.0.2/jsr305-3.0.2.jar\"," +
+                "\"url\":\"https://maven.creeperhost.net/com/google/code/findbugs/jsr305/3.0.2/jsr305-3.0.2.jar\"," +
+                "\"sha1\":\"abc\",\"size\":12345}}}," +
+                "{\"name\":\"trove:trove:1.0.2\"}," +
+                "{\"name\":\"../evil:bad:1\",\"downloads\":{\"artifact\":{\"path\":\"../../escape.jar\"}}}" +
+                "]}";
+            var libs = InstallerDependencies.Parse(json);
+            Assert(libs.Count == 2, $"应解析出 2 个合法依赖，实际 {libs.Count}");
+            Assert(libs.All(l => !l.RelativePath.Contains("..")), "路径穿越必须被挡掉");
+            Assert(libs[0].Sha1 == "abc" && libs[0].Size == 12345, "校验值与大小要带下去");
+            Assert(libs.Any(l => l.Name == "trove:trove:1.0.2" && l.RelativePath == "trove/trove/1.0.2/trove-1.0.2.jar"),
+                "没有 downloads.artifact 时要能从坐标推导路径");
+            Assert(InstallerDependencies.Parse("{ this is not json").Count == 0, "坏 JSON 不能抛异常");
+
+            var urls = InstallerDependencies.CandidateUrls(libs[0]);
+            Assert(urls.Count >= 3, "至少要有镜像 / Maven Central / 安装器原始地址三条线路");
+            Assert(urls[0].Contains("bmclapi"), "第一条走国内镜像");
+            Assert(urls[1].Contains("repo1.maven.org"), "第二条走 Maven Central（jsr305 在这里）");
+            Assert(urls.Contains("https://maven.creeperhost.net/com/google/code/findbugs/jsr305/3.0.2/jsr305-3.0.2.jar"),
+                "安装器自己的地址保留作最后兜底");
+        });
+
+        Check("InstallerDependencies: 只把真正失败的坐标列给用户（第 95 轮）", () =>
+        {
+            var tail = "Considering library trove:trove:1.0.2 | Downloading library from https://maven.creeperhost.net/trove/trove/1.0.2/trove-1.0.2.jar | " +
+                       "Download completed: Checksum validated. | These libraries failed to download. Try again. | " +
+                       "com.google.code.findbugs:jsr305:3.0.2 | There was an error during installation";
+            var missing = InstallerDependencies.FailedCoordinates(tail);
+            Assert(missing.Count == 1 && missing[0] == "com.google.code.findbugs:jsr305:3.0.2",
+                "只应点名 jsr305，实际: " + string.Join(",", missing));
+            Assert(!missing.Contains("trove:trove:1.0.2"), "下载成功的库不能被误报成失败");
+            var explained = LauncherProfiles.Explain(tail);
+            Assert(explained != null && explained.Contains("jsr305") && explained.Contains("网络"),
+                "jsr305 下载失败要翻译成人话并点名具体库：" + explained);
+        });
+
+        Check("GameInstaller.IsVersionJsonInstalled: 空壳 loader profile 不算已安装（第 95 轮）", () =>
+        {
+            var cfg = LauncherConfig.Instance;
+            var old = cfg.RootDirectory;
+            var root = Path.Combine(Path.GetTempPath(), "aurora-r95-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                cfg.RootDirectory = root;
+                var gi = new GameInstaller(new VersionResolver(new VersionManifestService()), new DownloadEngine());
+                var id = "forge-1.20.1-47.4.22";
+                var dir = Path.Combine(root, "versions", id);
+                Directory.CreateDirectory(dir);
+                var f = Path.Combine(dir, id + ".json");
+                var filler = ",\"type\":\"release\",\"libraries\":[],\"assets\":\"1.20.1\"," +
+                             "\"minimumLauncherVersion\":0,\"time\":\"2026-01-01T00:00:00+00:00\"}";
+                File.WriteAllText(f, new string('x', 300));
+                Assert(!gi.IsVersionJsonInstalled(id), "超过 128 字节的截断残片不能算已安装");
+                File.WriteAllText(f, "{\"id\":\"" + id + "\"" + filler);
+                Assert(!gi.IsVersionJsonInstalled(id), "合法 JSON 但没有 mainClass 也不能算已安装");
+                File.WriteAllText(f, "{\"id\":\"" + id + "\",\"mainClass\":\"net.minecraftforge.bootstrap.ForgeBootstrap\"" + filler);
+                Assert(gi.IsVersionJsonInstalled(id), "完整 profile 才算已安装");
+            }
+            finally
+            {
+                cfg.RootDirectory = old;
+                try { Directory.Delete(root, true); } catch { }
+            }
+        });
+
+        Check("Guard: 本地版本 JSON 优先于官方清单，第三方 id 不得发起清单查询（第 95 轮）", () =>
+        {
+            var svc = File.ReadAllText(Path.Combine(FindSourceRoot()!, "src", "AuroraCore",
+                "Services", "VersionManifestService.cs"));
+            var local = svc.IndexOf("if (File.Exists(localPath))", StringComparison.Ordinal);
+            var guard = svc.IndexOf("VersionSourcePolicy.IsThirdPartyLoader(versionId)", StringComparison.Ordinal);
+            var entry = svc.IndexOf("var entry = await GetEntryAsync", StringComparison.Ordinal);
+            Assert(local > 0 && guard > local && entry > guard,
+                "顺序必须是「本地文件 → 第三方守卫 → 官方清单」，反了就会重现 not found in manifest");
+            var resolver = File.ReadAllText(Path.Combine(FindSourceRoot()!, "src", "AuroraCore",
+                "Services", "VersionResolver.cs"));
+            Assert(resolver.Contains("VersionSourcePolicy.IsThirdPartyLoader(versionId)"),
+                "损坏的本地 loader profile 不得回落到官方清单");
+            var installer = File.ReadAllText(Path.Combine(FindSourceRoot()!, "src", "AuroraCore",
+                "Services", "GameInstaller.cs"));
+            Assert(installer.Contains("VersionSourcePolicy.IsThirdPartyLoader(versionId)"),
+                "GameInstaller 入口必须挡住缺失的 loader id");
+            Assert(installer.Contains("IsVersionJsonInstalled") && installer.Contains("mainClass"),
+                "已安装判定必须校验内容，而不是只看文件大小");
+            var repair = File.ReadAllText(Path.Combine(FindSourceRoot()!, "src", "AuroraCore",
+                "Services", "LauncherService.cs"));
+            Assert(repair.Contains("VersionSourcePolicy.LoaderMissingHint(pending)"),
+                "补全路径也要在把 loader id 交给 GameInstaller 之前拦住");
+        });
+
+        Check("Guard: 安装器运行前必须预填充依赖，且成功必须校验真实 profile 文件（第 95 轮）", () =>
+        {
+            var text = File.ReadAllText(Path.Combine(FindSourceRoot()!, "src", "AuroraCore",
+                "Services", "ModLoaders", "ModLoaderInstallers.cs"));
+            var prefill = text.IndexOf("await PrefillInstallerLibrariesAsync(jarPath", StringComparison.Ordinal);
+            var run = text.IndexOf("await RunJavaAsync(java.JavaExecutable", StringComparison.Ordinal);
+            Assert(prefill > 0 && run > prefill, "必须在启动安装器 JVM 之前预填充依赖");
+            Assert(text.Contains("Required = false"), "预填充失败不能中断安装（依赖是可选的）");
+            Assert(text.Contains("File.Exists(Path.Combine(gameRoot, \"versions\", d, d + \".json\"))"),
+                "成功必须要求真实的版本 JSON 存在");
+            Assert(!text.Contains("result.VersionId = detected ?? versionIdHint"),
+                "不许再把下载地址推导的 hint 当成已安装版本写进实例");
+            var deps = File.ReadAllText(Path.Combine(FindSourceRoot()!, "src", "AuroraCore",
+                "Services", "InstallerDependencies.cs"));
+            Assert(deps.Contains("repo1.maven.org") && deps.Contains("bmclapi"),
+                "至少要准备镜像与 Maven Central 两条线路");
+        });
+
         Console.WriteLine($"\n=== Result: {_passed} passed, {_failed} failed, {_skipped} skipped ===");        Environment.Exit(_failed == 0 ? 0 : 1);
     }
 }

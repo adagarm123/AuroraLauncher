@@ -1,7 +1,7 @@
 # 自测结论（AuroraSelfTest）
 
-> 更新于 2026-11-15（第 94 轮）。
-> **上次全绿：2026-11-15 —— Unit 123/123（离线）、All 130/130（含网络集成）。**
+> 更新于 2026-11-15（第 95 轮）。
+> **上次全绿：2026-11-15 —— Unit 129/129（离线）、All 136/136（含网络集成）。**
 > 运行命令：`dotnet run --project tests/AuroraSelfTest -c Debug [-- --unit|--integration|--all]`
 > 一键脚本：`powershell -File scripts/run-tests.ps1 [-Full]`（CI 见 `.github/workflows/selftest.yml`）
 > 测试分层：**unit（离线，CI 必跑）/ integration（联网，CI 定时跑）/ all**。
@@ -135,6 +135,12 @@
 [PASS] Guard: 异步命令必须自带防重入，且不许「火后不管」（第 93 轮）
 [PASS] LauncherProfiles: 安装器要的配置文件，缺了补、坏了修、好的不碰（第 94 轮）
 [PASS] Guard: 跑 Forge/NeoForge 安装器前必须先补 launcher_profiles.json（第 94 轮）
+[PASS] VersionSourcePolicy: 本地优先 / 第三方加载器 id 不得查官方清单（第 95 轮）
+[PASS] InstallerDependencies: Maven 坐标 / 依赖清单 / 多线路候选（第 95 轮）
+[PASS] InstallerDependencies: 只把真正失败的坐标列给用户（第 95 轮）
+[PASS] GameInstaller.IsVersionJsonInstalled: 空壳 loader profile 不算已安装（第 95 轮）
+[PASS] Guard: 本地版本 JSON 优先于官方清单，第三方 id 不得发起清单查询（第 95 轮）
+[PASS] Guard: 安装器运行前必须预填充依赖，且成功必须校验真实 profile 文件（第 95 轮）
 
 === Result: 123 passed, 0 failed, 7 skipped ===（跳过的 7 项为网络集成测试）
 
