@@ -1,7 +1,7 @@
 # 自测结论（AuroraSelfTest）
 
-> 更新于 2026-11-15（第 96 轮）。
-> **上次全绿：2026-11-15 —— Unit 135/135（离线）、All 142/142（含网络集成）。**
+> 更新于 2026-11-15（第 97 轮）。
+> **上次全绿：2026-11-15 —— Unit 142/142（离线）、All 149/149（含网络集成）。**
 > 运行命令：`dotnet run --project tests/AuroraSelfTest -c Debug [-- --unit|--integration|--all]`
 > 一键脚本：`powershell -File scripts/run-tests.ps1 [-Full]`（CI 见 `.github/workflows/selftest.yml`）
 > 测试分层：**unit（离线，CI 必跑）/ integration（联网，CI 定时跑）/ all**。
@@ -147,6 +147,13 @@
 [PASS] NavigationHighlight: 单一 CurrentPageKey 最多一个高亮（第 96 轮）
 [PASS] Guard: 补全必须走 DownloadJob，标题栏不得脱离任务队列（第 96 轮）
 [PASS] Guard: 全部取消置灰 / 错误可重试 / 导航单一来源（第 96 轮）
+[PASS] VersionRangePolicy: [4.11.0,4.99.0) 边界与最新版选择（第 97 轮）
+[PASS] ModDependencyPolicy: 跨加载器过滤与按 modId 去重（第 97 轮）
+[PASS] PreflightAutoFixPolicy: 加载器标签、slug 映射与版本准入（第 97 轮）
+[PASS] ProgressDisplayPolicy: 未完成任务永不显示 100%（第 97 轮）
+[PASS] JobWatchdogPolicy: 有速度但文件完成数停滞也判卡住（第 97 轮）
+[PASS] Guard: Forge 实例不得产生跨加载器前置（第 97 轮）
+[PASS] Guard: 进度封顶、不确定态与停滞检测必须接线（第 97 轮）
 
 === Result: 123 passed, 0 failed, 7 skipped ===（跳过的 7 项为网络集成测试）
 

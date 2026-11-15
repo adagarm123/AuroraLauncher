@@ -140,6 +140,21 @@ internal static class Program
         // Round-94 opt-in network smoke: the real Forge installer must finish
         // green through our own install path (launcher_profiles.json included).
         if (args.Contains("--forge-install-smoke")) { Environment.Exit(ForgeInstallSmoke.Run().GetAwaiter().GetResult()); return; }
+        // Round-97 read-only: run the REAL preflight over a real instance dir.
+        // Usage: --preflight-scan <instanceDir> <Forge|Fabric|NeoForge|Quilt>
+        var scanIndex = Array.IndexOf(args, "--preflight-scan");
+        if (scanIndex >= 0 && args.Length > scanIndex + 2)
+        {
+            var loader = Enum.TryParse<ModLoaderType>(args[scanIndex + 2], true, out var parsed)
+                ? parsed : ModLoaderType.Forge;
+            var report = ModPreflight.Scan(args[scanIndex + 1], loader, Console.WriteLine);
+            Console.WriteLine($"[preflight] loader={loader} scanned={report.ScannedJars} " +
+                              $"missing={report.Missing.Count} fabricApiMissing={report.FabricApiMissing}");
+            foreach (var d in report.Missing)
+                Console.WriteLine($"  - {d.ModId} | {d.Range} | <- {d.RequiredBy}");
+            Environment.Exit(0);
+            return;
+        }
         // Read-only diagnostic: what does the launch gate think of the REAL instances?
         if (args.Contains("--readiness-scan")) { Environment.Exit(LaunchGateSmoke.ScanRealRootForDiagnostics()); return; }
         // Diagnostic (read-only, never in CI): what WOULD the storage cleaner find
@@ -5211,6 +5226,127 @@ internal static class Program
             Assert(single == 9, "所有导航高亮必须只绑 CurrentPageKey 这一个来源");
             Assert(Read("src/AuroraLauncher.Desktop/App.xaml").Contains("PageActiveBorderConverter"),
                 "active 竖条转换器必须注册");
+        });
+
+        Check("VersionRangePolicy: [4.11.0,4.99.0) 边界与最新版选择（第 97 轮）", () =>
+        {
+            const string r = "[4.11.0,4.99.0)";
+            Assert(!VersionRangePolicy.Matches(r, "4.10.0"), "下界之前必须排除");
+            Assert(!VersionRangePolicy.Matches(r, "4.99.0"), "右括号是开区间，4.99.0 必须排除");
+            Assert(VersionRangePolicy.Matches(r, "4.11.0"), "左闭区间含 4.11.0");
+            Assert(VersionRangePolicy.Matches(r, "4.98.9"), "区间内通过");
+            Assert(VersionRangePolicy.Matches("[1.0.3,)", "1.2.0"), "无上界");
+            Assert(VersionRangePolicy.Matches("*", "1.0"), "通配符");
+            Assert(VersionRangePolicy.Matches("[1.0,2.0) || [3.0,4.0)", "3.5.0"), "或条件");
+            Assert(VersionRangePolicy.PickLatest(r, new[] { "4.10.0", "4.11.0", "4.20.0", "4.99.0" }) == "4.20.0",
+                "只能挑符合范围的最新版");
+            Assert(VersionRangePolicy.Compare("4.11.0", "4.99.0") < 0, "数值段比较");
+        });
+
+        Check("ModDependencyPolicy: 跨加载器过滤与按 modId 去重（第 97 轮）", () =>
+        {
+            Assert(!ModDependencyPolicy.IsRelevant("fabric-api", ModLoaderType.Forge), "Forge 绝不需要 fabric-api");
+            Assert(!ModDependencyPolicy.IsRelevant("fabric-api", ModLoaderType.NeoForge), "NeoForge 同理");
+            Assert(!ModDependencyPolicy.IsRelevant("quilt_loader", ModLoaderType.Forge), "Quilt 平台 id 过滤");
+            Assert(ModDependencyPolicy.IsRelevant("kotlinforforge", ModLoaderType.Forge), "Forge 前置要保留");
+            Assert(ModDependencyPolicy.IsRelevant("puzzlesaccessapi", ModLoaderType.Forge), "中性 id 保留");
+            Assert(!ModDependencyPolicy.IsRelevant("kotlinforforge", ModLoaderType.Fabric), "Fabric 忽略 Forge 专用前置");
+            Assert(!ModDependencyPolicy.IsRelevant("minecraft", ModLoaderType.Forge), "平台 id 忽略");
+
+            var deps = new[]
+            {
+                new ModDependency("fabric-api", "*", "EnhancedVisuals", "e.jar"),
+                new ModDependency("kotlinforforge", "[4.11.0,4.99.0)", "Fzzy Config", "f.jar"),
+                new ModDependency("kotlinforforge", "[4.11.0,4.99.0)", "Particle Core", "p.jar"),
+                new ModDependency("tacz", "[1.0.3,)", "TPS Zero", "t.jar")
+            };
+            var merged = ModDependencyPolicy.Merge(deps, ModLoaderType.Forge);
+            Assert(merged.Count == 2, $"Forge 下应只剩 2 条，实际 {merged.Count}");
+            Assert(merged.All(d => d.ModId != "fabric-api"), "fabric-api 必须被过滤掉");
+            var kff = merged.First(d => d.ModId == "kotlinforforge");
+            Assert(kff.RequiredByList.Count == 2 && kff.Ranges.Count == 1,
+                "同一前置合并成一行，保留两个依赖来源与范围");
+            Assert(VersionRangePolicy.Matches(kff.Range, "4.20.0"), "合并后的范围仍可用");
+        });
+
+        Check("PreflightAutoFixPolicy: 加载器标签、slug 映射与版本准入（第 97 轮）", () =>
+        {
+            var forge = PreflightAutoFixPolicy.LoadersFor(ModLoaderType.Forge);
+            Assert(forge.Count == 1 && forge[0] == "forge", "Forge 只能查 forge");
+            Assert(!forge.Any(l => l.Contains("fabric", StringComparison.OrdinalIgnoreCase)),
+                "禁止跨加载器补丁：Forge 的查询里不能出现 fabric");
+            Assert(PreflightAutoFixPolicy.LoadersFor(ModLoaderType.NeoForge)[0] == "neoforge", "NeoForge 标签");
+            Assert(PreflightAutoFixPolicy.LoadersFor(ModLoaderType.Fabric)[0] == "fabric", "Fabric 标签");
+            Assert(PreflightAutoFixPolicy.SlugFor("kotlinforforge") == "kotlin-for-forge", "slug 映射");
+            Assert(PreflightAutoFixPolicy.SlugFor("unknown-mod") == "unknown-mod", "未知 id 原样返回待搜索");
+            Assert(PreflightAutoFixPolicy.VersionAllowed(ModLoaderType.Forge, new[] { "forge" }, "1.20.1", new[] { "1.20.1" }),
+                "匹配的版本可下载");
+            Assert(!PreflightAutoFixPolicy.VersionAllowed(ModLoaderType.Forge, new[] { "fabric" }, "1.20.1", new[] { "1.20.1" }),
+                "Fabric 版本绝不能进 Forge 实例");
+            Assert(!PreflightAutoFixPolicy.VersionAllowed(ModLoaderType.Forge, new[] { "forge" }, "1.20.1", new[] { "1.21.1" }),
+                "MC 版本不符");
+        });
+
+        Check("ProgressDisplayPolicy: 未完成任务永不显示 100%（第 97 轮）", () =>
+        {
+            Assert(ProgressDisplayPolicy.Display(100, false) == 99, "还差文件就封顶 99");
+            Assert(ProgressDisplayPolicy.Display(96, false) == 96, "Floor 而不是四舍五入");
+            Assert(ProgressDisplayPolicy.Display(100, true) == 100, "真正完成才 100");
+            Assert(ProgressDisplayPolicy.Indeterminate("installer-run"), "安装器黑盒阶段转不确定态");
+            Assert(!ProgressDisplayPolicy.Indeterminate("json"), "普通阶段保持确定态");
+            Assert(ProgressDisplayPolicy.Hint("installer-run").Contains("安装器"), "不确定态要给出说人话的文案");
+            var (pct, _, active, _) = JobProgressPolicy.Aggregate(new[]
+            {
+                new DownloadJobSnapshot(JobState.Running, 100, 378000),
+                new DownloadJobSnapshot(JobState.Done, 100, 0)
+            });
+            Assert(active == 1 && pct <= 99, $"有活跃任务时汇总也不能到 100%，实际 {pct}");
+        });
+
+        Check("JobWatchdogPolicy: 有速度但文件完成数停滞也判卡住（第 97 轮）", () =>
+        {
+            var now = DateTime.UtcNow;
+            Assert(!JobWatchdogPolicy.IsFileProgressStalled(now.AddSeconds(-30), now, 90), "刚完成过文件不算卡住");
+            Assert(JobWatchdogPolicy.IsFileProgressStalled(now.AddSeconds(-121), now, 90), "2 分钟无新完成文件即卡住");
+            Assert(!JobWatchdogPolicy.IsFileProgressStalled(now.AddSeconds(-121), now, 0),
+                "没有文件计数流程时不启用该判定");
+            Assert(JobWatchdogPolicy.FileStalledMessage(now.AddSeconds(-121), now, 87, 90).Contains("87/90"),
+                "提示要点名停在哪个数上");
+        });
+
+        Check("Guard: Forge 实例不得产生跨加载器前置（第 97 轮）", () =>
+        {
+            var root = FindSourceRoot()!;
+            string Read(string f) => File.ReadAllText(Path.Combine(root, f));
+            var scan = Read("src/AuroraCore/Services/ModPreflight.cs");
+            Assert(scan.Contains("TryParse(file, loader, log)"), "解析必须传入实例加载器");
+            Assert(scan.Contains("ReadForgeMeta") && scan.Contains("ReadFabricMeta"), "两种元数据要有独立入口");
+            Assert(scan.Contains("ModDependencyPolicy.IsRelevant(depId, loader)"), "依赖收集必须过跨加载器过滤");
+            Assert(scan.Contains("ModDependencyPolicy.Merge(missing, loader)"), "必须按 modId 去重合并");
+            Assert(scan.Contains("FabricApiMissing = fabricApiRelevant"), "Fabric API 入口只在真缺时显示");
+            var policy = Read("src/AuroraCore/Services/PreflightAutoFixPolicy.cs");
+            Assert(policy.Contains("ModLoaderType.Forge => \"forge\"") &&
+                   policy.Contains("ModLoaderType.NeoForge => \"neoforge\""), "加载器标签必须显式且唯一");
+            Assert(!PreflightAutoFixPolicy.LoadersFor(ModLoaderType.Forge)
+                .Any(l => l.Contains("fabric", StringComparison.OrdinalIgnoreCase)),
+                "禁止跨加载器补丁：任何 Forge 查询都不能带 fabric facet");
+        });
+
+        Check("Guard: 进度封顶、不确定态与停滞检测必须接线（第 97 轮）", () =>
+        {
+            var root = FindSourceRoot()!;
+            string Read(string f) => File.ReadAllText(Path.Combine(root, f));
+            Assert(Read("src/AuroraCore/Services/DownloadJob.cs")
+                .Contains("ProgressDisplayPolicy.Display(percent, IsFinished)"), "Job 百分比必须封顶");
+            Assert(Read("src/AuroraCore/Services/DownloadJob.cs")
+                .Contains("LastFileCompletedUtc = DateTime.UtcNow"), "必须跟踪文件完成时间");
+            Assert(Read("src/AuroraCore/Services/JobWatchdogPolicy.cs").Contains("FileStallSeconds = 120"),
+                "停滞阈值必须是 2 分钟");
+            Assert(Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.cs").Contains("IsFileProgressStalled("),
+                "看门狗必须调用文件停滞判定");
+            Assert(Read("src/AuroraLauncher.Desktop/Views/DownloadsView.xaml")
+                .Contains("IsIndeterminate=\"{Binding DownloadProgressIndeterminate}\""),
+                "主进度条必须支持不确定态");
         });
 
         Console.WriteLine($"\n=== Result: {_passed} passed, {_failed} failed, {_skipped} skipped ===");        Environment.Exit(_failed == 0 ? 0 : 1);

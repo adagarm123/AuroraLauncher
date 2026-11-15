@@ -18,12 +18,21 @@ public static class HelpContent
     /// <summary>Round number of the newest entry in <see cref="Changelog"/> —
     /// bump together with the changelog entry; drives the one-time "已更新"
     /// startup toast (dismissed permanently once the user opens the page).</summary>
-    public const int LatestChangelogRound = 96;
+    public const int LatestChangelogRound = 97;
     /// <summary>更新日志（说人话版本：无技术名词、用户视角）——独立页面
     /// 「更新日志」使用；模板见 docs/release-notes-template.md。
     /// 每轮发布时在此置顶新增一条。</summary>
     public static IEnumerable<HelpTopicVM> Changelog() => new[]
     {
+        new HelpTopicVM
+        {
+            Category = "更新日志", Glyph = "\uE777", Title = "【第 97 轮更新】进度不再假 100%，Forge 不再「需要」Fabric API",
+            Summary = "未完成任务封顶 99%、安装器黑盒转不确定态、停滞看门狗；修掉跨平台依赖误报与重复列出",
+            Body = "1) 进度条不会再骗人：任务没结束就永远不显示 100%（封顶 99% 且向下取整）；一旦进入「运行 Forge 安装器」这个黑盒阶段，主进度条变成扫光的不确定态，文字直接说明「安装器内部下载，受网络影响可能较慢」，不再硬凑 87/90。另外加了文件完成停滞检测：哪怕还有几百 KB/s，只要 2 分钟没有一个新文件完成，也会判卡住并中止，可点重试。\n\n" +
+                   "2) Forge 实例报「缺少 fabric-api」是解析器的锅，不是你装错了模组。我在你真实的整合包里查到 6 个 jar 同时带 fabric.mod.json 和 mods.toml，其中 EnhancedVisuals_FORGE 和 ItemPhysicLite_FORGE 的 Fabric 元数据里写了 fabric-api —— 旧解析器无条件优先读 fabric.mod.json，于是把 Forge 版模组当成了 Fabric 模组。现在按实例的加载器优先读对应元数据，并对跨加载器依赖做过滤、按 modId 去重合并。\n\n" +
+                   "同一份真实数据重新体检：原来「缺少 19 个前置（共 29 项）」变成 6 条，fabric-api 完全消失，kotlinforforge 只出现一次并保留两个依赖来源。\n\n" +
+                   "3) 关于「一键补齐前置」：按你踩的刹车，这轮只把底层铺好（跨加载器过滤、去重、版本范围匹配 [4.11.0,4.99.0)、Modrinth slug 映射与加载器白名单），没有贸然加上自动下载 + 自动启动，避免把 fabric-api 下载进 Forge 目录。下一轮再接 UI 勾选与 DownloadJob 闭环。"
+        },
         new HelpTopicVM
         {
             Category = "更新日志", Glyph = "\uE777", Title = "【第 96 轮更新】下载管理不再空白，Forge 补全也能认领已装好的版本",

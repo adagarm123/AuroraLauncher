@@ -7,7 +7,12 @@ using AuroraCore.Models;
 namespace AuroraCore.Services;
 
 /// <summary>One unmet requirement found before launch.</summary>
-public sealed record ModDependency(string ModId, string Range, string RequiredBy, string RequiredByFile);
+public sealed record ModDependency(string ModId, string Range, string RequiredBy, string RequiredByFile)
+{
+    /// <summary>Round-97: every distinct range demanded for this id (merged).</summary>
+    public IReadOnlyList<string> Ranges { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> RequiredByList { get; init; } = Array.Empty<string>();
+}
 
 /// <summary>
 /// Round-77: pre-launch mod precheck. Reads <c>fabric.mod.json</c> /
@@ -68,7 +73,7 @@ public static class ModPreflight
 
         foreach (var file in Directory.EnumerateFiles(modsDir, "*.jar", SearchOption.TopDirectoryOnly))
         {
-            var parsed = TryParse(file, log);
+            var parsed = TryParse(file, loader, log);
             if (parsed != null) mods.Add(parsed);
         }
 
@@ -87,6 +92,10 @@ public static class ModPreflight
             foreach (var (depId, range) in mod.Depends)
             {
                 if (PlatformIds.Contains(depId)) continue;
+                // Round-97: a Forge instance must never be told it needs
+                // fabric-api (and vice versa). Cross-loader ids are noise from
+                // multi-platform jars, not missing prerequisites.
+                if (!ModDependencyPolicy.IsRelevant(depId, loader)) continue;
                 if (present.Contains(depId)) continue;
                 var key = depId + "|" + mod.ModId;
                 if (!seenMissing.Add(key)) continue;
@@ -139,17 +148,24 @@ public static class ModPreflight
             if (line != null) wrongLoader.Add(line);
         }
 
+        // Round-97: one row per modId, with all ranges/dependants merged.
+        var mergedMissing = ModDependencyPolicy.Merge(missing, loader);
+        var fabricApiRelevant = loader == ModLoaderType.Fabric &&
+            mergedMissing.Any(d => d.ModId.Equals("fabric-api", StringComparison.OrdinalIgnoreCase) ||
+                                   d.ModId.StartsWith("fabric-", StringComparison.OrdinalIgnoreCase));
+
         var report = new Report
         {
             ScannedJars = mods.Count,
-            Missing = missing,
+            Missing = mergedMissing,
             Conflicts = conflicts,
             Duplicates = duplicates,
             WrongLoader = wrongLoader,
-            FabricApiMissing = fabricApiMissing
+            FabricApiMissing = fabricApiRelevant
         };
 
-        log?.Invoke($"[Preflight] 扫描 {report.ScannedJars} 个模组：缺少前置 {missing.Count}、" +
+        log?.Invoke($"[Preflight] 扫描 {report.ScannedJars} 个模组：缺少前置 {mergedMissing.Count}（原始 {missing.Count} 条）· " +
+                    $"按 {loader} 过滤并去重、" +
                     $"冲突 {conflicts.Count}、重复 {duplicates.Count}、加载器不符 {wrongLoader.Count}");
         return report;
     }
@@ -165,61 +181,27 @@ public static class ModPreflight
         public List<(string Id, string Range)> Breaks { get; } = new();
     }
 
-    private static ParsedMod? TryParse(string jarPath, Action<string>? log)
+    /// <summary>Round-97: pick the metadata file that belongs to THIS
+    /// instance's loader FIRST. Multi-platform jars ship both fabric.mod.json
+    /// and META-INF/mods.toml; reading the Fabric one for a Forge instance is
+    /// what produced the impossible "Forge needs fabric-api" report.
+    /// The other format is only a fallback (and its deps are still filtered by
+    /// ModDependencyPolicy.IsRelevant).</summary>
+    private static ParsedMod? TryParse(string jarPath, ModLoaderType loader, Action<string>? log)
     {
         var fileName = Path.GetFileName(jarPath);
         try
         {
             using var zip = ZipFile.OpenRead(jarPath);
-
-            foreach (var entryName in new[] { "fabric.mod.json", "quilt.mod.json" })
+            var preferFabric = loader is ModLoaderType.Fabric or ModLoaderType.Quilt;
+            var readers = preferFabric
+                ? new Func<ParsedMod?>[] { () => ReadFabricMeta(zip, fileName), () => ReadForgeMeta(zip, fileName) }
+                : new Func<ParsedMod?>[] { () => ReadForgeMeta(zip, fileName), () => ReadFabricMeta(zip, fileName) };
+            foreach (var read in readers)
             {
-                var entry = zip.GetEntry(entryName);
-                if (entry == null) continue;
-                using var stream = entry.Open();
-                using var doc = JsonDocument.Parse(stream);
-                var root = doc.RootElement;
-                // Quilt wraps its metadata in a "quilt_loader" object.
-                if (root.TryGetProperty("quilt_loader", out var quiltLoader)) root = quiltLoader;
-
-                var mod = new ParsedMod
-                {
-                    FileName = fileName,
-                    Loader = entryName.Contains("quilt") ? "quilt" : "fabric"
-                };
-                if (root.TryGetProperty("id", out var id)) mod.ModId = id.GetString() ?? "";
-                if (root.TryGetProperty("name", out var name)) mod.DisplayName = name.GetString() ?? "";
-                if (mod.DisplayName.Length == 0) mod.DisplayName = mod.ModId.Length > 0 ? mod.ModId : fileName;
-
-                if (root.TryGetProperty("provides", out var provides) && provides.ValueKind == JsonValueKind.Array)
-                    foreach (var item in provides.EnumerateArray())
-                        if (item.ValueKind == JsonValueKind.String && item.GetString() is { Length: > 0 } pid)
-                            mod.Provides.Add(pid);
-
-                ReadFabricMap(root, "depends", mod.Depends);
-                ReadFabricMap(root, "breaks", mod.Breaks);
-                return mod;
+                var parsed = read();
+                if (parsed != null) return parsed;
             }
-
-            foreach (var tomlName in new[] { "META-INF/mods.toml", "META-INF/neoforge.mods.toml" })
-            {
-                var entry = zip.GetEntry(tomlName);
-                if (entry == null) continue;
-                using var reader = new StreamReader(entry.Open());
-                var toml = reader.ReadToEnd();
-                var mod = new ParsedMod
-                {
-                    FileName = fileName,
-                    Loader = (tomlName.Contains("neoforge") ||
-                              (toml.Contains("modLoader=\"javafml\"") && toml.Contains("neo")))
-                        ? "neoforge" : "forge"
-                };
-                mod.ModId = FirstValue(toml, "modId") ?? "";
-                mod.DisplayName = FirstValue(toml, "displayName") ?? (mod.ModId.Length > 0 ? mod.ModId : fileName);
-                ReadForgeDependencies(toml, mod.Depends, mod.Breaks);
-                return mod;
-            }
-
             return null; // not a mod jar (resource pack, shader, plain library)
         }
         catch (Exception ex)
@@ -227,6 +209,61 @@ public static class ModPreflight
             log?.Invoke($"[Preflight] 无法读取 {fileName} 的元数据：{ex.Message}");
             return null;
         }
+    }
+
+    private static ParsedMod? ReadFabricMeta(ZipArchive zip, string fileName)
+    {
+        foreach (var entryName in new[] { "fabric.mod.json", "quilt.mod.json" })
+        {
+            var entry = zip.GetEntry(entryName);
+            if (entry == null) continue;
+            using var stream = entry.Open();
+            using var doc = JsonDocument.Parse(stream);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("quilt_loader", out var quiltLoader)) root = quiltLoader;
+
+            var mod = new ParsedMod
+            {
+                FileName = fileName,
+                Loader = entryName.Contains("quilt") ? "quilt" : "fabric"
+            };
+            if (root.TryGetProperty("id", out var id)) mod.ModId = id.GetString() ?? "";
+            if (root.TryGetProperty("name", out var name)) mod.DisplayName = name.GetString() ?? "";
+            if (mod.DisplayName.Length == 0) mod.DisplayName = mod.ModId.Length > 0 ? mod.ModId : fileName;
+
+            if (root.TryGetProperty("provides", out var provides) && provides.ValueKind == JsonValueKind.Array)
+                foreach (var item in provides.EnumerateArray())
+                    if (item.ValueKind == JsonValueKind.String && item.GetString() is { Length: > 0 } pid)
+                        mod.Provides.Add(pid);
+
+            ReadFabricMap(root, "depends", mod.Depends);
+            ReadFabricMap(root, "breaks", mod.Breaks);
+            return mod;
+        }
+        return null;
+    }
+
+    private static ParsedMod? ReadForgeMeta(ZipArchive zip, string fileName)
+    {
+        foreach (var tomlName in new[] { "META-INF/mods.toml", "META-INF/neoforge.mods.toml" })
+        {
+            var entry = zip.GetEntry(tomlName);
+            if (entry == null) continue;
+            using var reader = new StreamReader(entry.Open());
+            var toml = reader.ReadToEnd();
+            var mod = new ParsedMod
+            {
+                FileName = fileName,
+                Loader = (tomlName.Contains("neoforge") ||
+                          (toml.Contains("modLoader=\"javafml\"") && toml.Contains("neo")))
+                    ? "neoforge" : "forge"
+            };
+            mod.ModId = FirstValue(toml, "modId") ?? "";
+            mod.DisplayName = FirstValue(toml, "displayName") ?? (mod.ModId.Length > 0 ? mod.ModId : fileName);
+            ReadForgeDependencies(toml, mod.Depends, mod.Breaks);
+            return mod;
+        }
+        return null;
     }
 
     private static void ReadFabricMap(JsonElement root, string property, List<(string, string)> target)

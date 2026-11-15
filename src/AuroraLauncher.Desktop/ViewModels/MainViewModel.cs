@@ -1010,6 +1010,8 @@ public partial class MainViewModel : ViewModelBase
             var live = _jobManager.Jobs.FirstOrDefault(j => !j.IsFinished);
             if (live != null)
             {
+                if (ProgressDisplayPolicy.Indeterminate(live.CurrentStageKey))
+                    return "正在安装… " + ProgressDisplayPolicy.Hint(live.CurrentStageKey);
                 var stage = string.IsNullOrWhiteSpace(live.StageText) ? live.StateText : live.StageText;
                 return $"正在安装… {live.Title} · {stage}";
             }
@@ -1019,6 +1021,17 @@ public partial class MainViewModel : ViewModelBase
 
     /// <summary>Round-96: 全部取消 must be grey when there is nothing to cancel.</summary>
     public bool HasCancellableJobs => _jobManager.Jobs.Any(j => j.CanCancel);
+
+    /// <summary>Round-97: the summary bar becomes indeterminate once the
+    /// installer JVM owns the download (a black box to us).</summary>
+    public bool DownloadProgressIndeterminate
+    {
+        get
+        {
+            var live = _jobManager.Jobs.FirstOrDefault(j => !j.IsFinished);
+            return live != null && ProgressDisplayPolicy.Indeterminate(live.CurrentStageKey);
+        }
+    }
     public bool CanRetryLastFailed => _lastFailedRepairInstanceId != null;
     private bool _jobDrivenStatus;
     private string? _lastFailedRepairInstanceId;
@@ -1519,8 +1532,14 @@ public partial class MainViewModel : ViewModelBase
         {
             if (job.IsFinished) continue;
             var limit = JobWatchdogPolicy.TimeoutSeconds(job.State, job.CurrentStageKey);
-            if (!JobWatchdogPolicy.IsStalled(job.LastProgressUtc, now, limit)) continue;
-            var msg = JobWatchdogPolicy.StalledMessage(job.LastProgressUtc, now, limit);
+            var quietStalled = JobWatchdogPolicy.IsStalled(job.LastProgressUtc, now, limit);
+            var fileStalled = JobWatchdogPolicy.IsFileProgressStalled(
+                job.LastFileCompletedUtc, now, job.TrackedTotalFiles);
+            if (!quietStalled && !fileStalled) continue;
+            var msg = fileStalled
+                ? JobWatchdogPolicy.FileStalledMessage(job.LastFileCompletedUtc, now,
+                    job.LastCompletedFiles, job.TrackedTotalFiles)
+                : JobWatchdogPolicy.StalledMessage(job.LastProgressUtc, now, limit);
             Logger.Instance.Warn("Download", $"任务「{job.Title}」{msg}");
             job.AbortAsFailure(msg);
             FinishJob(job, new TimeoutException(msg), canceled: false);
@@ -1574,6 +1593,7 @@ public partial class MainViewModel : ViewModelBase
         IsBusy = active > 0 || queued > 0;
         OnPropertyChanged(nameof(HeaderText));
         OnPropertyChanged(nameof(HasCancellableJobs));
+        OnPropertyChanged(nameof(DownloadProgressIndeterminate));
         CancelAllDownloadsCommand.RaiseCanExecuteChanged();
     }
 
@@ -2822,7 +2842,8 @@ public partial class MainViewModel : ViewModelBase
     {
         job.EnterStage(key);
         var label = job.Stages.FirstOrDefault(st => st.Key == key)?.Label ?? key;
-        job.SetStageText(label);
+        job.SetStageText(ProgressDisplayPolicy.Indeterminate(key)
+            ? "安装器内部下载中（受网络影响，可能较慢）" : label);
         Status = $"正在安装… {label}";
     }
 

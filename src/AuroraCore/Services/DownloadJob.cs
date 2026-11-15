@@ -166,6 +166,13 @@ public sealed class DownloadJob : INotifyPropertyChanged
     /// distinguish "quiet but working" from "hung".</summary>
     public DateTime LastProgressUtc { get; private set; } = DateTime.UtcNow;
 
+    /// <summary>Round-97: file-COMPLETION tracking. Bytes can keep trickling
+    /// in (378 KB/s) while the "87/90" counter never moves for minutes — that
+    /// is a stall too, and a speed-only watchdog cannot see it.</summary>
+    public int LastCompletedFiles { get; private set; }
+    public int TrackedTotalFiles { get; private set; }
+    public DateTime LastFileCompletedUtc { get; private set; } = DateTime.UtcNow;
+
     private void Touch() => LastProgressUtc = DateTime.UtcNow;
 
     /// <summary>Round-96: first real stage / first byte ends the 准备中 phase.
@@ -239,12 +246,21 @@ public sealed class DownloadJob : INotifyPropertyChanged
     {
         Touch();
         EnsureRunning();
+        if (p.TotalFiles > 0)
+        {
+            TrackedTotalFiles = p.TotalFiles;
+            if (p.CompletedFiles > LastCompletedFiles)
+            {
+                LastCompletedFiles = p.CompletedFiles;
+                LastFileCompletedUtc = DateTime.UtcNow;
+            }
+        }
         var stageFrac = p.TotalFiles > 0
             ? Math.Clamp((double)p.CompletedFiles / p.TotalFiles, 0, 1)
             : 0;
         var percent = JobProgressPolicy.PercentFor(_stageIndex, _stageCount, stageFrac);
 
-        _percent = percent;
+        _percent = ProgressDisplayPolicy.Display(percent, IsFinished);
         _speed = p.SpeedBytesPerSec;
         var detail = p.Message ?? p.Current?.DisplayName ?? "";
         _detail = detail;

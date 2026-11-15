@@ -30,6 +30,22 @@ public static class JobWatchdogPolicy
     public static bool IsStalled(DateTime lastProgressUtc, DateTime nowUtc, int timeoutSeconds)
         => (nowUtc - lastProgressUtc).TotalSeconds >= Math.Max(1, timeoutSeconds);
 
+    /// <summary>Round-97: "87/90 一动不动" detector. Independent of bytes/s:
+    /// if no file has flipped to completed for 2 minutes while a file-count
+    /// flow is active, the transfer is crawling, not working.</summary>
+    public const int FileStallSeconds = 120;
+
+    public static bool IsFileProgressStalled(DateTime lastFileCompletedUtc, DateTime nowUtc, int trackedTotalFiles)
+        => trackedTotalFiles > 0 && (nowUtc - lastFileCompletedUtc).TotalSeconds >= FileStallSeconds;
+
+    public static string FileStalledMessage(DateTime lastFileCompletedUtc, DateTime nowUtc,
+        int completedFiles, int totalFiles)
+    {
+        var quiet = Math.Max(0, (int)(nowUtc - lastFileCompletedUtc).TotalSeconds);
+        return $"已 {quiet} 秒没有新文件完成（停在 {completedFiles}/{totalFiles}），" +
+               "即使还有少量下行速度也判定为网络异常并中止；可点「重试」再来一次。";
+    }
+
     public static string StalledMessage(DateTime lastProgressUtc, DateTime nowUtc, int timeoutSeconds)
     {
         var quiet = Math.Max(0, (int)(nowUtc - lastProgressUtc).TotalSeconds);

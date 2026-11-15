@@ -66,7 +66,11 @@ public static class JobProgressPolicy
             }
         }
         var percent = counted == 0 ? 0 : (int)Math.Round((double)percentSum / counted);
-        return (Math.Clamp(percent, 0, 100), speed, active, queued);
+        // Round-97: a live job (running OR preparing OR queued) can never make
+        // the summary read 100 %, even if every stage is technically "past".
+        var anyPending = active > 0 || queued > 0;
+        return (ProgressDisplayPolicy.Display(Math.Clamp(percent, 0, 100), !anyPending),
+                speed, active, queued);
     }
 
     /// <summary>Round-74: byte sizes for "已下载 1.2 GB / 3.4 GB" style text.
