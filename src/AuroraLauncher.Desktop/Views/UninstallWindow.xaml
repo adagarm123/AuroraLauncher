@@ -1,0 +1,63 @@
+<Window x:Class="AuroraLauncher.Desktop.Views.UninstallWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="卸载 Aurora Launcher" Width="640" SizeToContent="Height" MaxHeight="720"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="24" MaxWidth="600">
+            <TextBlock Text="卸载 Aurora Launcher" FontSize="20" FontWeight="SemiBold"/>
+
+            <Border Background="{DynamicResource DangerSoftBrush}" CornerRadius="8" Padding="12" Margin="0,14,0,0">
+                <TextBlock Text="此操作非常危险，可能导致不可逆的数据丢失！"
+                           FontWeight="Bold" FontSize="13" TextWrapping="Wrap"
+                           Foreground="{DynamicResource DangerBrush}"/>
+            </Border>
+
+            <TextBlock x:Name="WarningText" TextWrapping="Wrap" FontSize="12.5"
+                       Margin="0,14,0,10" Foreground="{DynamicResource TextMutedBrush}"/>
+
+            <CheckBox x:Name="DeleteSavesBox" Content="同时删除游戏存档与实例（instances/、backups/）"
+                      Margin="0,4,0,4" Checked="OnOptionsChanged" Unchecked="OnOptionsChanged"/>
+            <CheckBox x:Name="DeleteJavaBox" Content="同时删除启动器管理的 Java（java/）"
+                      Margin="0,4,0,14" Checked="OnOptionsChanged" Unchecked="OnOptionsChanged"/>
+
+            <TextBlock Text="将删除以下项目（完整路径，逐条列出）：" FontWeight="SemiBold" FontSize="12.5" Margin="0,0,0,6"/>
+            <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="10" MaxHeight="190">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <ItemsControl x:Name="TargetList">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Path}" FontSize="11.5" TextWrapping="Wrap" Margin="0,2"
+                                           Foreground="{DynamicResource DangerBrush}"/>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Border>
+
+            <TextBlock Text="将保留（不属于启动器或按上面选择保留）：" FontWeight="SemiBold" FontSize="12.5" Margin="0,12,0,6"/>
+            <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="10" MaxHeight="110">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <ItemsControl x:Name="KeepList">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}" FontSize="11.5" TextWrapping="Wrap" Margin="0,2"
+                                           Foreground="{DynamicResource TextMutedBrush}"/>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Border>
+
+            <CheckBox x:Name="ConfirmBox" Margin="0,16,0,0" FontWeight="SemiBold"
+                      Content="我明白此操作不可恢复，且已备份需要保留的文件"
+                      Checked="OnConfirmChanged" Unchecked="OnConfirmChanged"/>
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
+                <Button Content="取消" IsCancel="True" Padding="16,7" Margin="0,0,10,0" Click="OnCancel"/>
+                <Button x:Name="OkButton" Content="确认卸载" IsEnabled="False" Padding="16,7"
+                        Style="{StaticResource DangerButton}" Click="OnConfirm"/>
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</Window>

@@ -49,35 +49,45 @@
             <StackPanel>
                 <TextBlock Text="内容中心" FontSize="17" FontWeight="Bold" Margin="10,0,0,16"/>
                 <Button Style="{StaticResource SubNavItem}" CommandParameter="模组"
-                        Background="{Binding ContentKind, Converter={StaticResource TextMatch}, ConverterParameter=模组}">
+                        Background="{Binding ContentKind, Converter={StaticResource TextMatch}, ConverterParameter=模组}"
+                        BorderThickness="3,0,0,0"
+                        BorderBrush="{Binding ContentKind, Converter={StaticResource PageActiveBorder}, ConverterParameter=模组}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE71D;" Style="{StaticResource SubNavIcon}"/>
                         <TextBlock Text="模组" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
                 <Button Style="{StaticResource SubNavItem}" CommandParameter="整合包"
-                        Background="{Binding ContentKind, Converter={StaticResource TextMatch}, ConverterParameter=整合包}">
+                        Background="{Binding ContentKind, Converter={StaticResource TextMatch}, ConverterParameter=整合包}"
+                        BorderThickness="3,0,0,0"
+                        BorderBrush="{Binding ContentKind, Converter={StaticResource PageActiveBorder}, ConverterParameter=整合包}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE8B5;" Style="{StaticResource SubNavIcon}"/>
                         <TextBlock Text="整合包" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
                 <Button Style="{StaticResource SubNavItem}" CommandParameter="数据包"
-                        Background="{Binding ContentKind, Converter={StaticResource TextMatch}, ConverterParameter=数据包}">
+                        Background="{Binding ContentKind, Converter={StaticResource TextMatch}, ConverterParameter=数据包}"
+                        BorderThickness="3,0,0,0"
+                        BorderBrush="{Binding ContentKind, Converter={StaticResource PageActiveBorder}, ConverterParameter=数据包}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE8F1;" Style="{StaticResource SubNavIcon}"/>
                         <TextBlock Text="数据包" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
                 <Button Style="{StaticResource SubNavItem}" CommandParameter="资源包"
-                        Background="{Binding ContentKind, Converter={StaticResource TextMatch}, ConverterParameter=资源包}">
+                        Background="{Binding ContentKind, Converter={StaticResource TextMatch}, ConverterParameter=资源包}"
+                        BorderThickness="3,0,0,0"
+                        BorderBrush="{Binding ContentKind, Converter={StaticResource PageActiveBorder}, ConverterParameter=资源包}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE7C3;" Style="{StaticResource SubNavIcon}"/>
                         <TextBlock Text="资源包" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
                 <Button Style="{StaticResource SubNavItem}" CommandParameter="光影包"
-                        Background="{Binding ContentKind, Converter={StaticResource TextMatch}, ConverterParameter=光影包}">
+                        Background="{Binding ContentKind, Converter={StaticResource TextMatch}, ConverterParameter=光影包}"
+                        BorderThickness="3,0,0,0"
+                        BorderBrush="{Binding ContentKind, Converter={StaticResource PageActiveBorder}, ConverterParameter=光影包}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE706;" Style="{StaticResource SubNavIcon}"/>
                         <TextBlock Text="光影包" VerticalAlignment="Center"/>
@@ -85,14 +95,18 @@
                 </Button>
                 <Separator Margin="10,12"/>
                 <Button Style="{StaticResource SubNavItem}" CommandParameter="CurseForge"
-                        Background="{Binding ContentKind, Converter={StaticResource TextMatch}, ConverterParameter=CurseForge}">
+                        Background="{Binding ContentKind, Converter={StaticResource TextMatch}, ConverterParameter=CurseForge}"
+                        BorderThickness="3,0,0,0"
+                        BorderBrush="{Binding ContentKind, Converter={StaticResource PageActiveBorder}, ConverterParameter=CurseForge}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE774;" Style="{StaticResource SubNavIcon}"/>
                         <TextBlock Text="CurseForge" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
                 <Button Style="{StaticResource SubNavItem}" CommandParameter="OptiFine"
-                        Background="{Binding ContentKind, Converter={StaticResource TextMatch}, ConverterParameter=OptiFine}">
+                        Background="{Binding ContentKind, Converter={StaticResource TextMatch}, ConverterParameter=OptiFine}"
+                        BorderThickness="3,0,0,0"
+                        BorderBrush="{Binding ContentKind, Converter={StaticResource PageActiveBorder}, ConverterParameter=OptiFine}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE706;" Style="{StaticResource SubNavIcon}"/>
                         <TextBlock Text="OptiFine" VerticalAlignment="Center"/>
@@ -100,7 +114,9 @@
                 </Button>
                 <Separator Margin="10,12"/>
                 <Button Style="{StaticResource SubNavItem}" CommandParameter="本地管理"
-                        Background="{Binding ContentKind, Converter={StaticResource TextMatch}, ConverterParameter=本地管理}">
+                        Background="{Binding ContentKind, Converter={StaticResource TextMatch}, ConverterParameter=本地管理}"
+                        BorderThickness="3,0,0,0"
+                        BorderBrush="{Binding ContentKind, Converter={StaticResource PageActiveBorder}, ConverterParameter=本地管理}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE713;" Style="{StaticResource SubNavIcon}"/>
                         <TextBlock Text="本地管理" VerticalAlignment="Center"/>
@@ -238,6 +254,9 @@
                             </Button.Style>
                         </Button>
                     </Grid>
+                    <!-- Round-99: 状态栏与列表同源，直接读实际渲染条数 -->
+                    <TextBlock Text="{Binding ContentStatusText}" FontSize="11.5" Margin="0,10,0,0"
+                               TextWrapping="Wrap" Foreground="{DynamicResource TextMutedBrush}"/>
                 </StackPanel>
             </Border>
 
@@ -250,8 +269,9 @@
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <!-- 列表 + 覆盖层 -->
-                    <Grid Grid.Row="0">
+                    <!-- 列表 + 覆盖层；MinHeight 防止常驻页面 Visibility 切换后
+                         Measure 得到 0 高度而整块白板（第 99 轮） -->
+                    <Grid Grid.Row="0" MinHeight="200">
                         <ListBox ItemsSource="{Binding ModSearchResults}" Background="Transparent"
                                  VirtualizingPanel.ScrollUnit="Pixel" Focusable="False"
                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled">
@@ -347,8 +367,19 @@
                                        Foreground="{DynamicResource TextMutedBrush}"/>
                         </StackPanel>
 
-                        <!-- 空状态：已搜索但无结果 -->
-                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <!-- 空状态：搜索失败（异常兜底，绝不静默白板） -->
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="460"
+                                    Visibility="{Binding HasContentSearchError, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="搜索没有成功" HorizontalAlignment="Center" FontWeight="SemiBold" Margin="0,0,0,8"
+                                       Foreground="{DynamicResource DangerBrush}"/>
+                            <TextBlock Text="{Binding ContentSearchError}" HorizontalAlignment="Center" FontSize="12"
+                                       TextWrapping="Wrap" TextAlignment="Center" Foreground="{DynamicResource TextMutedBrush}"/>
+                            <Button Content="重试搜索" Command="{Binding SearchContentCommand}" Padding="14,6"
+                                    Margin="0,12,0,0" HorizontalAlignment="Center"/>
+                        </StackPanel>
+
+                        <!-- 空状态：已搜索但本页没有可显示的结果 -->
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="460">
                             <StackPanel.Style>
                                 <Style TargetType="StackPanel">
                                     <Setter Property="Visibility" Value="Collapsed"/>
@@ -356,17 +387,29 @@
                                         <MultiDataTrigger>
                                             <MultiDataTrigger.Conditions>
                                                 <Condition Binding="{Binding IsSearching}" Value="False"/>
+                                                <Condition Binding="{Binding HasContentSearchError}" Value="False"/>
                                                 <Condition Binding="{Binding HasSearched}" Value="True"/>
                                                 <Condition Binding="{Binding ModSearchResults.Count}" Value="0"/>
                                             </MultiDataTrigger.Conditions>
                                             <Setter Property="Visibility" Value="Visible"/>
                                         </MultiDataTrigger>
+                                        <DataTrigger Binding="{Binding ShowContentDetail}" Value="True">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
                             </StackPanel.Style>
                             <TextBlock Text="没有找到适配当前实例的内容" HorizontalAlignment="Center" FontWeight="SemiBold" Margin="0,0,0,6"/>
                             <TextBlock Text="可尝试其他关键词、切换分类，或在「游戏下载」页更换 MC 版本 / 加载器后重试。"
-                                       HorizontalAlignment="Center" FontSize="12" Foreground="{DynamicResource TextMutedBrush}"/>
+                                       HorizontalAlignment="Center" FontSize="12" TextWrapping="Wrap" TextAlignment="Center"
+                                       Foreground="{DynamicResource TextMutedBrush}"/>
+                            <StackPanel Visibility="{Binding IsEmptyPageWithHits, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="服务器返回了总数，但本页没有条目：可能是页码越界或筛选条件过严。"
+                                           HorizontalAlignment="Center" FontSize="12" TextWrapping="Wrap" TextAlignment="Center"
+                                           Margin="0,10,0,0" Foreground="{DynamicResource TextMutedBrush}"/>
+                                <Button Content="回到第一页" Command="{Binding SearchFirstPageCommand}" Padding="14,6"
+                                        Margin="0,10,0,0" HorizontalAlignment="Center"/>
+                            </StackPanel>
                         </StackPanel>
 
                         <!-- 空状态：尚未搜索 -->

@@ -1,6 +1,6 @@
 # 更新日志（CHANGELOG）
 
-> 完整历史变更记录：**第 1–2 轮交付说明 + 第 3 轮至第 97 轮逐轮补充**（末轮始终为当前版本的前一轮）。
+> 完整历史变更记录：**第 1–2 轮交付说明 + 第 3 轮至第 98 轮逐轮补充**（末轮始终为当前版本的前一轮）。
 > 本文件由 `README.md` 的历史章节整体搬迁而来，正文保持原样（未改写、未删减）。
 >
 > - **最新一轮**始终放在 [README](README.md) 的「最新一轮的更新内容」章节。
@@ -2035,3 +2035,35 @@ BattleArmory TACZ  loader=Forge  resolved=(null)                      mods=0 →
 **配套**：`BuildInfo.CurrentRound` → 97、应用内更新日志置顶第 97 轮、第 96 轮归档进 CHANGELOG、新增 ADR-0019。
 
 **下一轮候选**：把「一键补齐前置」接上 UI 勾选、DownloadJob 闭环与补齐后重扫；策略层与 Guard 已就位，届时只需接下载与状态机。
+
+## 更新补充（第 98 轮：安装器下载韧性、失败状态诚实、设置可选 Azul Zulu JDK）
+
+### 第 98 轮：不再「被取消」、失败不再是 100%，以及设置里可选的 Zulu Java（2026-11-15）
+
+**先纠正诊断：这次既不是网络断连，也不是镜像竞速误伤，是我第 96/97 轮加的看门狗把正在下载的安装器掐了**
+
+时间线在代码里是确定的：`RunRepairJobAsync` 以 `keepPreparing` 入队，`EnterStage("installer-download")` 会把任务切到 Running（该阶段静默上限 90 秒）；但 `ModLoaderInstallers` 下载 installer jar 时给 `DownloadEngine` 传的是 `null` 进度回调，任务收不到任何心跳。与此同时，第 97 轮的「2 分钟没有新文件完成」判定还留着上一批原版文件的 `TrackedTotalFiles`，在单文件安装器阶段同样会误判。于是看门狗 `AbortAsFailure` 取消 linked token → 引擎抛 `OperationCanceledException` → `catch (DownloadException)` 捕获不到（只接 DownloadException）→ 外层 `result.Error = ex.Message` 原样塞进 UI，于是出现了玩家什么都没点却看到 `The operation was canceled.`。
+
+更糟的是 `RunRepairJobAsync` 的 catch 又调了一次 `FinishJob(job, ex, false)`，把看门狗刚写好的中文超时提示**二次覆盖**成英文原文 —— 截图里那句「启动失败: Forge 加载器补全失败: The operation was canceled.」就是这么来的。左侧 100% / 右侧「失败 0%」则是另一条独立 bug：`JobProgressPolicy.Aggregate` 把 `Failed` 也算进完成度平均（引擎把失败文件计为 CompletedFiles，最后一次 Report 常是 100），且 `Display(..., !anyPending)` 在没有活跃任务时允许 100。
+
+**改法（下载韧性 + 状态诚实 + 人话报错）**
+
+- **镜像优先、全异常可降级**：installer jar 改成 `BMCLAPI → 官方 Maven` 顺序，`InstallFailureText.IsRetryableRouteFailure` 覆盖 `DownloadException / HttpRequestException / IOException / TimeoutException / TaskCanceledException`（外部主动取消除外，绝不跟看门狗对着干）。每次重试前 `CleanInstallerResidue` 删掉半成品 jar / `.part` 并 `DownloadJournal.Forget`，避免下次从垃圾续传。
+- **给任务心跳**：`InstallAsync` 新增 `Action<DownloadProgress>? onProgress`，`LauncherService` 安装与补全两条路径都透传；字节进度直接喂给 `job.Report`，看门狗不再把「正在慢慢下」当成死，速度也不再长期显示 0 B/s。
+- **看门狗按阶段**：`TimeoutSeconds(Preparing, 命名阶段)` 不再一律 30 秒（installer-download 90 秒 / 其余 15 分钟）；`ShouldUseFileStall` 让单文件 jar 与安装器黑盒阶段豁免「2 分钟无新文件完成」—— 那里本来就没有文件计数器可推进。
+- **报错说人话**：新增 `InstallFailureText` 统一翻译，`FinishJob` 增加 `alreadyFinished` 判定，任何后续异常都不得覆盖已交付的失败结论；`LauncherProfiles.Explain` 补上 `ConnectException / Connection timed out / Failed to download version manifest`，Forge JVM 自己联网失败也会给出原因和下一步。
+- **失败就别装作完成**：`Aggregate` 让 `Failed` 行不贡献完成度、有失败任务时汇总永远到不了 100%；`MarkFinished` 对非 Done 状态把百分比钳到 99；下载页用 `HasFailedJobs / FailedJobsHint` 显示红色失败标记，汇总文案改成「N 个任务失败 · 可点重试」。
+
+**设置里新增 Azul Zulu JDK 下载**
+
+设置 → Java 环境新增「JDK 发行版」下拉（Eclipse Temurin / Azul Zulu），选中后「一键安装 Java 21」按该发行版下载。`JavaDistributionPolicy` 是纯策略：Zulu 走 `api.azul.com/zulu/download/community/v1.0/bundles/`，**必须带 `include_fields=sha256_hash,size`**（否则响应里没有校验和，安装链路会拒绝），从返回的一堆包里排除 `-fx-` / `-crac-` / `-jre` 变体、校验 `cdn.azul.com` 域名白名单与 64 位 SHA-256、选最高 patch 版本，再复用既有 `DownloadEngine → SHA-256 校验 → 静默解压 → 设为默认` 链路。选择写进 `config.json`，并纳入第 90 轮的「未保存设置」快照。
+
+**验证**
+
+- `--unit` **149/149**、`--all` **156/156**（新增 7 项：取消文案翻译、Zulu 包解析与白名单、看门狗阶段阈值、失败汇总、3 条静态防线）
+- **机制防线 39 条**；交互元素 118 → **119**（新增 JDK 发行版下拉）
+- `--java-dist-smoke` 实跑两家官方源：Temurin `jdk-21.0.13+9` 195 MB、Zulu `zulu21.54.109-ca-jdk21.0.13.0.3` 201 MB，均带 SHA-256
+- **`--forge-install-smoke` 本轮两次未绿**（如实记录）：installer jar 走 BMCLAPI 下载成功、依赖预填充 29/29，但官方安装器 JVM 自己拉 Mojang 版本清单 / 跑 processor 时 `Connection timed out` 与 `Failed to download version manifest` 而退出码 1。它使用自己的网络栈，不经启动器镜像线路，属外部环境阻断；这两次失败恰好验证了本轮新增的中文失败翻译生效。第 95/96 轮同链路曾实跑安装成功，本轮未改动安装器运行阶段逻辑。
+- 发布：EXE + 97→98 补丁 + 签名清单（见文末）；云端 Release 由 Actions 同一次 workflow 编译/签名/上传/部署
+
+**配套**：`BuildInfo.CurrentRound` → 98、应用内更新日志置顶第 98 轮、第 97 轮归档进 CHANGELOG、新增 ADR-0020。

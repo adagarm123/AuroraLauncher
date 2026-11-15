@@ -18,12 +18,22 @@ public static class HelpContent
     /// <summary>Round number of the newest entry in <see cref="Changelog"/> —
     /// bump together with the changelog entry; drives the one-time "已更新"
     /// startup toast (dismissed permanently once the user opens the page).</summary>
-    public const int LatestChangelogRound = 98;
+    public const int LatestChangelogRound = 99;
     /// <summary>更新日志（说人话版本：无技术名词、用户视角）——独立页面
     /// 「更新日志」使用；模板见 docs/release-notes-template.md。
     /// 每轮发布时在此置顶新增一条。</summary>
     public static IEnumerable<HelpTopicVM> Changelog() => new[]
     {
+        new HelpTopicVM
+        {
+            Category = "更新日志", Glyph = "\uE777", Title = "【第 99 轮更新】内容中心不再白屏，新增缓存展示 / 引导便携 / 一键卸载",
+            Summary = "状态栏与列表同源、空状态三态、子导航 active 竖条；设置可查看缓存文件夹；引导可选便携模式；安全卸载",
+            Body = "1) 内容中心那张「搜索到 141 个结果 / 一片白」不是列表高度塌了，也不是过滤空了没写空状态（空状态本来就有）。真因是两处叠加：顶部状态栏是自由文本，切到 CurseForge / OptiFine / 本地管理 时没有更新，仍挂着上一次光影包的搜索结果数字，而右侧主内容区已经被收起；搜索入口又没有重置详情页标记，那个纯色浮层残留时会把列表整个盖住。现在状态文字由 ContentStatusText 统一生成、直接读列表实际条数，页面内也有同源横幅；切换分类会清掉残留状态、详情浮层和错误。\\n\\n" +
+                   "空状态补齐三态：尚未搜索 / 搜索失败（红色提示 + 一键重试）/ 本页为空（若服务器返回了总数会解释页码越界并给「回到第一页」）；结果区加了最小高度兜底。左侧子导航那块淡紫其实是鼠标悬停，不是第二个选中项——现在 8 个分类都加了只由 ContentKind 生成的左侧竖条，active 和 hover 一眼可分。\\n\\n" +
+                   "2) 设置 → 存储新增「缓存文件夹」：列出 6 处缓存的完整路径、占用与文件数，可逐条打开、一键刷新，只读不会删东西。\\n\\n" +
+                   "3) 首次启动引导第 1 步新增勾选「把所有文件都存到启动器 EXE 所在目录」：勾了会创建 portable.txt，重启后配置、实例、缓存、Java 都写进程序文件夹（适合 U 盘），已有数据不会自动搬移，结果会在下一步显示。\\n\\n" +
+                   "4) 设置 → 存储新增「一键卸载」：弹窗逐条列出将删除的完整路径，单独询问是否同时删除游戏存档和启动器管理的 Java（默认都保留），还要勾选确认并再确认一次。只删启动器白名单内的文件，用户自己的文件一律保留；优先移入回收站，程序 EXE 由系统在下一次重启后删除。"
+        },
         new HelpTopicVM
         {
             Category = "更新日志", Glyph = "\uE777", Title = "【第 98 轮更新】安装器不再「被取消」，设置里可以选 Zulu Java",

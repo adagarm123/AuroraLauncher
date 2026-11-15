@@ -176,6 +176,18 @@ internal static class Program
             catch (Exception ex) { Console.WriteLine("[java-dist] ERROR " + ex.Message); Environment.Exit(1); }
             return;
         }
+        // Round-99 read-only: inventory the REAL data root's cache folders.
+        if (args.Contains("--cache-scan"))
+        {
+            var cacheRoot = LauncherConfig.Instance.RootDirectory;
+            var cacheItems = CacheFolderService.Scan(cacheRoot);
+            Console.WriteLine($"[cache-scan] root={cacheRoot}");
+            foreach (var i in cacheItems)
+                Console.WriteLine($"  {i.DisplayName,-18} {i.SizeText,10} files={i.FileCount,5} exists={i.Exists}  {i.Path}");
+            Console.WriteLine("[cache-scan] total=" + CacheFolderService.TotalText(cacheItems));
+            Environment.Exit(0);
+            return;
+        }
         // Read-only diagnostic: what does the launch gate think of the REAL instances?
         if (args.Contains("--readiness-scan")) { Environment.Exit(LaunchGateSmoke.ScanRealRootForDiagnostics()); return; }
         // Diagnostic (read-only, never in CI): what WOULD the storage cleaner find
@@ -5511,6 +5523,122 @@ internal static class Program
                 "设置页要有发行版下拉与动态按钮");
             Assert(Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.Round90.cs").Contains("javaDist"),
                 "未保存提醒必须覆盖新设置项");
+        });
+
+        Check("CacheFolderPolicy: 缓存清单、体积格式与安全目录判定（第 99 轮）", () =>
+        {
+            Assert(CacheFolderPolicy.Folders.Count == 6, "6 处缓存位置");
+            Assert(CacheFolderPolicy.Folders.Any(f => f.Key == "icons" && f.IsDirectory), "图标缓存目录");
+            Assert(CacheFolderPolicy.Folders.Any(f => f.Key == "manifest" && !f.IsDirectory), "版本清单是文件");
+            Assert(CacheFolderPolicy.FormatSize(0) == "0 B", "0 字节");
+            Assert(CacheFolderPolicy.FormatSize(1536).Contains("KB"), "KB 换算");
+            Assert(CacheFolderPolicy.FullPath("C:/data", CacheFolderPolicy.Folders[0])
+                   .Contains("cache"), "相对路径拼接");
+            Assert(!CacheFolderPolicy.IsSafeRoot(""), "空路径不安全");
+            Assert(!CacheFolderPolicy.IsSafeRoot("C:////"), "驱动器根不安全");
+            Assert(!CacheFolderPolicy.IsSafeRoot("C:////Windows"), "系统目录不安全");
+            Assert(!CacheFolderPolicy.IsSafeRoot("C:////Users////Someone////Desktop"), "桌面不安全");
+            Assert(CacheFolderPolicy.IsSafeRoot("C:////Users////Someone////AppData////Roaming////AuroraLauncher"),
+                "启动器自己的数据根可以");
+        });
+
+        Check("UninstallPolicy: 白名单、存档/Java 默认保留、危险目录全部保留（第 99 轮）", () =>
+        {
+            Assert(UninstallPolicy.IsOwnedDirectory("cache", false, false), "缓存目录属于启动器");
+            Assert(!UninstallPolicy.IsOwnedDirectory("instances", false, false), "默认保留实例/存档");
+            Assert(!UninstallPolicy.IsOwnedDirectory("java", false, false), "默认保留 Java");
+            Assert(UninstallPolicy.IsOwnedDirectory("instances", true, false), "勾选后删存档");
+            Assert(UninstallPolicy.IsOwnedDirectory("java", false, true), "勾选后删 Java");
+            Assert(UninstallPolicy.IsOwnedFile("config.json"), "配置文件");
+            Assert(UninstallPolicy.IsOwnedFile("config.json.bak-r85"), "配置备份");
+            Assert(UninstallPolicy.IsOwnedFile("forge-1.20.1-47.4.22-installer.jar.log"), "安装器日志");
+            Assert(!UninstallPolicy.IsOwnedFile("my-personal-notes.txt"), "用户自己的文件绝不动");
+
+            var root = Path.Combine(Path.GetTempPath(), "aurora-r99-" + Guid.NewGuid().ToString("N")[..8]);
+            try
+            {
+                Directory.CreateDirectory(root);
+                Directory.CreateDirectory(Path.Combine(root, "cache"));
+                Directory.CreateDirectory(Path.Combine(root, "instances"));
+                Directory.CreateDirectory(Path.Combine(root, "java"));
+                File.WriteAllText(Path.Combine(root, "config.json"), "{}");
+                File.WriteAllText(Path.Combine(root, "my-personal-notes.txt"), "keep");
+                var entries = Directory.EnumerateFileSystemEntries(root).ToList();
+
+                var plan = UninstallPolicy.BuildPlan(
+                    new UninstallRequest(root, null, false, false, false, entries));
+                Assert(plan.Targets.Any(t => t.Path.EndsWith("cache")), "缓存要删");
+                Assert(plan.Targets.Any(t => t.Path.EndsWith("config.json")), "配置要删");
+                Assert(!plan.Targets.Any(t => t.Path.EndsWith("instances")), "存档默认不动");
+                Assert(!plan.Targets.Any(t => t.Path.EndsWith("java")), "Java 默认不动");
+                Assert(plan.Kept.Any(p => p.EndsWith("my-personal-notes.txt")), "未知文件保留");
+
+                var all = UninstallPolicy.BuildPlan(
+                    new UninstallRequest(root, null, false, true, true, entries));
+                Assert(all.Targets.Any(t => t.Path.EndsWith("instances")) &&
+                       all.Targets.Any(t => t.Path.EndsWith("java")), "两项都勾选才删");
+
+                var dangerous = UninstallPolicy.BuildPlan(
+                    new UninstallRequest("C:////Windows", null, false, true, true, entries));
+                Assert(dangerous.Targets.Count == 0, "危险目录一律不删");
+                Assert(UninstallPolicy.Warning(plan).Contains("保留"), "警告要写清保留项");
+            }
+            finally { try { Directory.Delete(root, true); } catch { } }
+        });
+
+        Check("Guard: 内容中心状态与列表同源、空状态三态、结果区有最小高度（第 99 轮）", () =>
+        {
+            var root = FindSourceRoot()!;
+            string Read(string f) => File.ReadAllText(Path.Combine(root, f));
+            var vm = Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.cs");
+            Assert(vm.Contains("public string ContentStatusText") &&
+                   vm.Contains("本页 {ModSearchResults.Count} 项"), "状态文案必须读实际列表数");
+            Assert(!vm.Contains("搜索到 {result.TotalHits"), "不许再用 API 总数冒充列表数");
+            Assert(vm.Contains("ShowContentDetail = false; // Round-99"), "搜索前清掉详情覆盖层");
+            Assert(vm.Contains("ContentKind is \"CurseForge\" or \"OptiFine\" or \"本地管理\""),
+                "非 Modrinth 分类不得残留搜索结果文字");
+            Assert(vm.Contains("ContentSearchError"), "搜索异常要有专门状态");
+            var x = Read("src/AuroraLauncher.Desktop/Views/ModsView.xaml");
+            Assert(x.Contains("MinHeight=\"200\""), "结果区防御性最小高度");
+            Assert(x.Contains("HasContentSearchError") && x.Contains("重试搜索"), "异常兜底 UI");
+            Assert(x.Contains("IsEmptyPageWithHits") && x.Contains("回到第一页"), "本页空但服务端有总数的解释与出口");
+            Assert(x.Contains("Text=\"{Binding ContentStatusText}\""), "页面内同源状态横幅");
+        });
+
+        Check("Guard: 子导航高亮只认 ContentKind，且有 active 竖条（第 99 轮）", () =>
+        {
+            var root = FindSourceRoot()!;
+            var x = File.ReadAllText(Path.Combine(root, "src/AuroraLauncher.Desktop/Views/ModsView.xaml"));
+            var bg = System.Text.RegularExpressions.Regex.Matches(
+                x, @"Background=""\{Binding ContentKind, Converter=\{StaticResource TextMatch\}").Count;
+            Assert(bg == 8, $"8 个子导航背景都绑 ContentKind，实际 {bg}");
+            var bars = System.Text.RegularExpressions.Regex.Matches(x, @"PageActiveBorder\}, ConverterParameter=").Count;
+            Assert(bars == 8, $"8 个子导航都要有 active 竖条，实际 {bars}");
+            Assert(!x.Contains("IsSelected=\"{Binding"), "不得依赖控件 IsSelected/焦点");
+            Assert(NavigationHighlight.ActiveCount("光影包",
+                new[] { "模组", "整合包", "数据包", "资源包", "光影包", "CurseForge", "OptiFine", "本地管理" }) == 1,
+                "同一时刻只能有一个分类高亮");
+        });
+
+        Check("Guard: 引导便携选项、缓存展示、卸载必须两次确认（第 99 轮）", () =>
+        {
+            var root = FindSourceRoot()!;
+            string Read(string f) => File.ReadAllText(Path.Combine(root, f));
+            var wizard = Read("src/AuroraLauncher.Desktop/MainWindow.xaml");
+            Assert(wizard.Contains("IsChecked=\"{Binding FirstRunPortable}\""), "引导里有便携模式勾选");
+            Assert(wizard.Contains("FirstRunPortableNote"), "结果要在下一步可见");
+            Assert(Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.Round99.cs")
+                   .Contains("EnablePortableModeCore(\"首次启动引导\")"), "勾选后要真的创建标记");
+            var settings = Read("src/AuroraLauncher.Desktop/Views/SettingsView.xaml");
+            Assert(settings.Contains("CacheFolders") && settings.Contains("OpenCacheFolderCommand"), "缓存目录可展示可打开");
+            Assert(settings.Contains("UninstallCommand"), "设置页有卸载入口");
+            var vm = Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.Round99.cs");
+            Assert(vm.Contains("UninstallWindow") && vm.Contains("最后确认"), "卸载必须弹窗 + 二次确认");
+            Assert(vm.Contains("CacheFolderPolicy.IsSafeRoot(root)"), "执行前校验数据根安全");
+            Assert(Read("src/AuroraLauncher.Desktop/Views/UninstallWindow.xaml.cs")
+                   .Contains("_plan.Targets.Count > 0"), "没有可删项时不允许确认");
+            Assert(Read("src/AuroraCore/Services/UninstallService.cs")
+                   .Contains("RecycleOption.SendToRecycleBin"), "优先移入回收站而不是硬删");
         });
 
         Console.WriteLine($"\n=== Result: {_passed} passed, {_failed} failed, {_skipped} skipped ===");        Environment.Exit(_failed == 0 ? 0 : 1);

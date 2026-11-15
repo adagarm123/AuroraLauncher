@@ -1,7 +1,7 @@
 # 自测结论（AuroraSelfTest）
 
-> 更新于 2026-11-15（第 98 轮）。
-> **上次全绿：2026-11-15 —— Unit 149/149（离线）、All 156/156（含网络集成）。**
+> 更新于 2026-11-15（第 99 轮）。
+> **上次全绿：2026-11-15 —— Unit 154/154（离线）、All 161/161（含网络集成）。**
 > 运行命令：`dotnet run --project tests/AuroraSelfTest -c Debug [-- --unit|--integration|--all]`
 > 一键脚本：`powershell -File scripts/run-tests.ps1 [-Full]`（CI 见 `.github/workflows/selftest.yml`）
 > 测试分层：**unit（离线，CI 必跑）/ integration（联网，CI 定时跑）/ all**。
@@ -161,6 +161,11 @@
 [PASS] Guard: 安装器下载必须有心跳、镜像优先且失败清残片（第 98 轮）
 [PASS] Guard: 失败消息不被二次覆盖、失败汇总必须可见（第 98 轮）
 [PASS] Guard: Java 发行版白名单、校验与设置持久化（第 98 轮）
+[PASS] CacheFolderPolicy: 缓存清单、体积格式与安全目录判定（第 99 轮）
+[PASS] UninstallPolicy: 白名单、存档/Java 默认保留、危险目录全部保留（第 99 轮）
+[PASS] Guard: 内容中心状态与列表同源、空状态三态、结果区有最小高度（第 99 轮）
+[PASS] Guard: 子导航高亮只认 ContentKind，且有 active 竖条（第 99 轮）
+[PASS] Guard: 引导便携选项、缓存展示、卸载必须两次确认（第 99 轮）
 
 === Result: 123 passed, 0 failed, 7 skipped ===（跳过的 7 项为网络集成测试）
 

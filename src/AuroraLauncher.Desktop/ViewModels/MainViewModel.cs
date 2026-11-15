@@ -211,7 +211,7 @@ public partial class MainViewModel : ViewModelBase
         OpenModrinthPageCommand = new RelayCommand(_ => OpenModrinthPage());
         FirstRunRescanCommand = new RelayCommand(async _ => await DetectJavaForFirstRunAsync());
         FirstRunOpenJavaSiteCommand = new RelayCommand(_ => OpenJavaDownloadSite());
-        FirstRunNextCommand = new RelayCommand(_ => FirstRunStep = Math.Min(1, FirstRunStep + 1));
+        FirstRunNextCommand = new RelayCommand(_ => OnFirstRunNext());
         FirstRunInstallCommand = new RelayCommand(async _ => await InstallRecommendedAsync());
         FirstRunSkipCommand = new RelayCommand(_ => FinishFirstRun());
         FirstRunDoneCommand = new RelayCommand(_ => FinishFirstRun());
@@ -242,6 +242,13 @@ public partial class MainViewModel : ViewModelBase
             {
                 ContentKind = kind;
                 ShowContentDetail = false;
+                ContentSearchError = null;
+                // Round-99: CurseForge / OptiFine / 本地管理 are NOT Modrinth
+                // categories. Leaving the previous "搜索到 141 个结果" text in
+                // the title bar while their panel is blank was the reported
+                // "状态与视图脱节".
+                if (kind is "CurseForge" or "OptiFine" or "本地管理")
+                    Status = ContentStatusText;
                 if (kind == "本地管理") { ScanMods(); return; }
                 // Round-60: these two kinds are NOT Modrinth categories —
                 // never run the Modrinth search/category pipeline for them.
@@ -266,6 +273,11 @@ public partial class MainViewModel : ViewModelBase
         ImportMrpackCommand = new RelayCommand(_ => ChooseAndImportMrpack());
         ApplySettingsCommand = new RelayCommand(_ => ApplySettings());
         EnablePortableModeCommand = new RelayCommand(_ => EnablePortableMode());
+        // Round-99: cache inventory + one-click uninstall + wizard portable choice.
+        RefreshCacheFoldersCommand = new RelayCommand(_ => RefreshCacheFolders());
+        OpenCacheFolderCommand = new RelayCommand(o => OpenCacheFolder(o));
+        UninstallCommand = new RelayCommand(_ => Uninstall());
+        RefreshCacheFolders();
         ExportMrpackCommand = new RelayCommand(async _ => await ExportMrpackAsync());
         OpenRootDirectoryCommand = new RelayCommand(_ => OpenRootDirectory());
         RenameInstanceCommand = new RelayCommand(_ => RenameInstance());
@@ -1156,7 +1168,11 @@ public partial class MainViewModel : ViewModelBase
     public string ContentKind
     {
         get => _contentType;
-        set => SetProperty(ref _contentType, value);
+        set
+        {
+            if (!SetProperty(ref _contentType, value)) return;
+            OnPropertyChanged(nameof(ContentStatusText));
+        }
     }
 
     /// <summary>Target world for datapack installs.</summary>
@@ -1217,6 +1233,9 @@ public partial class MainViewModel : ViewModelBase
     public RelayCommand ImportMrpackCommand { get; }
     public RelayCommand ApplySettingsCommand { get; }
     public RelayCommand EnablePortableModeCommand { get; }
+    public RelayCommand RefreshCacheFoldersCommand { get; }
+    public RelayCommand OpenCacheFolderCommand { get; }
+    public RelayCommand UninstallCommand { get; }
     public RelayCommand ExportMrpackCommand { get; }
     public RelayCommand OpenRootDirectoryCommand { get; }
     public RelayCommand RenameInstanceCommand { get; }
@@ -2736,19 +2755,17 @@ public partial class MainViewModel : ViewModelBase
             "启用便携模式", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (answer != MessageBoxResult.Yes) return;
 
-        try
+        var (ok, message) = EnablePortableModeCore("设置页");
+        if (ok)
         {
-            var path = PortableModePolicy.CreateMarker(exe, "由设置页创建");
-            Logger.Instance.Info("Config", "已创建便携模式标记: " + path);
-            Status = "已创建 portable.txt，重启后进入便携模式";
+            Status = message;
             ShowToast("已创建 portable.txt，重启启动器后生效");
-            OnPropertyChanged(nameof(PortableModeText));
         }
-        catch (Exception ex)
+        else
         {
-            Status = "创建 portable.txt 失败: " + ex.Message;
+            Status = message;
             System.Windows.MessageBox.Show(Application.Current.MainWindow,
-                "无法创建 portable.txt：\n" + ex.Message + "\n\n如果启动器放在 Program Files 等受保护目录，请换到普通文件夹（如桌面或 U 盘）。",
+                message + "\n\n如果启动器放在 Program Files 等受保护目录，请换到普通文件夹（如桌面或 U 盘）。",
                 "启用便携模式失败", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
@@ -3799,11 +3816,56 @@ public partial class MainViewModel : ViewModelBase
 
     private bool _isSearching;
     /// <summary>True while a Modrinth search request is in flight (drives the UI feedback).</summary>
-    public bool IsSearching { get => _isSearching; set => SetProperty(ref _isSearching, value); }
+    public bool IsSearching
+    {
+        get => _isSearching;
+        set { if (SetProperty(ref _isSearching, value)) OnPropertyChanged(nameof(ContentStatusText)); }
+    }
 
     private bool _hasSearched;
     /// <summary>True once at least one search has completed (switches empty-state text).</summary>
-    public bool HasSearched { get => _hasSearched; set => SetProperty(ref _hasSearched, value); }
+    public bool HasSearched
+    {
+        get => _hasSearched;
+        set { if (SetProperty(ref _hasSearched, value)) OnPropertyChanged(nameof(ContentStatusText)); }
+    }
+
+    /// <summary>Round-99: the ONLY text describing content-search results.
+    /// It reads the ACTUAL rendered list, not the API's total_hits, so a
+    /// "141 results" banner can never sit above an empty list again.</summary>
+    private string? _contentSearchError;
+    public string? ContentSearchError
+    {
+        get => _contentSearchError;
+        set
+        {
+            if (!SetProperty(ref _contentSearchError, value)) return;
+            OnPropertyChanged(nameof(HasContentSearchError));
+            OnPropertyChanged(nameof(ContentStatusText));
+        }
+    }
+    public bool HasContentSearchError => !string.IsNullOrWhiteSpace(ContentSearchError);
+    public bool IsEmptyPageWithHits => HasSearched && ModSearchResults.Count == 0 && _searchTotalHits > 0;
+
+    public string ContentStatusText
+    {
+        get
+        {
+            if (IsSearching) return $"正在搜索{ContentKind}…";
+            if (HasContentSearchError) return ContentSearchError!;
+            if (ContentKind is "CurseForge" or "OptiFine" or "本地管理")
+                return $"内容中心 · {ContentKind}";
+            if (!HasSearched) return $"内容中心 · {ContentKind}（尚未搜索）";
+            return $"「{ContentKind}」本页 {ModSearchResults.Count} 项 · 共 {_searchTotalHits:N0} 个结果" +
+                   $"（第 {_searchPage + 1}/{TotalPages} 页）";
+        }
+    }
+
+    private void NotifyContentStatus()
+    {
+        OnPropertyChanged(nameof(ContentStatusText));
+        OnPropertyChanged(nameof(IsEmptyPageWithHits));
+    }
 
     public List<string> SortOptions => new() { "相关性", "下载量", "最新发布", "最近更新" };
     private string _sortOption = "相关性";
@@ -4240,25 +4302,44 @@ public partial class MainViewModel : ViewModelBase
                 loader = type == ContentType.Mod && inst.LoaderType != ModLoaderType.Vanilla
                     ? inst.LoaderType.ToString().ToLowerInvariant() : null;
             }
+            ShowContentDetail = false; // Round-99: a stale detail overlay is an opaque panel
+            ContentSearchError = null;
             IsSearching = true;
-            Status = $"正在搜索{ContentKind}…";
+            Status = ContentStatusText;
             var result = await _svc.ModManager.SearchAsync(ModSearchQuery, type, mc, loader,
                 SortIndex(SortOption), SearchPageSize, _searchPage,
                 SelectedCategory == "全部" ? null : SelectedCategory);
             var items = result.Projects.Select(r => new ContentItemVM(r)).ToList();
             _searchTotalHits = result.TotalHits;
             _searchPage = Math.Min(_searchPage, TotalPages - 1);
-            Dispatch(() => ModSearchResults.Replace(items));
+            Dispatch(() =>
+            {
+                ModSearchResults.Replace(items);
+                NotifyContentStatus();
+            });
             HasSearched = true;
             NotifyPaging();
-            Status = $"「{ContentKind}」搜索到 {result.TotalHits:N0} 个结果（第 {_searchPage + 1} 页，已按实例自动适配）";
+            Status = ContentStatusText;
         }
         catch (Exception ex)
         {
+            var friendly = FriendlyNetworkError(ex);
+            Dispatch(() =>
+            {
+                ModSearchResults.Replace(Array.Empty<ContentItemVM>());
+                NotifyContentStatus();
+            });
             HasSearched = true;
-            Status = "Modrinth 搜索失败: " + FriendlyNetworkError(ex);
+            ContentSearchError = "搜索失败：" + friendly + "\n可点「重试搜索」再来一次。";
+            Status = ContentStatusText;
+            Logger.Instance.Warn("Content", "Modrinth search failed: " + ex.Message);
         }
-        finally { IsSearching = false; Volatile.Write(ref _searchRunning, 0); }
+        finally
+        {
+            IsSearching = false;
+            NotifyContentStatus();
+            Volatile.Write(ref _searchRunning, 0);
+        }
     }
 
     /// <summary>Translates raw network failures into actionable Chinese hints.</summary>

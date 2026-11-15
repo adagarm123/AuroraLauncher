@@ -331,6 +331,10 @@
                             <TextBlock Text="步骤 1 / 3 · 检查 Java 环境" FontWeight="SemiBold" FontSize="15" Margin="0,0,0,10"/>
                             <TextBlock Text="{Binding FirstRunJavaStatus}" TextWrapping="Wrap" FontSize="13"
                                        Foreground="{DynamicResource TextMutedBrush}" Margin="0,0,0,14"/>
+                            <CheckBox Content="把所有文件都存到启动器 EXE 所在目录（便携模式，适合 U 盘 / 移动硬盘）"
+                                      IsChecked="{Binding FirstRunPortable}" Margin="0,0,0,8" FontWeight="SemiBold"/>
+                            <TextBlock Text="{Binding FirstRunPortableHint}" TextWrapping="Wrap" FontSize="12"
+                                       Foreground="{DynamicResource TextMutedBrush}" Margin="0,0,0,12"/>
                             <StackPanel Orientation="Horizontal">
                                 <Button Content="重新检测" Command="{Binding FirstRunRescanCommand}" Padding="14,6" Margin="0,0,10,0"/>
                                 <Button Content="打开 Java 下载页（Adoptium）" Command="{Binding FirstRunOpenJavaSiteCommand}" Padding="14,6"
@@ -347,6 +351,9 @@
                                        Foreground="{DynamicResource TextMutedBrush}" Margin="0,0,0,14"/>
                             <TextBlock Text="{Binding FirstRunProgress}" TextWrapping="Wrap" FontSize="12.5"
                                        Foreground="{DynamicResource AccentBrush}" Margin="0,0,0,14"/>
+                            <TextBlock Text="{Binding FirstRunPortableNote}" TextWrapping="Wrap" FontSize="12"
+                                       Foreground="{DynamicResource TextMutedBrush}" Margin="0,0,0,14"
+                                       Visibility="{Binding FirstRunPortableNote, Converter={StaticResource NullToCollapsed}}"/>
                             <StackPanel Orientation="Horizontal">
                                 <Button Content="一键安装" Command="{Binding FirstRunInstallCommand}" Padding="18,6"
                                         Style="{StaticResource PrimaryButton}" Margin="0,0,10,0"

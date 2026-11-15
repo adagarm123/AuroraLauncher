@@ -110,6 +110,46 @@
                     <!-- 两个清理入口的分工（第 88 轮复核）：这里必须说清，否则用户会问"这两个按钮有什么区别" -->
                     <TextBlock Text="上面「清理残留下载文件」只处理下载残渣（未完成的 .part 与更新包残片）；这里会扫描整个存储目录，把图标/安装器/清单缓存、旧日志、空壳版本目录一起列出来。"
                                Style="{StaticResource FieldLabel}" FontSize="11.5" TextWrapping="Wrap" Margin="0,4,0,0"/>
+
+                    <Border Height="1" Background="{DynamicResource BorderBrush}" Margin="0,16,0,14"/>
+
+                    <!-- Round-99: cache folders are VISIBLE, not just cleanable -->
+                    <TextBlock Text="缓存文件夹（只读展示，可一键打开）" Style="{StaticResource FieldLabel}" Margin="0,0,0,6"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <Button Content="刷新占用" Command="{Binding RefreshCacheFoldersCommand}" Padding="12,5"/>
+                        <TextBlock Text="{Binding CacheFoldersTotalText}" Style="{StaticResource FieldLabel}"
+                                   VerticalAlignment="Center" Margin="12,0,0,0"/>
+                    </StackPanel>
+                    <ItemsControl ItemsSource="{Binding CacheFolders}" Margin="0,0,0,4">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="{Binding Line}" FontSize="12"/>
+                                        <TextBlock Text="{Binding Path}" FontSize="11" TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource TextMutedBrush}"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Content="打开" Padding="10,4" VerticalAlignment="Center"
+                                            Command="{Binding DataContext.OpenCacheFolderCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                            CommandParameter="{Binding Path}"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <Border Height="1" Background="{DynamicResource BorderBrush}" Margin="0,16,0,14"/>
+
+                    <!-- Round-99: one-click uninstall with two confirmations -->
+                    <TextBlock Text="卸载启动器" Style="{StaticResource FieldLabel}" Margin="0,0,0,6"
+                               Foreground="{DynamicResource DangerBrush}"/>
+                    <TextBlock Text="移除启动器自己的配置、缓存、日志与程序文件。可单独选择是否同时删除游戏存档和启动器管理的 Java；删除前会逐条列出完整路径并要求两次确认，非启动器的文件一律保留。"
+                               Style="{StaticResource FieldLabel}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                    <Button Content="一键卸载…" Command="{Binding UninstallCommand}" Padding="14,6"
+                            HorizontalAlignment="Left" Style="{StaticResource DangerButton}"/>
                 </StackPanel>
             </Border>
 
