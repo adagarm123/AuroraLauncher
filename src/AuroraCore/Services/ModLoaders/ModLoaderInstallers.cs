@@ -247,7 +247,8 @@ public sealed class ModLoaderInstaller
         => (await ListVersionInfosAsync(type, mcVersion, ct).ConfigureAwait(false)).Select(v => v.Version).ToList();
 
     public async Task<ModLoaderInstallResult> InstallAsync(ModLoaderType type, string mcVersion, string? loaderVersion,
-        string gameRoot, JavaInstallation java, Action<string>? log = null, CancellationToken ct = default, Action<string>? onStage = null)
+        string gameRoot, JavaInstallation java, Action<string>? log = null, CancellationToken ct = default,
+        Action<string>? onStage = null, Action<DownloadProgress>? onProgress = null)
     {
         _log.Info("ModLoader", $"Installing {type} for MC {mcVersion} (loader {(loaderVersion ?? "latest")})");
         var result = new ModLoaderInstallResult();
@@ -375,41 +376,49 @@ public sealed class ModLoaderInstaller
             var mirrorUrl = LauncherConfig.ToBmclapiUrl(installerUrl);
             var canUseMirror = LauncherConfig.Instance.RoutePolicy != DownloadPolicy.Official &&
                                !string.Equals(mirrorUrl, installerUrl, StringComparison.OrdinalIgnoreCase);
-            try
+            // Round-98: official maven.minecraftforge.net is the least
+            // reliable hop in CN. Try the BMCLAPI mirror FIRST (it is normally
+            // 10x faster here) and only fall back to official; every retryable
+            // failure — including a per-route HttpClient timeout — rolls over
+            // instead of killing the job. A cancellation is NOT retried: that
+            // is a decision by the user / watchdog, not a network fault.
+            // onProgress feeds the job's heartbeat, so the watchdog sees the
+            // bytes instead of declaring a 9 MB download "stalled".
+            var routes = canUseMirror
+                ? new[] { mirrorUrl, installerUrl }
+                : new[] { installerUrl };
+            Exception? lastRouteError = null;
+            foreach (var route in routes)
             {
-                log?.Invoke($"[ModLoader] 下载安装器：{installerUrl}");
-                await _engine.DownloadAsync(new[]
+                ct.ThrowIfCancellationRequested();
+                try
                 {
-                    new DownloadEntry { Url = installerUrl, Destination = jarPath, DisplayName = installerFile, Category = "installer" }
-                }, null, ct).ConfigureAwait(false);
+                    log?.Invoke($"[ModLoader] 下载安装器：{route}");
+                    CleanInstallerResidue(jarPath);
+                    await _engine.DownloadAsync(new[]
+                    {
+                        new DownloadEntry { Url = route, Destination = jarPath, DisplayName = installerFile, Category = "installer" }
+                    }, onProgress, ct).ConfigureAwait(false);
+                    lastRouteError = null;
+                    break;
+                }
+                catch (Exception first) when (InstallFailureText.IsRetryableRouteFailure(first, ct.IsCancellationRequested))
+                {
+                    lastRouteError = first;
+                    CleanInstallerResidue(jarPath);
+                    _log.Warn("ModLoader", $"安装器线路失败（{first.GetType().Name}），切换下一条：{route}");
+                    log?.Invoke($"[ModLoader] 这条线路失败，自动换下一条再试：{route}");
+                }
             }
-            catch (DownloadException first)
+            if (lastRouteError != null)
             {
                 if (!canUseMirror)
                     throw new InvalidOperationException(
                         "安装器下载失败，且当前设置为「仅使用官方线路」，不会自动改用镜像：\n" +
-                        $"· {installerUrl}\n· 原因：{first.Message}", first);
-
-                _log.Warn("ModLoader", $"Installer route failed; retrying via BMCLAPI: {mirrorUrl}");
-                log?.Invoke($"[ModLoader] 官方线路失败，改用镜像重试：{mirrorUrl}");
-                try
-                {
-                    await _engine.DownloadAsync(new[]
-                    {
-                        new DownloadEntry { Url = mirrorUrl, Destination = jarPath, DisplayName = installerFile, Category = "installer" }
-                    }, null, ct).ConfigureAwait(false);
-                }
-                catch (DownloadException second)
-                {
-                    // Both gone: the most likely cause is a wrong path, not a
-                    // flaky network — say so instead of showing a bare 404.
-                    throw new InvalidOperationException(
-                        "安装器下载失败（官方与镜像都不可用）：\n" +
-                        $"· {installerUrl}\n· {mirrorUrl}\n" +
-                        $"常见原因：maven 上不存在这个 {type} 版本。Forge 的路径必须是「MC版本-Forge版本」" +
-                        $"（例如 1.20.1-47.4.22），而整合包通常只给 Forge 版本号。\n" +
-                        $"原始错误：{second.Message}", second);
-                }
+                        $"· {installerUrl}\n· 原因：{lastRouteError.Message}", lastRouteError);
+                throw new InvalidOperationException(
+                    InstallFailureText.BothRoutesFailed(installerUrl, mirrorUrl, type.ToString(), lastRouteError),
+                    lastRouteError);
             }
 
             var existing = Directory.Exists(Path.Combine(gameRoot, "versions"))
@@ -499,8 +508,8 @@ public sealed class ModLoaderInstaller
         catch (Exception ex)
         {
             result.Success = false;
-            result.Error = ex.Message;
-            _log.Error("ModLoader", $"{type} install failed: {ex.Message}");
+            result.Error = InstallFailureText.Describe(ex, externallyCanceled: ex is OperationCanceledException && ct.IsCancellationRequested);
+            _log.Error("ModLoader", $"{type} install failed: {ex.GetType().Name}: {ex.Message}");
         }
         return result;
     }
@@ -737,6 +746,21 @@ public sealed class ModLoaderInstaller
         var filled = unique.Count - pending.Count;
         log?.Invoke($"[ModLoader] 预填充安装器依赖：{filled}/{unique.Count} 个已在本地" +
                     (pending.Count > 0 ? $"（还有 {pending.Count} 个没下到，安装器会再试一次）" : ""));
+    }
+
+    /// <summary>Round-98: a failed/cancelled installer download must leave
+    /// NOTHING behind. The engine removes its own .part on cancellation, but a
+    /// route switch or an outer failure could still leave a half-written jar
+    /// and a resumable-download journal entry pointing at a file that no
+    /// longer exists — the next retry would then resume from garbage.</summary>
+    private static void CleanInstallerResidue(string jarPath)
+    {
+        foreach (var f in new[] { jarPath, jarPath + ".part" })
+        {
+            try { if (File.Exists(f)) File.Delete(f); }
+            catch { /* best effort */ }
+        }
+        try { DownloadJournal.Forget(jarPath); } catch { }
     }
 
     private async Task<int> RunJavaAsync(string java, string arguments, string workingDir, Action<string>? log, CancellationToken ct)

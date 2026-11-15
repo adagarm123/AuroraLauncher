@@ -7,7 +7,12 @@ namespace AuroraCore.Services;
 
 /// <summary>Metadata of one downloadable JDK package from the Adoptium API.</summary>
 public sealed record JavaPackage(
-    string Name, string Url, string Sha256, long Size, string ReleaseName, int Major);
+    string Name, string Url, string Sha256, long Size, string ReleaseName, int Major)
+{
+    /// <summary>Round-98: "Temurin" or "Zulu" — used only for display/logging,
+    /// never to decide whether a package may be installed.</summary>
+    public string Vendor { get; init; } = "Temurin";
+}
 
 /// <summary>Result of a one-click Java install: the java.exe that is now the
 /// launcher's default runtime.</summary>
@@ -97,12 +102,29 @@ public sealed class JavaRuntimeService
     /// <summary>Same as above for an explicit major (crash repair: the log
     /// told us exactly which Java the game wants).</summary>
     public async Task<JavaPackage?> ResolveAsync(int major, CancellationToken ct = default)
+        => await ResolveAsync(JavaDistribution.Temurin, major, ct).ConfigureAwait(false);
+
+    /// <summary>Round-98: Temurin (Adoptium API) or Zulu (Azul community API +
+    /// CDN). Both go through the same SHA-256 → extract → set-default path.</summary>
+    public async Task<JavaPackage?> ResolveAsync(JavaDistribution distribution, int major,
+        CancellationToken ct = default)
     {
+        if (distribution == JavaDistribution.Zulu)
+        {
+            var zuluJson = await NetRouting.GetStringAsync(
+                JavaDistributionPolicy.BuildZuluApiUrl(major), null, ct,
+                perRouteTimeoutSec: 8, rounds: 1, logTag: "Java").ConfigureAwait(false);
+            var zulu = JavaDistributionPolicy.ParseZuluLatest(zuluJson, major);
+            if (zulu == null) _log.Warn("Java", "Azul Zulu 响应中没有可用的 Windows x64 普通 JDK zip 包。");
+            else _log.Info("Java", $"Zulu: {zulu.ReleaseName} · {zulu.Name} · {zulu.Size / 1024 / 1024} MB");
+            return zulu;
+        }
+
         var json = await NetRouting.GetStringAsync(BuildApiUrl(major), null, ct,
             perRouteTimeoutSec: 8, rounds: 1, logTag: "Java").ConfigureAwait(false);
         var pkg = ParseLatest(json, major);
         if (pkg == null) _log.Warn("Java", "Adoptium 响应中没有可用的 Windows x64 JDK zip 包。");
-        else _log.Info("Java", $"Adoptium: {pkg.ReleaseName} · {pkg.Name} · {pkg.Size / 1024 / 1024} MB");
+        else _log.Info("Java", $"Temurin: {pkg.ReleaseName} · {pkg.Name} · {pkg.Size / 1024 / 1024} MB");
         return pkg;
     }
 
@@ -191,7 +213,7 @@ public sealed class JavaRuntimeService
                     Destination = zipPath,
                     ExpectedSize = pkg.Size > 0 ? pkg.Size : null,
                     Required = true,
-                    DisplayName = $"Java {pkg.Major} (Temurin JDK)",
+                    DisplayName = $"Java {pkg.Major} ({pkg.Vendor} JDK)",
                     Category = "java"
                 }
             }, Watch, slowCts.Token).ConfigureAwait(false);

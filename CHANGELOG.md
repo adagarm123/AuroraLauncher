@@ -1,6 +1,6 @@
 # 更新日志（CHANGELOG）
 
-> 完整历史变更记录：**第 1–2 轮交付说明 + 第 3 轮至第 96 轮逐轮补充**（末轮始终为当前版本的前一轮）。
+> 完整历史变更记录：**第 1–2 轮交付说明 + 第 3 轮至第 97 轮逐轮补充**（末轮始终为当前版本的前一轮）。
 > 本文件由 `README.md` 的历史章节整体搬迁而来，正文保持原样（未改写、未删减）。
 >
 > - **最新一轮**始终放在 [README](README.md) 的「最新一轮的更新内容」章节。
@@ -2003,3 +2003,35 @@ BattleArmory TACZ  loader=Forge  resolved=(null)                      mods=0 →
 **仍需你实测**：升级后对那个旧实例点一次「补全文件」，确认它被认领并能启动；以及真实网络卡住时看门狗与重试的手感。
 
 **配套**：`BuildInfo.CurrentRound` → 96、应用内更新日志置顶第 96 轮、第 95 轮归档进 CHANGELOG、新增 ADR-0018。
+
+## 更新补充（第 97 轮：进度诚实与加载器感知模组体检）
+
+### 第 97 轮：假 100%、安装器黑盒，以及 Forge 不该「需要」Fabric API（2026-11-15）
+
+**截图 1：100% 不是四舍五入 96.67% 那么简单**
+
+`87/90` 其实是启动器自己的文件批次（拼在阶段文案里的 `Stages[i].Label + " 87/90"`），不是 Forge JVM 的内部日志；速度 378.8 KB/s 也来自我们的下载引擎。但「假 100%」确实存在，成因有两层：`JobProgressPolicy.PercentFor` 在阶段索引走到末尾时合法地返回 100；而 `DownloadEngine` 把**失败**的文件也计入 `CompletedFiles`（失败即 "processed"），于是 `CompletedFiles/TotalFiles` 同样到了 1.0。两层都谈不上撒谎，但展示层不该在还有 3 个文件没到时宣称完成。
+
+- 新增 `ProgressDisplayPolicy`：未完成的任务一律 `Math.Floor` 并**封顶 99%**，真正完成才 100%；`JobProgressPolicy.Aggregate` 只要有活跃/排队任务同样封顶。
+- `installer-run` 阶段的主进度条改为**不确定态**（`IsIndeterminate`），顶部文案改成「正在执行 Forge / NeoForge 安装器内部下载（受网络影响，可能较慢）」，任务行也不再硬凑 `87/90`。
+- **文件完成停滞检测**：`DownloadJob` 记录完成文件数与最后完成时间；`JobWatchdogPolicy` 增加 2 分钟阈值 —— 哪怕还有几百 KB/s，只要「87」这个数 2 分钟没动，也判定网络异常、中止 linked token、留红色失败任务可重试。原有的 30s / 90s / 15min 分级保持不变（正常安装实测 94~165 秒静默，不能一刀切 30 秒）。
+
+**截图 2：`fabric-api` 误报，以及「一键补齐」为什么必须等等**
+
+在你真实的整合包目录（`instances/bdc7ca7d`，96 个 jar）里查到硬证据：**6 个 jar 同时带 `fabric.mod.json` 和 `META-INF/mods.toml`**，其中 `EnhancedVisuals_FORGE_v1.8.31_mc1.20.1.jar` 和 `ItemPhysicLite_FORGE_v1.6.11_mc1.20.1.jar` 的 Fabric 元数据里声明了 `fabric-api` —— 正好对应截图里那两条。它们是 Forge 版模组，旧 `TryParse` 却**无条件优先读 `fabric.mod.json`**，于是把 Fabric 元数据当成权威，给 Forge 实例报了一个不可能存在的前置。
+
+- `TryParse` 现在按实例加载器选元数据：Forge/NeoForge 先读 `mods.toml`，Fabric/Quilt 先读 `fabric.mod.json`；另一份只作回退，且依赖仍要过 `ModDependencyPolicy.IsRelevant` 的跨加载器过滤。
+- 去重从 `depId|requiredBy` 改成**按 modId 合并**：所有要求它的模组合成一行，版本范围与来源列表都保留（`tacz` 那 4 个来源、3 个范围现在是一行）。
+- 同一份真实数据用新解析重扫（`--preflight-scan <dir> Forge`）：**「缺少 19 个前置（共 29 项）」→ 6 条**，`fabric-api` 消失、`fabricApiMissing=False`，`kotlinforforge` 只剩一行且保留 Fzzy Config / Particle Core 两个来源。
+- 为下一轮「一键补齐」铺好纯策略：`VersionRangePolicy`（`[4.11.0,4.99.0)` 正确排掉 4.10.0 与 4.99.0、取范围内最新版）、`PreflightAutoFixPolicy`（唯一 `LoadersFor` + slug 映射 + 版本准入）。**按你踩的刹车，本轮不上自动下载/自动启动**：在错误的解析上接自动补齐，真的会把 `fabric-api.jar` 丢进 Forge 的 mods 目录。
+
+**验证**
+
+- `--unit` **142/142**、`--all` **149/149**（新增 7 项：版本范围边界、跨加载器过滤+去重、加载器白名单/slug、进度封顶、文件停滞，以及 2 条静态防线）
+- **机制防线 36 条**；交互元素仍 118（本轮未新增按钮）
+- `--preflight-scan` 只读冒烟：直接在真实数据目录上复核体检结果
+- 发布：EXE + 96→97 补丁 + 签名清单（见文末）
+
+**配套**：`BuildInfo.CurrentRound` → 97、应用内更新日志置顶第 97 轮、第 96 轮归档进 CHANGELOG、新增 ADR-0019。
+
+**下一轮候选**：把「一键补齐前置」接上 UI 勾选、DownloadJob 闭环与补齐后重扫；策略层与 Guard 已就位，届时只需接下载与状态机。

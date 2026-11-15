@@ -155,6 +155,27 @@ internal static class Program
             Environment.Exit(0);
             return;
         }
+        // Round-98 opt-in network smoke: resolve BOTH JDK vendors from their
+        // real APIs. Metadata only — never downloads the ~200 MB archive.
+        if (args.Contains("--java-dist-smoke"))
+        {
+            try
+            {
+                var svc = new JavaRuntimeService();
+                foreach (var d in new[] { JavaDistribution.Temurin, JavaDistribution.Zulu })
+                {
+                    var pkg = svc.ResolveAsync(d, 21, CancellationToken.None).GetAwaiter().GetResult();
+                    Console.WriteLine(pkg == null
+                        ? $"[java-dist] {d}: NO PACKAGE"
+                        : $"[java-dist] {d}: {pkg.ReleaseName} | {pkg.Name} | " +
+                          $"{pkg.Size / 1024 / 1024} MB | sha={pkg.Sha256[..12]}… | {pkg.Url}");
+                    if (pkg == null) { Environment.Exit(1); return; }
+                }
+                Environment.Exit(0);
+            }
+            catch (Exception ex) { Console.WriteLine("[java-dist] ERROR " + ex.Message); Environment.Exit(1); }
+            return;
+        }
         // Read-only diagnostic: what does the launch gate think of the REAL instances?
         if (args.Contains("--readiness-scan")) { Environment.Exit(LaunchGateSmoke.ScanRealRootForDiagnostics()); return; }
         // Diagnostic (read-only, never in CI): what WOULD the storage cleaner find
@@ -5347,6 +5368,149 @@ internal static class Program
             Assert(Read("src/AuroraLauncher.Desktop/Views/DownloadsView.xaml")
                 .Contains("IsIndeterminate=\"{Binding DownloadProgressIndeterminate}\""),
                 "主进度条必须支持不确定态");
+        });
+
+        Check("InstallFailureText: The operation was canceled. 不再裸奔给用户（第 98 轮）", () =>
+        {
+            var raw = new OperationCanceledException("The operation was canceled.");
+            var text = InstallFailureText.Describe(raw, "installer-download");
+            Assert(!text.Contains("canceled", StringComparison.OrdinalIgnoreCase), "不能出现英文底层异常原文");
+            Assert(text.Contains("超时") && text.Contains("重试") && text.Contains("镜像"), "要说清原因与下一步");
+            Assert(InstallFailureText.Describe(raw, externallyCanceled: true).Contains("已取消"), "真取消要如实说取消");
+            Assert(InstallFailureText.IsCancellation(new TaskCanceledException()), "TaskCanceled 也算中止");
+            Assert(InstallFailureText.IsRetryableRouteFailure(new TimeoutException(), false), "线路超时值得换镜像重试");
+            Assert(InstallFailureText.IsRetryableRouteFailure(new DownloadException("404"), false), "下载异常值得换镜像重试");
+            Assert(!InstallFailureText.IsRetryableRouteFailure(new OperationCanceledException(), true), "外部取消不能重试");
+            Assert(InstallFailureText.BothRoutesFailed("https://maven.minecraftforge.net/a.jar",
+                       "https://bmclapi2.bangbang93.com/maven/a.jar", "Forge", raw)
+                   .Contains("bmclapi2.bangbang93.com"), "双线路失败要列出镜像地址");
+            Assert(LauncherProfiles.Explain("Failed to run processor: java.net.ConnectException:Connection timed out: connect")!
+                       .Contains("连接超时"), "安装器 JVM 超时也要说人话");
+            Assert(LauncherProfiles.Explain("Failed to download version manifest, can not find client jar URL.")!
+                       .Contains("重试"), "拉不到版本清单要给下一步");
+        });
+
+        Check("JavaDistributionPolicy: Zulu 只认普通 JDK、挑最新、拒绝坏包（第 98 轮）", () =>
+        {
+            const string json = """
+            [
+              {"java_version":[21,0,11],"name":"zulu21.50.19-ca-jdk21.0.11-win_x64.zip","sha256_hash":"84c73a4dcf8400ac01c1fe2d622cc319199e93c1856c200cb50c1bc16dc7dc97","size":211615000,"url":"https://cdn.azul.com/zulu/bin/zulu21.50.19-ca-jdk21.0.11-win_x64.zip","zulu_version":[21,50,19,0]},
+              {"java_version":[21,0,13,0,3],"name":"zulu21.54.109-ca-fx-jdk21.0.13.0.3-win_x64.zip","sha256_hash":"9debca7155348d63a79ac6c1b38d85af6e92242c51de8170fb2e65d06a2d0cbb","size":307838000,"url":"https://cdn.azul.com/zulu/bin/zulu21.54.109-ca-fx-jdk21.0.13.0.3-win_x64.zip","zulu_version":[21,54,109,0]},
+              {"java_version":[21,0,13,0,3],"name":"zulu21.54.109-ca-crac-jdk21.0.13.0.3-win_x64.zip","sha256_hash":"b32092e2798d25782e54ddd56f9f6cf5c61d4ec3d7df7376f0c8c7f74b8faeff","size":211705000,"url":"https://cdn.azul.com/zulu/bin/zulu21.54.109-ca-crac-jdk21.0.13.0.3-win_x64.zip","zulu_version":[21,54,109,0]},
+              {"java_version":[21,0,13,0,3],"name":"zulu21.54.109-ca-jdk21.0.13.0.3-win_x64.zip","sha256_hash":"7428890c66267aac516514085745dbedc6b8e7703eb0f7d73fb65cf9cd2cf306","size":211151000,"url":"https://cdn.azul.com/zulu/bin/zulu21.54.109-ca-jdk21.0.13.0.3-win_x64.zip","zulu_version":[21,54,109,0]},
+              {"java_version":[21,0,14],"name":"evil.zip","sha256_hash":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","size":10,"url":"https://evil.example/evil.zip","zulu_version":[21,99,0,0]}
+            ]
+            """;
+            var pkg = JavaDistributionPolicy.ParseZuluLatest(json, 21);
+            Assert(pkg != null, "必须解析出可用的 Zulu 包");
+            Assert(pkg!.Name.Contains("ca-jdk") && !pkg.Name.Contains("-fx-") && !pkg.Name.Contains("-crac-"),
+                "排除 JavaFX / CRaC 变体");
+            Assert(pkg.Sha256.Length == 64 && pkg.Size > 0 && pkg.Vendor == "Zulu", "必须带校验和与体积");
+            Assert(pkg.Url.StartsWith("https://cdn.azul.com/", StringComparison.Ordinal), "只允许 Azul 官方 CDN");
+            Assert(JavaDistributionPolicy.ParseZuluLatest("[]", 21) == null, "空数组返回 null");
+            Assert(JavaDistributionPolicy.BuildZuluApiUrl(17).Contains("java_version=17") &&
+                   JavaDistributionPolicy.BuildZuluApiUrl(17).Contains("include_fields=sha256_hash,size"),
+                "必须请求 sha256_hash 与 size，否则装不了");
+            Assert(!JavaDistributionPolicy.IsAllowedZuluHost("https://evil.example/x.zip"), "域名白名单");
+            Assert(!JavaDistributionPolicy.IsAllowedZuluHost("http://cdn.azul.com/x.zip"), "必须 HTTPS");
+            Assert(JavaDistributionPolicy.CompareVersions(new[] { 21, 0, 13 }, new[] { 21, 0, 11 }) > 0, "版本比较");
+            Assert(JavaDistributionPolicy.Options.Count == 2, "发行版白名单只有两家");
+            Assert(JavaDistributionPolicy.FromDisplayText(JavaDistributionPolicy.DisplayText(JavaDistribution.Zulu))
+                   == JavaDistribution.Zulu, "显示名往返");
+            Assert(JavaDistributionPolicy.FromDisplayText("乱填的值") == JavaDistribution.Temurin, "未知值安全降级");
+        });
+
+        Check("JobWatchdogPolicy: 已进入命名阶段的 Preparing 不再被 30 秒误杀（第 98 轮）", () =>
+        {
+            Assert(JobWatchdogPolicy.TimeoutSeconds(JobState.Preparing, null) == 30, "真正的准备阶段仍是 30 秒");
+            Assert(JobWatchdogPolicy.TimeoutSeconds(JobState.Preparing, "installer-download") == 90,
+                "下载 installer jar 给 90 秒，不是 30 秒");
+            Assert(JobWatchdogPolicy.TimeoutSeconds(JobState.Preparing, "installer-run") == 900,
+                "安装器运行阶段对齐 15 分钟");
+            Assert(!JobWatchdogPolicy.ShouldUseFileStall("installer-download"), "单文件 jar 不看文件完成数");
+            Assert(!JobWatchdogPolicy.ShouldUseFileStall("installer-run"), "安装器黑盒不看文件完成数");
+            Assert(JobWatchdogPolicy.ShouldUseFileStall("assets"), "普通多文件批次仍启用 2 分钟停滞判定");
+        });
+
+        Check("JobProgressPolicy: 失败任务不能把总进度抬到 100%（第 98 轮）", () =>
+        {
+            var (only, _, _, _) = JobProgressPolicy.Aggregate(new[]
+            {
+                new DownloadJobSnapshot(JobState.Failed, 100, 0)
+            });
+            Assert(only == 0, $"唯一任务失败时总进度必须是 0，实际 {only}");
+            var (mixed, _, _, _) = JobProgressPolicy.Aggregate(new[]
+            {
+                new DownloadJobSnapshot(JobState.Done, 100, 0),
+                new DownloadJobSnapshot(JobState.Failed, 100, 0)
+            });
+            Assert(mixed <= 99, $"有失败任务时汇总不得显示 100%，实际 {mixed}");
+            var (clean, _, _, _) = JobProgressPolicy.Aggregate(new[]
+            {
+                new DownloadJobSnapshot(JobState.Done, 100, 0)
+            });
+            Assert(clean == 100, "全部成功才允许 100%");
+        });
+
+        Check("Guard: 安装器下载必须有心跳、镜像优先且失败清残片（第 98 轮）", () =>
+        {
+            var root = FindSourceRoot()!;
+            string Read(string f) => File.ReadAllText(Path.Combine(root, f));
+            var mi = Read("src/AuroraCore/Services/ModLoaders/ModLoaderInstallers.cs");
+            Assert(mi.Contains("Action<DownloadProgress>? onProgress = null"), "安装器入口必须接收字节进度");
+            Assert(mi.Contains("}, onProgress, ct)"), "下载必须把进度回报给 Job（看门狗心跳）");
+            Assert(mi.Contains("new[] { mirrorUrl, installerUrl }"), "国内线路优先走 BMCLAPI 镜像");
+            Assert(mi.Contains("InstallFailureText.IsRetryableRouteFailure"), "超时/取消也要能切换线路");
+            Assert(mi.Contains("CleanInstallerResidue(jarPath)"), "每次重试前清残片");
+            Assert(mi.Contains("DownloadJournal.Forget(jarPath)"), "续传台账必须同步清理");
+            Assert(mi.Contains("InstallFailureText.Describe(ex"), "底层异常必须翻译");
+            var svc = Read("src/AuroraCore/Services/LauncherService.cs");
+            Assert(System.Text.RegularExpressions.Regex.Matches(svc, "onStage, onProgress").Count == 2,
+                "安装与补全两条路径都要透传进度");
+            Assert(Read("src/AuroraCore/Services/JobWatchdogPolicy.cs").Contains("ShouldUseFileStall"),
+                "单文件安装器阶段必须豁免文件停滞判定");
+        });
+
+        Check("Guard: 失败消息不被二次覆盖、失败汇总必须可见（第 98 轮）", () =>
+        {
+            var root = FindSourceRoot()!;
+            string Read(string f) => File.ReadAllText(Path.Combine(root, f));
+            var vm = Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.cs");
+            Assert(vm.Contains("var alreadyFinished = job.IsFinished;") && vm.Contains("if (!alreadyFinished)"),
+                "看门狗先判失败后，底层取消异常不得覆盖中文提示");
+            Assert(vm.Contains("InstallFailureText.Describe(error)"), "任务失败文案走统一翻译");
+            Assert(vm.Contains("JobWatchdogPolicy.ShouldUseFileStall(job.CurrentStageKey)"),
+                "看门狗接线到阶段豁免");
+            Assert(vm.Contains("public bool HasFailedJobs") && vm.Contains("FailedJobsHint"), "失败汇总状态可见");
+            var mgr = Read("src/AuroraCore/Services/DownloadJobManager.cs");
+            Assert(mgr.Contains("case JobState.Failed:") && mgr.Contains("hasFailed = true"),
+                "失败行不贡献完成度且阻止 100%");
+            Assert(Read("src/AuroraLauncher.Desktop/Views/DownloadsView.xaml").Contains("FailedJobsHint"),
+                "下载页要有红色失败提示");
+        });
+
+        Check("Guard: Java 发行版白名单、校验与设置持久化（第 98 轮）", () =>
+        {
+            var root = FindSourceRoot()!;
+            string Read(string f) => File.ReadAllText(Path.Combine(root, f));
+            var policy = Read("src/AuroraCore/Services/JavaDistributionPolicy.cs");
+            Assert(policy.Contains("include_fields=sha256_hash,size"), "Zulu API 必须索要校验和");
+            Assert(policy.Contains("cdn.azul.com") && policy.Contains("IsAllowedZuluHost"), "CDN 域名白名单");
+            Assert(policy.Contains("IsPlainJdkBundle"), "排除 fx / crac / jre 变体");
+            Assert(policy.Contains("enum JavaDistribution") ||
+                   Read("src/AuroraCore/Services/JavaDistributionPolicy.cs").Contains("Zulu = 2"),
+                "发行版枚举只有两家");
+            Assert(Read("src/AuroraCore/Services/JavaRuntimeService.cs")
+                .Contains("ResolveAsync(JavaDistribution distribution, int major"), "安装服务必须支持发行版参数");
+            Assert(Read("src/AuroraCore/Services/JavaRuntimeService.cs").Contains("ParseZuluLatest"),
+                "Zulu 走同一条 SHA-256 校验链");
+            Assert(Read("src/AuroraCore/LauncherConfig.cs").Contains("JavaDistribution { get; set; }"),
+                "发行版选择要持久化");
+            var view = Read("src/AuroraLauncher.Desktop/Views/SettingsView.xaml");
+            Assert(view.Contains("JavaDistributionOptions") && view.Contains("JavaInstallButtonText"),
+                "设置页要有发行版下拉与动态按钮");
+            Assert(Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.Round90.cs").Contains("javaDist"),
+                "未保存提醒必须覆盖新设置项");
         });
 
         Console.WriteLine($"\n=== Result: {_passed} passed, {_failed} failed, {_skipped} skipped ===");        Environment.Exit(_failed == 0 ? 0 : 1);

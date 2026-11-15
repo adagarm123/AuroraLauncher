@@ -52,6 +52,7 @@ public partial class MainViewModel
         ("autoMemory", "自动内存"),
         ("releaseIdle", "闲置释放内存"),
         ("java", "Java 路径"),
+        ("javaDist", "Java 发行版"),
         ("route", "下载线路"),
         ("proxy", "代理地址"),
         ("msClient", "微软登录 Client ID"),
@@ -76,6 +77,7 @@ public partial class MainViewModel
             ["autoMemory"] = AutoMemory ? "1" : "0",
             ["releaseIdle"] = ReleaseIdleMemory ? "1" : "0",
             ["java"] = JavaPath ?? "",
+            ["javaDist"] = JavaDistributionText ?? "",
             ["route"] = DownloadPolicyText ?? "",
             ["proxy"] = ProxyUrl ?? "",
             ["msClient"] = MicrosoftClientIdText ?? "",
@@ -105,7 +107,7 @@ public partial class MainViewModel
     ///
     /// The hint is refreshed by a 500 ms ticker rather than by PropertyChanged:
     /// most settings fields are plain auto-properties (the TextBox pushes INTO the
-    /// model, so nothing raises a notification). Adding 18 hand-written setters
+    /// model, so nothing raises a notification). Adding 19 hand-written setters
     /// would be a lot of code for a hint — and the one that gets forgotten is
     /// exactly the field whose edit goes unreported. The tick only does work while
     /// the settings page is on screen.</summary>

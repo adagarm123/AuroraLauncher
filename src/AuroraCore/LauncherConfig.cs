@@ -112,6 +112,11 @@ public sealed class LauncherConfig
     /// 前置（大多数 Fabric Mod 依赖它）。默认开启；关闭后改为弹窗询问。</summary>
     public bool AutoInstallFabricApi { get; set; } = true;
 
+    /// <summary>Round-98: JDK vendor used by 「一键安装 Java」 in settings.
+    /// Persisted as display text so an unknown value degrades to Temurin.</summary>
+    public string JavaDistribution { get; set; } =
+        JavaDistributionPolicy.DisplayText(AuroraCore.Services.JavaDistribution.Temurin);
+
     /// <summary>下载慢速看门狗阈值（KB/s，聚合速度）：持续约 20 秒低于该值
     /// 即判定线路"爬行"并自动切换镜像。默认 16；极慢网络（2G/3G）用户可在
     /// config.json 中调低以避免误切。0 = 关闭看门狗。</summary>

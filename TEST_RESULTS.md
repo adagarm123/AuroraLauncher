@@ -1,7 +1,7 @@
 # 自测结论（AuroraSelfTest）
 
-> 更新于 2026-11-15（第 97 轮）。
-> **上次全绿：2026-11-15 —— Unit 142/142（离线）、All 149/149（含网络集成）。**
+> 更新于 2026-11-15（第 98 轮）。
+> **上次全绿：2026-11-15 —— Unit 149/149（离线）、All 156/156（含网络集成）。**
 > 运行命令：`dotnet run --project tests/AuroraSelfTest -c Debug [-- --unit|--integration|--all]`
 > 一键脚本：`powershell -File scripts/run-tests.ps1 [-Full]`（CI 见 `.github/workflows/selftest.yml`）
 > 测试分层：**unit（离线，CI 必跑）/ integration（联网，CI 定时跑）/ all**。
@@ -154,6 +154,13 @@
 [PASS] JobWatchdogPolicy: 有速度但文件完成数停滞也判卡住（第 97 轮）
 [PASS] Guard: Forge 实例不得产生跨加载器前置（第 97 轮）
 [PASS] Guard: 进度封顶、不确定态与停滞检测必须接线（第 97 轮）
+[PASS] InstallFailureText: The operation was canceled. 不再裸奔给用户（第 98 轮）
+[PASS] JavaDistributionPolicy: Zulu 只认普通 JDK、挑最新、拒绝坏包（第 98 轮）
+[PASS] JobWatchdogPolicy: 已进入命名阶段的 Preparing 不再被 30 秒误杀（第 98 轮）
+[PASS] JobProgressPolicy: 失败任务不能把总进度抬到 100%（第 98 轮）
+[PASS] Guard: 安装器下载必须有心跳、镜像优先且失败清残片（第 98 轮）
+[PASS] Guard: 失败消息不被二次覆盖、失败汇总必须可见（第 98 轮）
+[PASS] Guard: Java 发行版白名单、校验与设置持久化（第 98 轮）
 
 === Result: 123 passed, 0 failed, 7 skipped ===（跳过的 7 项为网络集成测试）
 

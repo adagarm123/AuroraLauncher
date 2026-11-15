@@ -6,18 +6,18 @@
 - **零外部 NuGet 依赖**：仅使用 .NET 基类库（`System.Text.Json`、`HttpClient`、`System.IO.Compression` 等）。无网络可达性依赖，可离线构建。
 - 许可：**MIT**。完全独立实现，未复用 PCL2 / HMCL 等受限制许可证项目的源代码（详见 `LICENSE`）。
 
-> ### 当前状态速览（第 97 轮，2026-11-15）
+> ### 当前状态速览（第 98 轮，2026-11-15）
 >
-> - **自测**：Unit 142/142（离线）· All 149/149（含网络集成），**机制防线 36 条**（编号连续性、命令绑定、交互元素、版本数据入口、classpath 一致性、HttpClient 生命周期、实例元数据入口、加载器卡片竞态、文档基线一致性、列表嵌套滚动边界、首次显示才初始化、日志 I/O 不占 UI 线程、崩溃修复不越界、搜索索引无死行、模糊白名单、启动拦截单一判断、内存分配不超 60% 且清理只碰自己、删除先删文件/扫描只加不删 + 测试必须隔离配置、测速只用 HEAD 且不进下载路径、Forge 安装器版本号必须拼 MC 前缀、全 src 不得出现 VerifyHash(、残留清理不得删正在下载的文件、存储清理只走白名单且不整根删除、会牺牲离线能力的分类默认不勾、清理忙碌态与两入口分工必须写清、离开设置页必须拦截 + 有任务时关窗必须弹窗、首页内容必须可滚动且列表有高度上限、加载器/整合包不完整必须拦住启动、异步命令必须自带防重入且不许「火后不管」、跑安装器前必须先补 launcher_profiles.json、第三方加载器 id 不得查官方清单且本地 JSON 优先、安装器依赖必须在跑 JVM 前预填充且成功必须有真实 profile、补全必须走 DownloadJob 且标题栏不得脱离任务队列、导航高亮与取消按钮必须由同一状态源判定、未完成任务不得显示 100% 且安装器黑盒必须转不确定态、Forge 前置体检必须过滤跨加载器 id 并按 modId 去重）
-> - **页面**：9 个功能页面（首页/游戏下载/实例管理/内容中心/下载管理/设置/日志/更新日志/帮助中心）+ 无边框自绘标题栏、Ctrl+K 全局搜索与**首次启动引导**；118 个交互元素全覆盖审计，零死按钮（含"无实例时启动按钮自动改成去下载"）
+> - **自测**：Unit 149/149（离线）· All 156/156（含网络集成），**机制防线 39 条**（编号连续性、命令绑定、交互元素、版本数据入口、classpath 一致性、HttpClient 生命周期、实例元数据入口、加载器卡片竞态、文档基线一致性、列表嵌套滚动边界、首次显示才初始化、日志 I/O 不占 UI 线程、崩溃修复不越界、搜索索引无死行、模糊白名单、启动拦截单一判断、内存分配不超 60% 且清理只碰自己、删除先删文件/扫描只加不删 + 测试必须隔离配置、测速只用 HEAD 且不进下载路径、Forge 安装器版本号必须拼 MC 前缀、全 src 不得出现 VerifyHash(、残留清理不得删正在下载的文件、存储清理只走白名单且不整根删除、会牺牲离线能力的分类默认不勾、清理忙碌态与两入口分工必须写清、离开设置页必须拦截 + 有任务时关窗必须弹窗、首页内容必须可滚动且列表有高度上限、加载器/整合包不完整必须拦住启动、异步命令必须自带防重入且不许「火后不管」、跑安装器前必须先补 launcher_profiles.json、第三方加载器 id 不得查官方清单且本地 JSON 优先、安装器依赖必须在跑 JVM 前预填充且成功必须有真实 profile、补全必须走 DownloadJob 且标题栏不得脱离任务队列、导航高亮与取消按钮必须由同一状态源判定、未完成任务不得显示 100% 且安装器黑盒必须转不确定态、Forge 前置体检必须过滤跨加载器 id 并按 modId 去重、安装器下载必须回报心跳且线路失败自动换镜像、失败任务不得贡献总进度且失败结论不得被二次覆盖、JDK 发行版必须走白名单与 SHA-256 校验）
+> - **页面**：9 个功能页面（首页/游戏下载/实例管理/内容中心/下载管理/设置/日志/更新日志/帮助中心）+ 无边框自绘标题栏、Ctrl+K 全局搜索与**首次启动引导**；119 个交互元素全覆盖审计，零死按钮（含"无实例时启动按钮自动改成去下载"）
 > - **下载/分发**：多任务并行、同目标文件单写者、断点续传；**线路三态**（自动测速择优 / 强制官方 / 强制镜像，核心文件失败不静默换线、非核心可静默回退）；**下载残留可收可查**（一键清理 `.part` + `update/` 残片，正在下载的不动，删了会同步台账）；增量更新只下补丁；便携模式；单实例（带唤醒握手）；托盘常驻；**Forge/NeoForge 安装器要的 launcher_profiles.json 自动补齐**（缺了它会 exit 1）
 > - **存储**：**扫描垃圾文件**（图标/安装器/清单缓存、旧日志、无主残片、空壳版本目录），按分类勾选清理，会牺牲离线能力的项默认不勾；白名单 + 删除前复核，存档/模组/配置/备份/Java/库文件一律不碰；清理时有忙碌态（按钮变文案 + 进度条 + 冻结勾选）
 > - **安全边**：**任何关闭路径都不会静默中断下载**（含「直接退出」与托盘菜单退出）；**设置改完忘保存会拦**（离开页面/关窗口时问「保存 / 放弃 / 取消」，保存按钮旁常驻未保存提示）；**耗时按钮执行中自动置灰并换文案**，被吞掉的重复点击计数写日志（异步命令默认带门）
 > - **实例管理**：新建=跳转下载（不再造空实例）、删除=先删文件夹再删记录（失败保留记录并说明原因）、**扫描未注册实例**（找回幽灵实例 / 清理死链 / 陌生文件夹只报告）
 > - **体验**：**游玩时长/启动次数**、**启动前模组体检**、**存档自动备份（保留 N 份）**、**性能仪表盘**、**Ctrl+K 全局搜索**、**崩溃诊断 + 一键修复 + 求助邮件**、**内存自动分配（上限物理内存 55%，手动值不静默改写）**、**光影壁纸 + 玻璃卡片外观（默认关闭，红色警告把关）**
-> - **EXE**：`publish/AuroraLauncher.exe`（65.4 MB，单文件自包含）+ `publish/AuroraLauncher.patch`（96→97 补丁，供上一版用户升级）
+> - **EXE**：`publish/AuroraLauncher.exe`（65.4 MB，单文件自包含）+ `publish/AuroraLauncher.patch`（97→98 补丁，供上一版用户升级）
 > - **发布**：GitHub Actions 全自动（编译 → 单测 → 签名 → Release + Pages），无需手动上传
-> - **文档**：[CHANGELOG](CHANGELOG.md)（第 1–96 轮历史；本 README 只保留最新一轮，每次发版把上一轮归档进去，故此处始终 = 当前轮次 − 1）· [ROADMAP](ROADMAP.md)（基线与待办）· [TEST\_RESULTS](TEST_RESULTS.md)（130 项自测）· [INTERACTIVE\_UI\_AUDIT](INTERACTIVE_UI_AUDIT.md)（交互元素检验）· [docs/PROJECT\_OVERVIEW](docs/PROJECT_OVERVIEW.md)（功能/性能/安全/限制）· [docs/adr](docs/adr/INDEX.md)（16 篇架构决策记录）
+> - **文档**：[CHANGELOG](CHANGELOG.md)（第 1–97 轮历史；本 README 只保留最新一轮，每次发版把上一轮归档进去，故此处始终 = 当前轮次 − 1）· [ROADMAP](ROADMAP.md)（基线与待办）· [TEST\_RESULTS](TEST_RESULTS.md)（156 项自测）· [INTERACTIVE\_UI\_AUDIT](INTERACTIVE_UI_AUDIT.md)（交互元素检验）· [docs/PROJECT\_OVERVIEW](docs/PROJECT_OVERVIEW.md)（功能/性能/安全/限制）· [docs/adr](docs/adr/INDEX.md)（20 篇架构决策记录）
 
 ---
 
@@ -82,35 +82,35 @@ AuroraLauncher/
 ---
 
 ## 最新一轮的更新内容
-### 第 97 轮：假 100%、安装器黑盒，以及 Forge 不该「需要」Fabric API（2026-11-15）
+### 第 98 轮：不再「被取消」、失败不再是 100%，以及设置里可选的 Zulu Java（2026-11-15）
 
-**截图 1：100% 不是四舍五入 96.67% 那么简单**
+**先纠正诊断：这次既不是网络断连，也不是镜像竞速误伤，是我第 96/97 轮加的看门狗把正在下载的安装器掐了**
 
-`87/90` 其实是启动器自己的文件批次（拼在阶段文案里的 `Stages[i].Label + " 87/90"`），不是 Forge JVM 的内部日志；速度 378.8 KB/s 也来自我们的下载引擎。但「假 100%」确实存在，成因有两层：`JobProgressPolicy.PercentFor` 在阶段索引走到末尾时合法地返回 100；而 `DownloadEngine` 把**失败**的文件也计入 `CompletedFiles`（失败即 "processed"），于是 `CompletedFiles/TotalFiles` 同样到了 1.0。两层都谈不上撒谎，但展示层不该在还有 3 个文件没到时宣称完成。
+时间线在代码里是确定的：`RunRepairJobAsync` 以 `keepPreparing` 入队，`EnterStage("installer-download")` 会把任务切到 Running（该阶段静默上限 90 秒）；但 `ModLoaderInstallers` 下载 installer jar 时给 `DownloadEngine` 传的是 `null` 进度回调，任务收不到任何心跳。与此同时，第 97 轮的「2 分钟没有新文件完成」判定还留着上一批原版文件的 `TrackedTotalFiles`，在单文件安装器阶段同样会误判。于是看门狗 `AbortAsFailure` 取消 linked token → 引擎抛 `OperationCanceledException` → `catch (DownloadException)` 捕获不到（只接 DownloadException）→ 外层 `result.Error = ex.Message` 原样塞进 UI，于是出现了玩家什么都没点却看到 `The operation was canceled.`。
 
-- 新增 `ProgressDisplayPolicy`：未完成的任务一律 `Math.Floor` 并**封顶 99%**，真正完成才 100%；`JobProgressPolicy.Aggregate` 只要有活跃/排队任务同样封顶。
-- `installer-run` 阶段的主进度条改为**不确定态**（`IsIndeterminate`），顶部文案改成「正在执行 Forge / NeoForge 安装器内部下载（受网络影响，可能较慢）」，任务行也不再硬凑 `87/90`。
-- **文件完成停滞检测**：`DownloadJob` 记录完成文件数与最后完成时间；`JobWatchdogPolicy` 增加 2 分钟阈值 —— 哪怕还有几百 KB/s，只要「87」这个数 2 分钟没动，也判定网络异常、中止 linked token、留红色失败任务可重试。原有的 30s / 90s / 15min 分级保持不变（正常安装实测 94~165 秒静默，不能一刀切 30 秒）。
+更糟的是 `RunRepairJobAsync` 的 catch 又调了一次 `FinishJob(job, ex, false)`，把看门狗刚写好的中文超时提示**二次覆盖**成英文原文 —— 截图里那句「启动失败: Forge 加载器补全失败: The operation was canceled.」就是这么来的。左侧 100% / 右侧「失败 0%」则是另一条独立 bug：`JobProgressPolicy.Aggregate` 把 `Failed` 也算进完成度平均（引擎把失败文件计为 CompletedFiles，最后一次 Report 常是 100），且 `Display(..., !anyPending)` 在没有活跃任务时允许 100。
 
-**截图 2：`fabric-api` 误报，以及「一键补齐」为什么必须等等**
+**改法（下载韧性 + 状态诚实 + 人话报错）**
 
-在你真实的整合包目录（`instances/bdc7ca7d`，96 个 jar）里查到硬证据：**6 个 jar 同时带 `fabric.mod.json` 和 `META-INF/mods.toml`**，其中 `EnhancedVisuals_FORGE_v1.8.31_mc1.20.1.jar` 和 `ItemPhysicLite_FORGE_v1.6.11_mc1.20.1.jar` 的 Fabric 元数据里声明了 `fabric-api` —— 正好对应截图里那两条。它们是 Forge 版模组，旧 `TryParse` 却**无条件优先读 `fabric.mod.json`**，于是把 Fabric 元数据当成权威，给 Forge 实例报了一个不可能存在的前置。
+- **镜像优先、全异常可降级**：installer jar 改成 `BMCLAPI → 官方 Maven` 顺序，`InstallFailureText.IsRetryableRouteFailure` 覆盖 `DownloadException / HttpRequestException / IOException / TimeoutException / TaskCanceledException`（外部主动取消除外，绝不跟看门狗对着干）。每次重试前 `CleanInstallerResidue` 删掉半成品 jar / `.part` 并 `DownloadJournal.Forget`，避免下次从垃圾续传。
+- **给任务心跳**：`InstallAsync` 新增 `Action<DownloadProgress>? onProgress`，`LauncherService` 安装与补全两条路径都透传；字节进度直接喂给 `job.Report`，看门狗不再把「正在慢慢下」当成死，速度也不再长期显示 0 B/s。
+- **看门狗按阶段**：`TimeoutSeconds(Preparing, 命名阶段)` 不再一律 30 秒（installer-download 90 秒 / 其余 15 分钟）；`ShouldUseFileStall` 让单文件 jar 与安装器黑盒阶段豁免「2 分钟无新文件完成」—— 那里本来就没有文件计数器可推进。
+- **报错说人话**：新增 `InstallFailureText` 统一翻译，`FinishJob` 增加 `alreadyFinished` 判定，任何后续异常都不得覆盖已交付的失败结论；`LauncherProfiles.Explain` 补上 `ConnectException / Connection timed out / Failed to download version manifest`，Forge JVM 自己联网失败也会给出原因和下一步。
+- **失败就别装作完成**：`Aggregate` 让 `Failed` 行不贡献完成度、有失败任务时汇总永远到不了 100%；`MarkFinished` 对非 Done 状态把百分比钳到 99；下载页用 `HasFailedJobs / FailedJobsHint` 显示红色失败标记，汇总文案改成「N 个任务失败 · 可点重试」。
 
-- `TryParse` 现在按实例加载器选元数据：Forge/NeoForge 先读 `mods.toml`，Fabric/Quilt 先读 `fabric.mod.json`；另一份只作回退，且依赖仍要过 `ModDependencyPolicy.IsRelevant` 的跨加载器过滤。
-- 去重从 `depId|requiredBy` 改成**按 modId 合并**：所有要求它的模组合成一行，版本范围与来源列表都保留（`tacz` 那 4 个来源、3 个范围现在是一行）。
-- 同一份真实数据用新解析重扫（`--preflight-scan <dir> Forge`）：**「缺少 19 个前置（共 29 项）」→ 6 条**，`fabric-api` 消失、`fabricApiMissing=False`，`kotlinforforge` 只剩一行且保留 Fzzy Config / Particle Core 两个来源。
-- 为下一轮「一键补齐」铺好纯策略：`VersionRangePolicy`（`[4.11.0,4.99.0)` 正确排掉 4.10.0 与 4.99.0、取范围内最新版）、`PreflightAutoFixPolicy`（唯一 `LoadersFor` + slug 映射 + 版本准入）。**按你踩的刹车，本轮不上自动下载/自动启动**：在错误的解析上接自动补齐，真的会把 `fabric-api.jar` 丢进 Forge 的 mods 目录。
+**设置里新增 Azul Zulu JDK 下载**
+
+设置 → Java 环境新增「JDK 发行版」下拉（Eclipse Temurin / Azul Zulu），选中后「一键安装 Java 21」按该发行版下载。`JavaDistributionPolicy` 是纯策略：Zulu 走 `api.azul.com/zulu/download/community/v1.0/bundles/`，**必须带 `include_fields=sha256_hash,size`**（否则响应里没有校验和，安装链路会拒绝），从返回的一堆包里排除 `-fx-` / `-crac-` / `-jre` 变体、校验 `cdn.azul.com` 域名白名单与 64 位 SHA-256、选最高 patch 版本，再复用既有 `DownloadEngine → SHA-256 校验 → 静默解压 → 设为默认` 链路。选择写进 `config.json`，并纳入第 90 轮的「未保存设置」快照。
 
 **验证**
 
-- `--unit` **142/142**、`--all` **149/149**（新增 7 项：版本范围边界、跨加载器过滤+去重、加载器白名单/slug、进度封顶、文件停滞，以及 2 条静态防线）
-- **机制防线 36 条**；交互元素仍 118（本轮未新增按钮）
-- `--preflight-scan` 只读冒烟：直接在真实数据目录上复核体检结果
-- 发布：EXE + 96→97 补丁 + 签名清单（见文末）
+- `--unit` **149/149**、`--all` **156/156**（新增 7 项：取消文案翻译、Zulu 包解析与白名单、看门狗阶段阈值、失败汇总、3 条静态防线）
+- **机制防线 39 条**；交互元素 118 → **119**（新增 JDK 发行版下拉）
+- `--java-dist-smoke` 实跑两家官方源：Temurin `jdk-21.0.13+9` 195 MB、Zulu `zulu21.54.109-ca-jdk21.0.13.0.3` 201 MB，均带 SHA-256
+- **`--forge-install-smoke` 本轮两次未绿**（如实记录）：installer jar 走 BMCLAPI 下载成功、依赖预填充 29/29，但官方安装器 JVM 自己拉 Mojang 版本清单 / 跑 processor 时 `Connection timed out` 与 `Failed to download version manifest` 而退出码 1。它使用自己的网络栈，不经启动器镜像线路，属外部环境阻断；这两次失败恰好验证了本轮新增的中文失败翻译生效。第 95/96 轮同链路曾实跑安装成功，本轮未改动安装器运行阶段逻辑。
+- 发布：EXE + 97→98 补丁 + 签名清单（见文末）；云端 Release 由 Actions 同一次 workflow 编译/签名/上传/部署
 
-**配套**：`BuildInfo.CurrentRound` → 97、应用内更新日志置顶第 97 轮、第 96 轮归档进 CHANGELOG、新增 ADR-0019。
-
-**下一轮候选**：把「一键补齐前置」接上 UI 勾选、DownloadJob 闭环与补齐后重扫；策略层与 Guard 已就位，届时只需接下载与状态机。
+**配套**：`BuildInfo.CurrentRound` → 98、应用内更新日志置顶第 98 轮、第 97 轮归档进 CHANGELOG、新增 ADR-0020。
 
 ---
 

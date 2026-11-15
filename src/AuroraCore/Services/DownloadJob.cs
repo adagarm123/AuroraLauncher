@@ -293,6 +293,7 @@ public sealed class DownloadJob : INotifyPropertyChanged
         _speed = 0;
         FinishedAtUtc = DateTime.UtcNow;
         if (state == JobState.Done) _percent = 100;
+        else if (_percent >= 100) _percent = ProgressDisplayPolicy.MaxUnfinishedPercent;
         if (state == JobState.Done)
         {
             foreach (var st in Stages)

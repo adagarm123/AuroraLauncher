@@ -1022,6 +1022,13 @@ public partial class MainViewModel : ViewModelBase
     /// <summary>Round-96: 全部取消 must be grey when there is nothing to cancel.</summary>
     public bool HasCancellableJobs => _jobManager.Jobs.Any(j => j.CanCancel);
 
+    /// <summary>Round-98: the left-hand summary must visibly disagree with a
+    /// red failed row. It drives a red progress bar and a retry hint.</summary>
+    public bool HasFailedJobs => _jobManager.Jobs.Any(j => j.State == JobState.Failed);
+    public string FailedJobsHint => HasFailedJobs
+        ? $"{_jobManager.Jobs.Count(j => j.State == JobState.Failed)} 个任务失败 · 点「重试」再来一次"
+        : "";
+
     /// <summary>Round-97: the summary bar becomes indeterminate once the
     /// installer JVM owns the download (a black box to us).</summary>
     public bool DownloadProgressIndeterminate
@@ -1431,18 +1438,27 @@ public partial class MainViewModel : ViewModelBase
     private void FinishJob(DownloadJob? job, Exception? error, bool canceled, string? successText = null)
     {
         if (job == null) return;
-        _jobManager.Finish(job, error, canceled, successText);
-        if (canceled) Status = "已取消下载";
-        else if (error != null)
+        // Round-98: the watchdog may have failed this job (with a Chinese,
+        // actionable message) BEFORE the underlying token cancellation
+        // bubbled up as "The operation was canceled.". A second FinishJob
+        // used to overwrite that message with the raw CLR string. Never
+        // restate a verdict that has already been delivered.
+        var alreadyFinished = job.IsFinished;
+        if (!alreadyFinished) _jobManager.Finish(job, error, canceled, successText);
+        if (!alreadyFinished)
         {
-            InstallSuccess = null;
-            InstallError = successText == null ? error.Message : successText;
-            Status = "任务失败：" + error.Message;
-        }
-        else if (successText != null)
-        {
-            InstallError = null;
-            InstallSuccess = successText;
+            if (canceled) Status = "已取消下载";
+            else if (error != null)
+            {
+                InstallSuccess = null;
+                InstallError = successText == null ? InstallFailureText.Describe(error) : successText;
+                Status = "任务失败：" + InstallError;
+            }
+            else if (successText != null)
+            {
+                InstallError = null;
+                InstallSuccess = successText;
+            }
         }
         if (error != null && job.Kind == "修复") _lastFailedRepairInstanceId = job.InstanceName;
         else if (error == null && !canceled) _lastFailedRepairInstanceId = null;
@@ -1533,8 +1549,11 @@ public partial class MainViewModel : ViewModelBase
             if (job.IsFinished) continue;
             var limit = JobWatchdogPolicy.TimeoutSeconds(job.State, job.CurrentStageKey);
             var quietStalled = JobWatchdogPolicy.IsStalled(job.LastProgressUtc, now, limit);
-            var fileStalled = JobWatchdogPolicy.IsFileProgressStalled(
-                job.LastFileCompletedUtc, now, job.TrackedTotalFiles);
+            // Round-98: installer-download is ONE jar and installer-run is a
+            // black box; neither has a file-completion counter to advance.
+            var fileStalled = JobWatchdogPolicy.ShouldUseFileStall(job.CurrentStageKey) &&
+                JobWatchdogPolicy.IsFileProgressStalled(
+                    job.LastFileCompletedUtc, now, job.TrackedTotalFiles);
             if (!quietStalled && !fileStalled) continue;
             var msg = fileStalled
                 ? JobWatchdogPolicy.FileStalledMessage(job.LastFileCompletedUtc, now,
@@ -1579,11 +1598,13 @@ public partial class MainViewModel : ViewModelBase
         DownloadSpeedText = JobProgressPolicy.FormatSpeed(speed);
         HasDownloadJobs = _jobManager.Jobs.Count > 0;
         CanClearFinished = _jobManager.FinishedCount > 0;
+        var failed = _jobManager.Jobs.Count(j => j.State == JobState.Failed);
         DownloadSummaryText = _jobManager.Jobs.Count == 0
             ? "当前没有下载任务"
             : queued > 0
                 ? $"{active} 个进行中 · {queued} 个排队"
-                : active > 0 ? $"{active} 个进行中" : "全部任务已结束";
+                : active > 0 ? $"{active} 个进行中"
+                : failed > 0 ? $"{failed} 个任务失败 · 可点重试" : "全部任务已结束";
 
         // Legacy status object: the status-bar dot and any other reader.
         Download.Active = active > 0 || queued > 0;
@@ -1593,6 +1614,8 @@ public partial class MainViewModel : ViewModelBase
         IsBusy = active > 0 || queued > 0;
         OnPropertyChanged(nameof(HeaderText));
         OnPropertyChanged(nameof(HasCancellableJobs));
+        OnPropertyChanged(nameof(HasFailedJobs));
+        OnPropertyChanged(nameof(FailedJobsHint));
         OnPropertyChanged(nameof(DownloadProgressIndeterminate));
         CancelAllDownloadsCommand.RaiseCanExecuteChanged();
     }
@@ -1729,6 +1752,8 @@ public partial class MainViewModel : ViewModelBase
         // recompute AFTER the stored value is in place.
         RefreshMemoryAdvice();
         JavaPath = c.JavaPath ?? "";
+        JavaDistributionText = string.IsNullOrWhiteSpace(c.JavaDistribution)
+            ? JavaDistributionPolicy.DisplayText(JavaDistribution.Temurin) : c.JavaDistribution;
         DownloadPolicyText = DownloadRoutePolicy.DisplayName(c.RoutePolicy);
         ProxyUrl = c.ProxyUrl ?? "";
         MicrosoftClientIdText = c.MicrosoftClientId ?? "";
@@ -1861,27 +1886,55 @@ public partial class MainViewModel : ViewModelBase
     private string _javaInstallStatus = "";
     public string JavaInstallStatus { get => _javaInstallStatus; set => SetProperty(ref _javaInstallStatus, value); }
 
+    /// <summary>Round-98: settings now let the player pick WHICH JDK vendor
+    /// 「一键安装 Java」 downloads. Zulu's CDN is often reachable when the
+    /// Adoptium API / GitHub assets are not.</summary>
+    public ObservableCollection<string> JavaDistributionOptions { get; } =
+        new(JavaDistributionPolicy.Options);
+
+    private string _javaDistributionText = JavaDistributionPolicy.DisplayText(JavaDistribution.Temurin);
+    public string JavaDistributionText
+    {
+        get => _javaDistributionText;
+        set
+        {
+            if (!SetProperty(ref _javaDistributionText, value)) return;
+            OnPropertyChanged(nameof(JavaInstallButtonText));
+            OnPropertyChanged(nameof(JavaInstallSourceHint));
+        }
+    }
+    public string JavaInstallButtonText =>
+        $"一键安装 Java {JavaRuntimeService.DefaultMajor} · " +
+        (JavaDistributionPolicy.FromDisplayText(JavaDistributionText) == JavaDistribution.Zulu ? "Zulu" : "Temurin");
+    public string JavaInstallSourceHint =>
+        JavaDistributionPolicy.FromDisplayText(JavaDistributionText) == JavaDistribution.Zulu
+            ? "从 Azul 官方 CDN 下载 Zulu JDK，自动校验 SHA-256 并设为默认"
+            : "从 Adoptium 官方源下载 Temurin JDK，自动校验并设为默认";
+
     /// <summary>One click: Adoptium API → background download (NetRouting +
     /// DownloadEngine) → SHA-256 verify → silent extract into our own java/
     /// dir → persist as the launcher's default Java. Idempotent, no system
     /// changes, every failure surfaces as a clear status message.
     /// Round-78: the crash card may ask for 17 (or whatever the log demanded),
     /// so the major is a parameter; the 21 button keeps its own entry point.</summary>
-    public Task InstallJava21Async() => InstallJavaMajorAsync(JavaRuntimeService.DefaultMajor);
+    public Task InstallJava21Async() => InstallJavaMajorAsync(JavaRuntimeService.DefaultMajor,
+        JavaDistributionPolicy.FromDisplayText(JavaDistributionText));
 
-    public async Task InstallJavaMajorAsync(int major)
+    public async Task InstallJavaMajorAsync(int major, JavaDistribution? distribution = null)
     {
+        var dist = distribution ?? JavaDistribution.Temurin;
+        var distName = JavaDistributionPolicy.DisplayText(dist);
         if (major < 8) major = JavaRuntimeService.DefaultMajor;
         if (IsInstallingJava) return;
         IsInstallingJava = true;
         JavaInstallProgress = 0;
-        JavaInstallStatus = $"正在获取 Java {major} 版本信息...";
+        JavaInstallStatus = $"正在获取 {distName} Java {major} 版本信息...";
         Status = JavaInstallStatus;
         _javaCts = new CancellationTokenSource();
         try
         {
             JavaPackage? pkg = null;
-            try { pkg = await _javaRuntime.ResolveAsync(major, _javaCts.Token).ConfigureAwait(true); }
+            try { pkg = await _javaRuntime.ResolveAsync(dist, major, _javaCts.Token).ConfigureAwait(true); }
             catch (Exception ex)
             {
                 // API 暂时不可达：本地已装过就直接复用，不打扰用户。
@@ -1892,7 +1945,7 @@ public partial class MainViewModel : ViewModelBase
                     JavaInstallStatus = "更新源暂时不可达，已把本机已安装的 Java 设为默认";
                     return;
                 }
-                throw new IOException("无法连接 Adoptium 更新源：" + ex.Message, ex);
+                throw new IOException($"无法连接 {distName} 更新源：" + ex.Message, ex);
             }
             if (pkg == null)
             {
@@ -1901,7 +1954,7 @@ public partial class MainViewModel : ViewModelBase
                 return;
             }
 
-            JavaInstallStatus = $"准备下载 {pkg.ReleaseName}...";
+            JavaInstallStatus = $"准备下载 {pkg.ReleaseName}（{pkg.Vendor}）...";
             var result = await _javaRuntime.InstallAsync(pkg, p => Dispatch(() =>
             {
                 var total = p.TotalBytes > 0 ? p.TotalBytes : pkg.Size;
@@ -4423,6 +4476,7 @@ public partial class MainViewModel : ViewModelBase
             c.MinMemoryMb = Math.Max(512, MemoryMb / 2);
         }
         c.JavaPath = string.IsNullOrWhiteSpace(JavaPath) ? null : JavaPath;
+        c.JavaDistribution = JavaDistributionText;
         c.RoutePolicy = DownloadRoutePolicy.Parse(DownloadPolicyText);
         c.ProxyUrl = string.IsNullOrWhiteSpace(ProxyUrl) ? null : ProxyUrl;
         c.MicrosoftClientId = string.IsNullOrWhiteSpace(MicrosoftClientIdText) ? null : MicrosoftClientIdText.Trim();

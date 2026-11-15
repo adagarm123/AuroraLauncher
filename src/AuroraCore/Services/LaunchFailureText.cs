@@ -29,7 +29,8 @@ public static class LaunchFailureText
                 $"读写游戏文件失败：{Short(ex.Message)}。检查磁盘空间与杀毒软件，然后重试。",
             System.ComponentModel.Win32Exception =>
                 $"无法启动 Java 进程：{Short(ex.Message)}。请在设置里换一个 Java 版本。",
-            OperationCanceledException => "已取消。",
+            OperationCanceledException or TaskCanceledException or TimeoutException =>
+                InstallFailureText.Describe(ex),
             _ => $"{ex.GetType().Name}：{Short(ex.Message)}（详细堆栈已写入日志）"
         };
     }

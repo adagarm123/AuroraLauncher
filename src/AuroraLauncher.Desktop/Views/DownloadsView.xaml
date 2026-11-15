@@ -47,6 +47,10 @@
                     <ProgressBar Height="6" Margin="18,10,18,0" Value="{Binding DownloadAggregatePercent, Mode=OneWay}"
                                  Minimum="0" Maximum="100"
                                  IsIndeterminate="{Binding DownloadProgressIndeterminate}"/>
+                    <TextBlock Text="{Binding FailedJobsHint}" FontSize="12" Margin="10,6,0,0"
+                               HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"
+                               Foreground="{DynamicResource DangerBrush}"
+                               Visibility="{Binding HasFailedJobs, Converter={StaticResource BoolToVis}}"/>
                 </StackPanel>
                 <StackPanel Margin="0,0,0,22">
                     <TextBlock Text="合计速度" Style="{StaticResource StatLabel}"/>

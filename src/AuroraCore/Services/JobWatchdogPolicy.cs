@@ -20,12 +20,26 @@ public static class JobWatchdogPolicy
 
     public static int TimeoutSeconds(JobState state, string? stageKey)
     {
-        if (state == JobState.Preparing) return PreparingTimeoutSeconds;
-        if (state != JobState.Running) return ActiveTimeoutSeconds;
+        // Round-98: a repair job starts in Preparing (it must appear in the
+        // list before the first byte). Once it has ENTERED a named stage it is
+        // doing real I/O — treating it as "30 s, no I/O" killed a 9 MB
+        // installer jar that simply had no progress callback at the time.
+        if (state == JobState.Preparing && string.IsNullOrWhiteSpace(stageKey))
+            return PreparingTimeoutSeconds;
         return string.Equals(stageKey, "installer-download", StringComparison.OrdinalIgnoreCase)
             ? InstallerDownloadTimeoutSeconds
             : ActiveTimeoutSeconds;
     }
+
+    /// <summary>Round-98: the 2-minute "no NEW file completed" rule applies to
+    /// multi-file batches. An installer jar is ONE file and the installer JVM
+    /// owns its own downloads — there is no file counter to advance there, so
+    /// only the byte-progress (quiet) watchdog applies in those stages.</summary>
+    public static bool ShouldUseFileStall(string? stageKey)
+        => !string.Equals(stageKey, "installer-download", StringComparison.OrdinalIgnoreCase) &&
+           !string.Equals(stageKey, InstallerRunStage, StringComparison.OrdinalIgnoreCase);
+
+    private const string InstallerRunStage = "installer-run";
 
     public static bool IsStalled(DateTime lastProgressUtc, DateTime nowUtc, int timeoutSeconds)
         => (nowUtc - lastProgressUtc).TotalSeconds >= Math.Max(1, timeoutSeconds);

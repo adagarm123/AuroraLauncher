@@ -151,11 +151,19 @@
                     <TextBlock Text="MC 1.17+ 需要 Java 16 及以上；留空 Java 路径时启动器会自动选择合适的运行时。"
                                Style="{StaticResource FieldLabel}" TextWrapping="Wrap"/>
 
-                    <!-- 一键安装 Java 21（round-59）：后台下载 + SHA-256 校验 + 静默解压 + 自动设为默认 -->
+                    <!-- 一键安装 Java（round-59 基础能力，round-98 增加 Zulu 发行版选择） -->
                     <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
-                        <Button Content="一键安装 Java 21" Command="{Binding InstallJava21Command}"
+                        <TextBlock Text="JDK 发行版" Style="{StaticResource FieldLabel}"
+                                   VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <ComboBox ItemsSource="{Binding JavaDistributionOptions}"
+                                  SelectedItem="{Binding JavaDistributionText, Mode=TwoWay}"
+                                  Width="230" VerticalAlignment="Center"
+                                  ToolTip="下载源不同，安装包都是完整 JDK；切换后需点「保存设置」才会记住"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                        <Button Content="{Binding JavaInstallButtonText}" Command="{Binding InstallJava21Command}"
                                 Style="{StaticResource PrimaryButton}" Padding="16,7"/>
-                        <TextBlock Text="从 Adoptium 官方源下载，自动校验并设为默认 Java（不改动系统环境变量）"
+                        <TextBlock Text="{Binding JavaInstallSourceHint}"
                                    Style="{StaticResource FieldLabel}" Margin="12,0,0,0" VerticalAlignment="Center"
                                    TextWrapping="Wrap" MaxWidth="380"/>
                     </StackPanel>

@@ -68,7 +68,7 @@ public sealed class LauncherService
         // 2) Run the loader installer.
         var java = await GetJavaForAsync(instance, ct).ConfigureAwait(false);
         var result = await _modLoaders.InstallAsync(instance.LoaderType, instance.MinecraftVersion, instance.LoaderVersion,
-            LauncherConfig.Instance.RootDirectory, java, onLog, ct, onStage).ConfigureAwait(false);
+            LauncherConfig.Instance.RootDirectory, java, onLog, ct, onStage, onProgress).ConfigureAwait(false);
         if (!result.Success)
             throw new InvalidOperationException(
                 $"{instance.LoaderType} 加载器安装失败：{result.Error}。请检查网络后重试，" +
@@ -241,7 +241,7 @@ public sealed class LauncherService
             onStage?.Invoke("installer-download");
             var java = await GetJavaForAsync(instance, ct).ConfigureAwait(false);
             var result = await _modLoaders.InstallAsync(instance.LoaderType, instance.MinecraftVersion, instance.LoaderVersion,
-                LauncherConfig.Instance.RootDirectory, java, onLog, ct, onStage).ConfigureAwait(false);
+                LauncherConfig.Instance.RootDirectory, java, onLog, ct, onStage, onProgress).ConfigureAwait(false);
             if (!result.Success)
                 throw new InvalidOperationException(
                     $"{instance.LoaderType} 加载器补全失败：{result.Error}。请检查网络后重试。");

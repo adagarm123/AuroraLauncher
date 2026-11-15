@@ -23,6 +23,7 @@
 | **版本解析与安装器依赖** | **第 95 轮**：本地 `versions/<id>/<id>.json` 一律优先（零网络）；`forge-` / `fabric-loader-` 等第三方 id 缺本地文件时直接判「加载器没装好」并发起补全，绝不查 Mojang 官方清单；已安装判定要求 JSON 含 `mainClass`；安装器成功必须校验真实 profile 文件存在；跑安装器 JVM 前先从 jar 内 `installer_profile.json` / `version.json` 预填充依赖（镜像 → Maven Central → 原地址，失败不阻断） |
 | **下载任务与状态栏** | **第 96 轮**：补全/安装入队即 `Preparing`（列表不再空白），标题栏由 `HeaderText` 读活跃任务、无任务回「空闲」；失败留红色任务可原地重试；按阶段超时看门狗（30s/90s/15min）；无任务时「全部取消」置灰；导航高亮只由 `CurrentPageKey` 生成并加 active 竖条 |
 | **进度诚实与模组体检** | **第 97 轮**：未完成任务封顶 99%（Floor）、`installer-run` 黑盒转不确定态、2 分钟无新文件完成判卡住；模组元数据按实例加载器优先读取（双元数据 jar 不再让 Forge 报 fabric-api）、跨加载器依赖过滤、按 modId 去重合并；`VersionRangePolicy` / `PreflightAutoFixPolicy` 为下一轮自动补齐铺路 |
+| **安装韧性与 JDK 发行版** | **第 98 轮**：installer jar 走 BMCLAPI 优先 + 全异常可降级、字节心跳喂给看门狗、按阶段超时与单文件阶段豁免、失败清 `.part`/续传台账；取消/超时统一中文提示且失败结论不被二次覆盖；失败任务不贡献总进度并标红；设置可选 Eclipse Temurin / Azul Zulu，Zulu 走 Azul CDN 且强制 SHA-256 与域名白名单 |
 | **体验**   | **游玩时长统计**（会话落盘 + 心跳，崩溃后按心跳补记，≤24h 夹取）、**启动前模组体检**（缺前置 / 冲突 / 重复 / 加载器不符，可一键补装 Fabric API）、**导出/导入 .mrpack**（拖入即装）、**存档自动备份**（启动前/退出后，保留 N 份，只读 saves）、**Ctrl+K 全局搜索**（操作/页面/实例/模组/Modrinth） |
 | **游戏性能** | **性能仪表盘**：每 2.5 秒采样游戏 JVM 峰值（专用线程；首采样等 JVM 起来）内存 + 日志 FPS 解析，写入实例元数据；结论三档（吃紧/偏低/健康）；整机 CPU/内存用 `GetSystemTimes` + `GlobalMemoryStatusEx`（零 NuGet）3 秒后台刷新 |
 | **内存**   | **自动分配**（`MemoryAllocationPolicy`，纯逻辑）：原版 2 GB、模组按档 3/4/5/6 GB、光影 ≥4 GB，**上限 = 物理内存 55%（对齐 512 MB、硬顶 16 GB）**，上限赢过基础值；在 `LauncherService` 解析，`-Xms` ≤ `-Xmx`；手动值原样使用（超上限时输入框下方实时红字，不静默改写）；老配置默认关、新装默认开。**释放内存只碰自己**：清图标缓存 + `SetProcessWorkingSetSize(当前进程)`，手动入口在 `Task.Run` 内（唯一允许 `GC.Collect` 处），托盘闲置 5 分钟自动清一次（不含强制 GC），**从不枚举/触碰游戏进程** |
@@ -87,4 +88,4 @@
 ---
 
 ## 测试结果
-自测现状见 `TEST_RESULTS.md`：**149 项全部通过**（Unit 142 离线 + Integration 7 联网），含 **36 条机制防线**与缓存一致性校验；CI 分层运行（unit 每次 push、integration 每日定时）。
+自测现状见 `TEST_RESULTS.md`：**156 项全部通过**（Unit 149 离线 + Integration 7 联网），含 **39 条机制防线**与缓存一致性校验；CI 分层运行（unit 每次 push、integration 每日定时）。

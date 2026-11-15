@@ -25,3 +25,4 @@
 | [ADR-0017](ADR-0017-version-source-and-installer-dependencies.md) | 版本来源与安装器依赖（本地优先；第三方 id 不查官方清单；依赖预填充且成功要验真） | 已采纳（含防线测试） |
 | [ADR-0018](ADR-0018-download-job-single-source.md) | 下载任务单一状态来源（补全入队、标题栏跟任务走、看门狗、导航单高亮；含已装 profile 认领） | 已采纳（含防线测试） |
 | [ADR-0019](ADR-0019-progress-honesty-and-loader-aware-preflight.md) | 进度诚实与加载器感知体检（未完不成 100%、黑盒不确定态、停滞看门狗；跨加载器元数据与依赖过滤） | 已采纳（含防线测试） |
+| [ADR-0020](ADR-0020-installer-resilience-and-jdk-vendors.md) | 安装器下载韧性与 JDK 发行版可插拔（镜像优先、心跳、失败状态诚实、Zulu 白名单） | 已采纳（含防线测试） |

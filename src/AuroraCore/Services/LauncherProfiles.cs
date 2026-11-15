@@ -120,6 +120,18 @@ public static class LauncherProfiles
         var dependencyFailure = InstallerDependencies.ExplainDependencyFailure(installerTail);
         if (dependencyFailure != null) return dependencyFailure;
 
+        // Round-98: the installer JVM has its OWN network stack (no mirror,
+        // no proxy from our DownloadEngine). Its timeouts showed up as a wall
+        // of Java stack frames with "Connection timed out: connect", which the
+        // player cannot act on. Name the real cause and the next step.
+        if (installerTail.Contains("Connection timed out", StringComparison.OrdinalIgnoreCase) ||
+            installerTail.Contains("ConnectException", StringComparison.OrdinalIgnoreCase) ||
+            installerTail.Contains("Failed to download version manifest", StringComparison.OrdinalIgnoreCase) ||
+            installerTail.Contains("SocketTimeoutException", StringComparison.OrdinalIgnoreCase))
+            return "Forge / NeoForge 安装器在联网拉取 Mojang 版本清单或运行处理器时连接超时了" +
+                   "（它使用自己的 JVM 网络栈，不走启动器的镜像线路）。启动器已经预先补齐它需要的依赖库，" +
+                   "这一步仍失败说明是那条直连被阻断；请切换网络/代理后点「重试」，或在设置里把下载线路改成镜像。";
+
         if (installerTail.Contains("Could not download", StringComparison.OrdinalIgnoreCase) ||
             installerTail.Contains("UnknownHostException", StringComparison.OrdinalIgnoreCase))
             return "安装器在下载它自己的依赖时断网了。检查网络/代理后重试（安装器不经过启动器的镜像线路）。";

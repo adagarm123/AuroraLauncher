@@ -37,11 +37,19 @@ public static class JobProgressPolicy
         var speed = 0.0;
         var active = 0;
         var queued = 0;
+        var hasFailed = false;
         foreach (var j in jobs)
         {
             switch (j.State)
             {
                 case JobState.Canceled:
+                    continue;
+                // Round-98: a FAILED job must not contribute its last reported
+                // percent (the engine counts failed files as "completed", so it
+                // was often 100). Otherwise the summary said 100% above a red
+                // "失败 / 0%" row.
+                case JobState.Failed:
+                    hasFailed = true;
                     continue;
                 case JobState.Queued:
                     queued++;
@@ -69,7 +77,9 @@ public static class JobProgressPolicy
         // Round-97: a live job (running OR preparing OR queued) can never make
         // the summary read 100 %, even if every stage is technically "past".
         var anyPending = active > 0 || queued > 0;
-        return (ProgressDisplayPolicy.Display(Math.Clamp(percent, 0, 100), !anyPending),
+        // Any failed row in this session keeps the summary out of "complete"
+        // territory; the UI also paints it red via HasFailedJobs.
+        return (ProgressDisplayPolicy.Display(Math.Clamp(percent, 0, 100), !anyPending && !hasFailed),
                 speed, active, queued);
     }
 
@@ -238,11 +248,5 @@ public sealed class DownloadJobManager
     public int FinishedCount => Jobs.Count(j => j.IsFinished);
 
     /// <summary>A raw exception string is not user-facing text.</summary>
-    private static string Humanize(Exception ex) => ex switch
-    {
-        OperationCanceledException => "已取消",
-        IOException => "读写文件失败：" + ex.Message,
-        HttpRequestException => "网络请求失败：" + ex.Message,
-        _ => ex.Message
-    };
+    private static string Humanize(Exception ex) => InstallFailureText.Describe(ex);
 }

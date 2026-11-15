@@ -18,12 +18,21 @@ public static class HelpContent
     /// <summary>Round number of the newest entry in <see cref="Changelog"/> —
     /// bump together with the changelog entry; drives the one-time "已更新"
     /// startup toast (dismissed permanently once the user opens the page).</summary>
-    public const int LatestChangelogRound = 97;
+    public const int LatestChangelogRound = 98;
     /// <summary>更新日志（说人话版本：无技术名词、用户视角）——独立页面
     /// 「更新日志」使用；模板见 docs/release-notes-template.md。
     /// 每轮发布时在此置顶新增一条。</summary>
     public static IEnumerable<HelpTopicVM> Changelog() => new[]
     {
+        new HelpTopicVM
+        {
+            Category = "更新日志", Glyph = "\uE777", Title = "【第 98 轮更新】安装器不再「被取消」，设置里可以选 Zulu Java",
+            Summary = "看门狗误杀与英文异常已修；失败任务不再显示总进度 100%；新增 Azul Zulu JDK 下载",
+            Body = "1) 你截图里那句 The operation was canceled. 不是网络断连，也不是你点了取消——是启动器自己把任务掐了，而且是我前面两轮加的机制互相叠加造成的：下载 installer.jar 时没有把字节进度回报给任务，看门狗在静默上限后判定卡住、中止了任务；随后底层取消异常又二次覆盖了看门狗已经写好的中文提示。\\n\\n" +
+                   "现在：安装器 jar 优先走 BMCLAPI 镜像（超时/断连会自动换线路），下载过程持续给任务心跳；已进入具体阶段的任务不再按「准备中 30 秒」误杀，单文件的安装器阶段也不再看「2 分钟没有新文件完成」；取消和超时统一翻译成「下载超时被中止……请点重试」，不再出现英文异常；失败任务不会再把左侧总进度顶到 100%，并且会显示红色失败提示；每次重试前都会清掉没下完的 .part 和续传台账。\\n\\n" +
+                   "2) 设置 → Java 环境新增「JDK 发行版」下拉：Eclipse Temurin (Adoptium) / Azul Zulu。选 Zulu 后点「一键安装 Java 21」会从 Azul 官方 CDN 下载完整 JDK，和 Temurin 一样自动校验 SHA-256、静默解压到启动器自己的 java 目录并设为默认，不改动系统环境变量。Zulu 的 CDN 在 Adoptium 源连不上时往往还能用。两家官方源都已实跑解析成功。\\n\\n" +
+                   "注意：Forge 官方安装器 JVM 自己发起的联网请求（拉 Mojang 版本清单、跑 processor）不走启动器线路，这一步遇到网络阻断仍会失败；现在失败提示会明确说明原因和下一步，点「重试」即可。"
+        },
         new HelpTopicVM
         {
             Category = "更新日志", Glyph = "\uE777", Title = "【第 97 轮更新】进度不再假 100%，Forge 不再「需要」Fabric API",
