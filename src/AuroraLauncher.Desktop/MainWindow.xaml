@@ -74,6 +74,8 @@
                 <!-- Navigation -->
                 <StackPanel DockPanel.Dock="Top">
                     <Button Style="{StaticResource NavItem}" CommandParameter="Home"
+                            BorderThickness="3,0,0,0"
+                            BorderBrush="{Binding CurrentPageKey, Converter={StaticResource PageActiveBorder}, ConverterParameter=Home}"
                             Background="{Binding CurrentPageKey, Converter={StaticResource PageActive}, ConverterParameter=Home}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE80F;" Style="{StaticResource NavGlyph}"/>
@@ -81,6 +83,8 @@
                         </StackPanel>
                     </Button>
                     <Button Style="{StaticResource NavItem}" CommandParameter="Download"
+                            BorderThickness="3,0,0,0"
+                            BorderBrush="{Binding CurrentPageKey, Converter={StaticResource PageActiveBorder}, ConverterParameter=Download}"
                             Background="{Binding CurrentPageKey, Converter={StaticResource PageActive}, ConverterParameter=Download}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE896;" Style="{StaticResource NavGlyph}"/>
@@ -88,6 +92,8 @@
                         </StackPanel>
                     </Button>
                     <Button Style="{StaticResource NavItem}" CommandParameter="Instances"
+                            BorderThickness="3,0,0,0"
+                            BorderBrush="{Binding CurrentPageKey, Converter={StaticResource PageActiveBorder}, ConverterParameter=Instances}"
                             Background="{Binding CurrentPageKey, Converter={StaticResource PageActive}, ConverterParameter=Instances}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE71D;" Style="{StaticResource NavGlyph}"/>
@@ -95,6 +101,8 @@
                         </StackPanel>
                     </Button>
                     <Button Style="{StaticResource NavItem}" CommandParameter="Mods"
+                            BorderThickness="3,0,0,0"
+                            BorderBrush="{Binding CurrentPageKey, Converter={StaticResource PageActiveBorder}, ConverterParameter=Mods}"
                             Background="{Binding CurrentPageKey, Converter={StaticResource PageActive}, ConverterParameter=Mods}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE8F1;" Style="{StaticResource NavGlyph}"/>
@@ -102,6 +110,8 @@
                         </StackPanel>
                     </Button>
                     <Button Style="{StaticResource NavItem}" CommandParameter="Downloads"
+                            BorderThickness="3,0,0,0"
+                            BorderBrush="{Binding CurrentPageKey, Converter={StaticResource PageActiveBorder}, ConverterParameter=Downloads}"
                             Background="{Binding CurrentPageKey, Converter={StaticResource PageActive}, ConverterParameter=Downloads}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE895;" Style="{StaticResource NavGlyph}"/>
@@ -110,6 +120,8 @@
                     </Button>
                     <Separator Margin="14,10"/>
                     <Button Style="{StaticResource NavItem}" CommandParameter="Settings"
+                            BorderThickness="3,0,0,0"
+                            BorderBrush="{Binding CurrentPageKey, Converter={StaticResource PageActiveBorder}, ConverterParameter=Settings}"
                             Background="{Binding CurrentPageKey, Converter={StaticResource PageActive}, ConverterParameter=Settings}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE713;" Style="{StaticResource NavGlyph}"/>
@@ -117,6 +129,8 @@
                         </StackPanel>
                     </Button>
                     <Button Style="{StaticResource NavItem}" CommandParameter="Logs"
+                            BorderThickness="3,0,0,0"
+                            BorderBrush="{Binding CurrentPageKey, Converter={StaticResource PageActiveBorder}, ConverterParameter=Logs}"
                             Background="{Binding CurrentPageKey, Converter={StaticResource PageActive}, ConverterParameter=Logs}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE7C3;" Style="{StaticResource NavGlyph}"/>
@@ -124,6 +138,8 @@
                         </StackPanel>
                     </Button>
                     <Button Style="{StaticResource NavItem}" CommandParameter="Changelog"
+                            BorderThickness="3,0,0,0"
+                            BorderBrush="{Binding CurrentPageKey, Converter={StaticResource PageActiveBorder}, ConverterParameter=Changelog}"
                             Background="{Binding CurrentPageKey, Converter={StaticResource PageActive}, ConverterParameter=Changelog}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE777;" Style="{StaticResource NavGlyph}"/>
@@ -131,6 +147,8 @@
                         </StackPanel>
                     </Button>
                     <Button Style="{StaticResource NavItem}" CommandParameter="Help"
+                            BorderThickness="3,0,0,0"
+                            BorderBrush="{Binding CurrentPageKey, Converter={StaticResource PageActiveBorder}, ConverterParameter=Help}"
                             Background="{Binding CurrentPageKey, Converter={StaticResource PageActive}, ConverterParameter=Help}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="?" FontSize="16" FontWeight="Bold" Width="28" TextAlignment="Center" VerticalAlignment="Center"/>
@@ -202,7 +220,7 @@
                         <!-- 状态文字：按语义着色（错误红 / 成功绿 / 常规），加粗放大更醒目 -->
                         <Border CornerRadius="8" Padding="12,5" Margin="10,0,0,0"
                                 Background="{Binding Status, Converter={StaticResource StatusToBrush}, ConverterParameter=bg}">
-                            <TextBlock Text="{Binding Status}" FontSize="13.5" FontWeight="SemiBold" VerticalAlignment="Center"
+                            <TextBlock Text="{Binding HeaderText}" FontSize="13.5" FontWeight="SemiBold" VerticalAlignment="Center"
                                        Foreground="{Binding Status, Converter={StaticResource StatusToBrush}}"/>
                         </Border>
                     </StackPanel>

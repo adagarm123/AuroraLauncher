@@ -5114,14 +5114,103 @@ internal static class Program
             var run = text.IndexOf("await RunJavaAsync(java.JavaExecutable", StringComparison.Ordinal);
             Assert(prefill > 0 && run > prefill, "必须在启动安装器 JVM 之前预填充依赖");
             Assert(text.Contains("Required = false"), "预填充失败不能中断安装（依赖是可选的）");
-            Assert(text.Contains("File.Exists(Path.Combine(gameRoot, \"versions\", d, d + \".json\"))"),
-                "成功必须要求真实的版本 JSON 存在");
+            Assert(text.Contains("HasUsableProfile(d)") && text.Contains("mainClass"),
+                "成功必须要求真实可用（含 mainClass）的版本 JSON");
+            Assert(text.Contains("LoaderProfileLocator.Pick("),
+                "没有新建目录时必须扫描并认领已安装的加载器 profile（第 96 轮回归）");
             Assert(!text.Contains("result.VersionId = detected ?? versionIdHint"),
                 "不许再把下载地址推导的 hint 当成已安装版本写进实例");
             var deps = File.ReadAllText(Path.Combine(FindSourceRoot()!, "src", "AuroraCore",
                 "Services", "InstallerDependencies.cs"));
             Assert(deps.Contains("repo1.maven.org") && deps.Contains("bmclapi"),
                 "至少要准备镜像与 Maven Central 两条线路");
+        });
+
+        Check("LoaderProfileLocator: 认领已装好的 profile，拒绝空壳与假 id（第 96 轮）", () =>
+        {
+            Assert(LoaderProfileLocator.VersionToken("forge-1.20.1-47.4.22") == "47.4.22", "取尾部版本号");
+            Assert(LoaderProfileLocator.VersionToken("1.20.1-forge-47.4.22") == "47.4.22", "中缀形式也要认");
+            var dirs = new[] { "1.20.1", "forge-1.20.1-47.4.22", "1.20.1-forge-47.4.22",
+                               "fabric-loader-0.20.1-1.20.1", "1.21.10-forge-47.4.22" };
+            bool HasProfile(string d) => d == "1.20.1-forge-47.4.22";
+            Assert(LoaderProfileLocator.Pick(dirs, "Forge", "forge-1.20.1-47.4.22", "1.20.1", HasProfile)
+                   == "1.20.1-forge-47.4.22", "必须认领已存在且带 JSON 的真实 profile");
+            Assert(LoaderProfileLocator.Pick(dirs, "Forge", "forge-1.20.1-47.4.22", "1.20.1", _ => false) == null,
+                "目录存在但没有版本 JSON 不能算已安装");
+            Assert(!LoaderProfileLocator.Matches("fabric-loader-0.20.1-1.20.1", "Forge", null, "1.20.1"),
+                "别的加载器不能被认领");
+            Assert(!LoaderProfileLocator.Matches("1.21.10-forge-47.4.22", "Forge", null, "1.20.1"),
+                "MC 版本不匹配不能被认领");
+        });
+
+        Check("JobWatchdogPolicy: 准备 30 秒 / 安装器下载 90 秒 / 运行 15 分钟（第 96 轮）", () =>
+        {
+            Assert(JobWatchdogPolicy.TimeoutSeconds(JobState.Preparing, null) == 30, "准备阶段 30 秒");
+            Assert(JobWatchdogPolicy.TimeoutSeconds(JobState.Running, "installer-download") == 90,
+                "9MB 安装器实测下过 33 秒，30 秒会误杀");
+            Assert(JobWatchdogPolicy.TimeoutSeconds(JobState.Running, "installer-run") == 900,
+                "官方安装器实测 94~165 秒无进度，必须跟它自己的 15 分钟上限对齐");
+            var now = DateTime.UtcNow;
+            Assert(!JobWatchdogPolicy.IsStalled(now.AddSeconds(-10), now, 30), "刚有进度不算卡住");
+            Assert(JobWatchdogPolicy.IsStalled(now.AddSeconds(-31), now, 30), "超过阈值判定卡住");
+            Assert(JobWatchdogPolicy.StalledMessage(now.AddSeconds(-31), now, 30).Contains("重试"),
+                "卡住提示要给出重试出口");
+        });
+
+        Check("JobProgressPolicy / JobState: Preparing 也算活跃任务（第 96 轮）", () =>
+        {
+            var (pct, speed, active, queued) = JobProgressPolicy.Aggregate(
+                new[] { new DownloadJobSnapshot(JobState.Preparing, 0, 0) });
+            Assert(active == 1 && queued == 0 && pct == 0 && speed == 0,
+                "准备中的任务必须让汇总面板显示 1 个进行中，而不是「当前没有下载任务」");
+            var mgr = new DownloadJobManager(a => a());
+            var job = mgr.Create("实例", "x", "");
+            Assert(job.CanCancel, "初始任务可取消");
+            job.MarkPreparing();
+            Assert(job.StateText == "准备中" && job.CanCancel, "准备中可见且仍可取消");
+        });
+
+        Check("NavigationHighlight: 单一 CurrentPageKey 最多一个高亮（第 96 轮）", () =>
+        {
+            var keys = new[] { "Home", "Instances", "Downloads", "Settings" };
+            Assert(NavigationHighlight.ActiveCount("Downloads", keys) == 1, "只能有一个 active");
+            Assert(NavigationHighlight.IsActive("Downloads", "Downloads"), "大小写不敏感");
+            Assert(!NavigationHighlight.IsActive("Downloads", "Instances"), "别的页面不能同时亮");
+            Assert(NavigationHighlight.ActiveCount(null, keys) == 0, "没有当前页时全灭");
+        });
+
+        Check("Guard: 补全必须走 DownloadJob，标题栏不得脱离任务队列（第 96 轮）", () =>
+        {
+            var root = FindSourceRoot()!;
+            string Read(string f) => File.ReadAllText(Path.Combine(root, f));
+            var vm = Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.cs");
+            Assert(vm.Contains("await RunRepairJobAsync(instance)"), "启动前的补全必须走 Job 流程");
+            Assert(!vm.Contains("InitStages(BuildStages(instance.LoaderType)"),
+                "不许再用脱离 Job 的全局阶段表驱动补全");
+            Assert(vm.Contains("public string HeaderText") && vm.Contains("_jobManager.Jobs.FirstOrDefault"),
+                "标题栏必须由活跃任务驱动，而不是独立的全局 bool/字符串");
+            Assert(vm.Contains("CheckStalledJobs(); // Round-96"), "看门狗必须挂在轮询上（版本不变也要跑）");
+            Assert(vm.Contains("FinishJob(job, ex, false)"), "失败要留在列表里而不是只抛全局异常");
+            var mainX = Read("src/AuroraLauncher.Desktop/MainWindow.xaml");
+            Assert(mainX.Contains("Text=\"{Binding HeaderText}\""), "XAML 状态栏必须绑 HeaderText");
+        });
+
+        Check("Guard: 全部取消置灰 / 错误可重试 / 导航单一来源（第 96 轮）", () =>
+        {
+            var root = FindSourceRoot()!;
+            string Read(string f) => File.ReadAllText(Path.Combine(root, f));
+            var view = Read("src/AuroraLauncher.Desktop/Views/DownloadsView.xaml");
+            Assert(view.Contains("IsEnabled=\"{Binding HasCancellableJobs}\""), "没任务时全部取消必须置灰");
+            Assert(view.Contains("Command=\"{Binding RetryLastFailedJobCommand}\""), "错误横幅要能一键重试");
+            var mainX = Read("src/AuroraLauncher.Desktop/MainWindow.xaml");
+            var bars = System.Text.RegularExpressions.Regex.Matches(
+                mainX, @"PageActiveBorder\}, ConverterParameter=").Count;
+            Assert(bars == 9, $"9 个导航项都要有 active 竖条，实际 {bars}");
+            var single = System.Text.RegularExpressions.Regex.Matches(
+                mainX, @"Background=""\{Binding CurrentPageKey, Converter=\{StaticResource PageActive\}").Count;
+            Assert(single == 9, "所有导航高亮必须只绑 CurrentPageKey 这一个来源");
+            Assert(Read("src/AuroraLauncher.Desktop/App.xaml").Contains("PageActiveBorderConverter"),
+                "active 竖条转换器必须注册");
         });
 
         Console.WriteLine($"\n=== Result: {_passed} passed, {_failed} failed, {_skipped} skipped ===");        Environment.Exit(_failed == 0 ? 0 : 1);

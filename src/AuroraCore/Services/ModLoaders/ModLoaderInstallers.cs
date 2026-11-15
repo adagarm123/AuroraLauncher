@@ -450,16 +450,47 @@ public sealed class ModLoaderInstaller
                 n!.Contains(type.ToString(), StringComparison.OrdinalIgnoreCase) ||
                 (versionIdHint != null && n!.Contains(versionIdHint, StringComparison.OrdinalIgnoreCase)));
 
-            // Round-95: success means a REAL profile on disk. Previously the
-            // installer's URL *hint* ("forge-1.20.1-47.4.22") was stored as the
-            // installed version even when nothing was produced — that id then
-            // poisoned every later launch with "not found in manifest".
-            var profileOk = detected is { Length: > 0 } d &&
-                File.Exists(Path.Combine(gameRoot, "versions", d, d + ".json"));
-            result.VersionId = profileOk ? detected : null;
+            string HasProfile(string d) => Path.Combine(gameRoot, "versions", d, d + ".json");
+            bool HasUsableProfile(string d)
+            {
+                var f = HasProfile(d);
+                if (!File.Exists(f) || new FileInfo(f).Length <= 128) return false;
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(f));
+                    return doc.RootElement.TryGetProperty("mainClass", out var mc) &&
+                           mc.ValueKind == System.Text.Json.JsonValueKind.String &&
+                           !string.IsNullOrWhiteSpace(mc.GetString());
+                }
+                catch { return false; }
+            }
+
+            // Round-96: `created` only contains directories that did NOT exist
+            // before this run. When an earlier install already produced the
+            // profile (very common for an instance that still holds a stale
+            // hint id), we must ADOPT it instead of reporting a false failure.
+            var versionsRoot = Path.Combine(gameRoot, "versions");
+            var candidate = detected;
+            if (string.IsNullOrEmpty(candidate) && Directory.Exists(versionsRoot))
+            {
+                var dirs = Directory.GetDirectories(versionsRoot)
+                    .Select(Path.GetFileName).Where(n => !string.IsNullOrEmpty(n)).Select(n => n!);
+                candidate = LoaderProfileLocator.Pick(dirs, type.ToString(), versionIdHint, mcVersion, HasUsableProfile);
+                if (!string.IsNullOrEmpty(candidate))
+                {
+                    _log.Info("ModLoader", $"复用已安装的加载器版本 {candidate}（旧实例可能存着过时的版本 id）");
+                    log?.Invoke($"[ModLoader] 检测到已装好的 {candidate}，直接认领（会更新实例里的版本 id）");
+                }
+            }
+
+            // Round-95: success means a REAL, usable profile on disk. The URL
+            // *hint* ("forge-1.20.1-47.4.22") is never accepted as a result.
+            var profileOk = candidate is { Length: > 0 } d && HasUsableProfile(d);
+            result.VersionId = profileOk ? candidate : null;
             result.Success = profileOk;
+            result.LoaderVersion = result.LoaderVersion ?? loaderVersion;
             if (!profileOk)
-                result.Error = $"安装器运行结束，但没有生成可用的加载器版本文件（期望 versions/{detected ?? versionIdHint}/…json）。" +
+                result.Error = $"安装器运行结束，但新建和已有目录里都没有找到可用的加载器版本文件（期望 versions/{versionIdHint}/…json 或同类 profile）。" +
                                (versionIdHint != null
                                    ? $"提示 id「{versionIdHint}」只是从下载地址推导出来的，不能当作已安装版本。"
                                    : "") +

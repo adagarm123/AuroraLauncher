@@ -1,6 +1,6 @@
 # 更新日志（CHANGELOG）
 
-> 完整历史变更记录：**第 1–2 轮交付说明 + 第 3 轮至第 94 轮逐轮补充**（末轮始终为当前版本的前一轮）。
+> 完整历史变更记录：**第 1–2 轮交付说明 + 第 3 轮至第 95 轮逐轮补充**（末轮始终为当前版本的前一轮）。
 > 本文件由 `README.md` 的历史章节整体搬迁而来，正文保持原样（未改写、未删减）。
 >
 > - **最新一轮**始终放在 [README](README.md) 的「最新一轮的更新内容」章节。
@@ -1929,3 +1929,39 @@ BattleArmory TACZ  loader=Forge  resolved=(null)                      mods=0 →
 **仍需你实测**：真实导入一个 Forge 整合包走完整条链（加载器 + 模组），以及 NeoForge 版本（用的是同一个安装器通道，但我只实测了 Forge 1.20.1）。
 
 **配套**：`BuildInfo.CurrentRound` → 94、应用内更新日志置顶第 94 轮、第 93 轮归档进 CHANGELOG、新增 ADR-0016。
+
+## 更新补充（第 95 轮：版本来源本地优先与安装器依赖预填充）
+
+### 第 95 轮：Forge 装到一半 + 启动时 "not found in manifest"（2026-11-15）
+
+**你给的全链路日志里，其实是两件事叠在一起**
+
+- `11:44:53` 安装器自己报 `These libraries failed to download. Try again. com.google.code.findbugs:jsr305:3.0.2` → `Installer exited with code 1`。它用自己的 JVM 网络库去 `maven.creeperhost.net` 拉依赖，完全不走启动器的镜像/重试线路；日志里同期就有镜像 502、官方/镜像来回切换，所以是网络波动。
+- `11:48:34` 点启动时 `Version 'forge-1.20.1-47.4.22' not found in manifest.`。堆栈是 `LaunchAsync → RepairAsync → GameInstaller.InstallAsync → VersionResolver → GetVersionJsonRawAsync → GetEntryAsync`：**走的是「补全文件」，不是启动时解析本地版本**。
+
+**先纠正诊断里的三处偏差（都有实测依据）**
+
+1. `launcher_profiles.json` 不用手动建了 —— 第 94 轮已自动补。日志 `10:59` 那次还是 "no Minecraft launcher profile"，`11:42` 之后这个错误就消失了，说明换到新 EXE 后已经生效。
+2. Java 25 不是这次的根因：第 94 轮用同一台机器的 Java 25 实跑 Forge 1.20.1-47.4.22，180 秒装成功；这次连 `trove` 都下载并校验通过了，只有 `jsr305` 挂了。
+3. `VersionResolver` **本来就是本地优先**（`ResolveRecursive` 先读 `versions/<id>/<id>.json`）。真正的问题是：实例里存着 `forge-1.20.1-47.4.22`，磁盘上却没有对应 profile —— 它是从安装器下载地址推导出来的 **hint**，被当成「已安装版本」写进了实例。于是本地优先落空，回落到官方清单，而第三方 id 永远不在 Mojang 清单里。
+
+**改法（把「状态不一致」和「网络失败」分别堵死）**
+
+- 新增 `VersionSourcePolicy`：本地 JSON 存在 → 直接用（零网络）；本地不存在且是 `forge-` / `1.20.1-forge-` / `fabric-loader-` 等第三方 id → 直接说「加载器没装好，请补全」，**绝不发起官方清单请求**；只有真正的原版 id 才会去查清单。
+- `VersionManifestService.GetVersionJsonRawAsync` 改成本地优先；`VersionResolver` 里损坏的本地 loader profile 不再回落清单；`GameInstaller.InstallAsync` 入口挡住「没有本地 profile 的 loader id」；`RepairAsync` 在把它交给 GameInstaller 之前再拦一道。顺序由 Guard 锁死。
+- `IsVersionJsonInstalled` 从「文件 >128 字节就算装好」改成「必须是含 `mainClass` 的合法 JSON」—— 上次安装中断留下的空壳不再骗过启动闸门，现在会重新走安装器。
+- `ModLoaderInstaller` 不再把 hint 当成功：必须检测到 `versions/<id>/<id>.json` 真实存在才算装好，否则明确报「没有生成版本文件」，不许把假 id 写回实例。
+- **依赖预填充**：跑安装器 JVM 之前，先读 installer jar 里的 `installer_profile.json` / `version.json`，把缺失的库用启动器自己的下载引擎补到 `libraries/`（镜像 → Maven Central → 安装器原地址三轮候选，全部 `Required=false`，补不到也不阻断安装）。jsr305 这类通用库不再指望 creeperhost 一个主机。
+- 错误翻译：`These libraries failed to download` 会点名具体坐标（如 `com.google.code.findbugs:jsr305:3.0.2`）并说明下一步，不再甩六行 maven 输出。
+
+**验证汇总**
+
+- `--unit` **129/129**、`--all` **136/136**（新增 6 项：版本来源策略、Maven 坐标/依赖清单/多线路、失败坐标提取、空壳 profile 判定，以及 2 条静态防线）
+- **机制防线 32 条**：新增「本地版本 JSON 优先于官方清单、第三方 id 不得发起清单查询」「安装器运行前必须预填充依赖且成功必须校验真实 profile」
+- 发布：EXE + 94→95 补丁 + 签名清单（见文末）
+
+**你之前失败的那个实例**：升级到这一版后点「实例管理 → 补全文件」即可 —— 它会先补依赖、重跑安装器，再把真实 id 写回实例，不会再出现 "not found in manifest"。
+
+**仍需你实测**：本机 `--forge-install-smoke` 跑了 3 次 —— 成功 2 次（165 秒 / 94 秒，预填充 29/29），失败 1 次（47 秒，网络瞬时 502）。也就是说预填充能挡住「jsr305 这类通用库拉不到」，但官方安装器自己发起的那部分请求仍可能撞上瞬时断网，**遇到时重试一次即可**；彻底免疫需要官方安装器走启动器的线路，那不在本轮范围。NeoForge 的 installer jar 走同一条通道，但这轮只做了纯逻辑验证。
+
+**配套**：`BuildInfo.CurrentRound` → 95、应用内更新日志置顶第 95 轮、第 94 轮归档进 CHANGELOG、新增 ADR-0017。

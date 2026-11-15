@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Data;
 using System.Windows.Media;
+using AuroraCore.Services;
 
 namespace AuroraLauncher.Desktop.Converters;
 
@@ -10,7 +11,9 @@ public sealed class PageActiveConverter : IValueConverter
 {
     public object Convert(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
     {
-        var active = string.Equals(value?.ToString(), parameter?.ToString(), StringComparison.OrdinalIgnoreCase);
+        // Round-96: shared pure rule, so background and active bar can never
+        // disagree about which page is selected.
+        var active = NavigationHighlight.IsActive(value?.ToString(), parameter?.ToString());
         // Round-66: reuse the frozen system brush. Every navigation used to
         // allocate 8 new SolidColorBrush instances (one per inactive nav item).
         if (!active) return Brushes.Transparent;

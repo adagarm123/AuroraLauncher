@@ -192,7 +192,9 @@ public partial class MainViewModel : ViewModelBase
             _jobManager.CancelAll();
             RefreshDownloadAggregate(force: true);
             Status = "已取消所有下载任务";
-        });
+        }, _ => HasCancellableJobs);
+        RetryLastFailedJobCommand = new RelayCommand(async _ => await RetryLastFailedJobAsync(),
+            _ => CanRetryLastFailed);
         ClearFinishedDownloadsCommand = new RelayCommand(_ => ClearFinishedDownloads());
         ResumePendingDownloadsCommand = new RelayCommand(async _ => await ResumePendingDownloadsAsync());
         DismissPendingDownloadsCommand = new RelayCommand(_ => DismissPendingDownloads());
@@ -989,8 +991,37 @@ public partial class MainViewModel : ViewModelBase
     public DownloadStatus Download { get; } = new();
 
     // ---- properties ----
-    public string Status { get => _status; set => SetProperty(ref _status, value); }
+    public string Status
+    {
+        get => _status;
+        set { if (SetProperty(ref _status, value)) OnPropertyChanged(nameof(HeaderText)); }
+    }
     public bool IsBusy { get => _isBusy; set => SetProperty(ref _isBusy, value); }
+
+    /// <summary>Round-96: the title bar has ONE source of truth. While any job
+    /// is alive it is driven by that job (title + live stage); when the last job
+    /// finishes, an install-driven header falls back to 空闲 instead of leaving
+    /// a stale "正在安装…" above an empty list. Non-install status text passes
+    /// through unchanged (update checks, exports, game exit, errors).</summary>
+    public string HeaderText
+    {
+        get
+        {
+            var live = _jobManager.Jobs.FirstOrDefault(j => !j.IsFinished);
+            if (live != null)
+            {
+                var stage = string.IsNullOrWhiteSpace(live.StageText) ? live.StateText : live.StageText;
+                return $"正在安装… {live.Title} · {stage}";
+            }
+            return _jobDrivenStatus ? "空闲" : _status;
+        }
+    }
+
+    /// <summary>Round-96: 全部取消 must be grey when there is nothing to cancel.</summary>
+    public bool HasCancellableJobs => _jobManager.Jobs.Any(j => j.CanCancel);
+    public bool CanRetryLastFailed => _lastFailedRepairInstanceId != null;
+    private bool _jobDrivenStatus;
+    private string? _lastFailedRepairInstanceId;
     public string VersionFilter { get => _versionFilter; set { if (SetProperty(ref _versionFilter, value)) _ = LoadVersionsAsync(); } }
     private DispatcherTimer? _loaderCardsDebounce;
     private string _debounceTargetVersion = "";
@@ -1359,18 +1390,23 @@ public partial class MainViewModel : ViewModelBase
     public RelayCommand ResumePendingDownloadsCommand { get; } = null!;
     public RelayCommand DismissPendingDownloadsCommand { get; } = null!;
     public RelayCommand CancelAllDownloadsCommand { get; }
+    public RelayCommand RetryLastFailedJobCommand { get; }
     public RelayCommand ClearFinishedDownloadsCommand { get; }
 
     /// <summary>Creates a job, waits for a download slot (max 3 at once) and
     /// switches to the download manager. Throws OperationCanceledException when
     /// the job is cancelled while queued.</summary>
-    private async Task<DownloadJob> BeginJobAsync(string kind, string title, string instance)
+    private async Task<DownloadJob> BeginJobAsync(string kind, string title, string instance,
+        bool keepPreparing = false)
     {
         var job = _jobManager.Create(kind, title, instance ?? "");
+        job.MarkPreparing();
+        _jobDrivenStatus = true;
+        OnPropertyChanged(nameof(HeaderText));
         SelectedDownloadJob = job;
         if (CurrentPageKey != "Downloads") Navigate("Downloads");
         RefreshDownloadAggregate(force: true);
-        await _jobManager.StartAsync(job);
+        await _jobManager.StartAsync(job, markRunning: !keepPreparing);
         RefreshDownloadAggregate(force: true);
         Logger.Instance.Info("Download",
             $"任务开始：{kind}「{title}」" + (string.IsNullOrWhiteSpace(instance) ? "" : $"（实例 {instance}）"));
@@ -1395,7 +1431,100 @@ public partial class MainViewModel : ViewModelBase
             InstallError = null;
             InstallSuccess = successText;
         }
+        if (error != null && job.Kind == "修复") _lastFailedRepairInstanceId = job.InstanceName;
+        else if (error == null && !canceled) _lastFailedRepairInstanceId = null;
+        _jobDrivenStatus = _jobManager.Jobs.Any(j => !j.IsFinished);
+        OnPropertyChanged(nameof(HeaderText));
+        OnPropertyChanged(nameof(CanRetryLastFailed));
+        RetryLastFailedJobCommand.RaiseCanExecuteChanged();
         RefreshDownloadAggregate(force: true);
+    }
+
+    /// <summary>Round-96: a repair is a DOWNLOAD JOB, not a global status
+    /// string. The row exists as 准备中 before the first byte moves, follows
+    /// every stage, and stays in the list (red, retryable) on failure.</summary>
+    private async Task RunRepairJobAsync(GameInstance instance)
+    {
+        var job = await BeginJobAsync("修复", $"补全 {instance.Name} 的文件", instance.Name,
+            keepPreparing: true);
+        InitStages(job, BuildStages(instance.LoaderType), $"{instance.Name} 文件补全");
+        job.SetStageText("准备中… 正在检查缺失文件");
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+            _cts?.Token ?? CancellationToken.None, job.Token);
+        try
+        {
+            await _svc.RepairAsync(instance,
+                pr => { OnDownloadProgress(pr); job.Report(pr); },
+                line =>
+                {
+                    Dispatch(() => AddLog("[Repair] " + line));
+                    // Installer output is tens of thousands of patch lines —
+                    // only milestone lines should touch the UI stage text.
+                    if (line.Contains("预填充") || line.Contains("安装器") ||
+                        line.Contains("launcher_profiles") || line.Contains("认领") ||
+                        line.Contains("复用已安装"))
+                        job.NoteProgress(line);
+                },
+                linked.Token,
+                key => OnInstallStage(job, key));
+            _svc.Instances.Update(instance);
+            CompleteStages();
+            FinishJob(job, null, false, $"实例「{instance.Name}」文件已补全");
+        }
+        catch (OperationCanceledException)
+        {
+            if (!job.IsFinished) FinishJob(job, null, true);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            if (!job.IsFinished) FinishJob(job, ex, false);
+            throw;
+        }
+    }
+
+    /// <summary>The red banner's 重试 button: re-run the failed repair in
+    /// place, as a fresh job so the old failure row stays for inspection.</summary>
+    private async Task RetryLastFailedJobAsync()
+    {
+        if (string.IsNullOrEmpty(_lastFailedRepairInstanceId))
+        {
+            Status = "没有可重试的失败任务";
+            return;
+        }
+        var inst = _svc.Instances.LoadAll()
+            .FirstOrDefault(i => string.Equals(i.Name, _lastFailedRepairInstanceId, StringComparison.Ordinal));
+        if (inst == null)
+        {
+            Status = "找不到原实例，请到「实例管理」重新点补全";
+            return;
+        }
+        _cts = new CancellationTokenSource();
+        try
+        {
+            await RunRepairJobAsync(inst).ConfigureAwait(true);
+            Status = "补全完成";
+        }
+        catch (OperationCanceledException) { Status = "已取消补全"; }
+        catch (Exception ex) { Status = "补全失败：" + ex.Message; }
+    }
+
+    /// <summary>Round-96 watchdog: a job that reports nothing for too long is
+    /// failed in place (row stays red + retryable) and its linked token is
+    /// cancelled so the underlying install really stops.</summary>
+    private void CheckStalledJobs()
+    {
+        var now = DateTime.UtcNow;
+        foreach (var job in _jobManager.Jobs.ToList())
+        {
+            if (job.IsFinished) continue;
+            var limit = JobWatchdogPolicy.TimeoutSeconds(job.State, job.CurrentStageKey);
+            if (!JobWatchdogPolicy.IsStalled(job.LastProgressUtc, now, limit)) continue;
+            var msg = JobWatchdogPolicy.StalledMessage(job.LastProgressUtc, now, limit);
+            Logger.Instance.Warn("Download", $"任务「{job.Title}」{msg}");
+            job.AbortAsFailure(msg);
+            FinishJob(job, new TimeoutException(msg), canceled: false);
+        }
     }
 
     /// <summary>Pulls the aggregate out of the manager. Called by the timer and
@@ -1414,6 +1543,7 @@ public partial class MainViewModel : ViewModelBase
 
     private void RefreshDownloadAggregate(bool force = false)
     {
+        CheckStalledJobs(); // Round-96: must run even when Version is unchanged
         if (!force && _seenJobVersion == _jobManager.Version) return;
         if (!force && !_windowVisible)
         {
@@ -1442,6 +1572,9 @@ public partial class MainViewModel : ViewModelBase
         Download.Speed = DownloadSpeedText;
         Download.Detail = DownloadSummaryText;
         IsBusy = active > 0 || queued > 0;
+        OnPropertyChanged(nameof(HeaderText));
+        OnPropertyChanged(nameof(HasCancellableJobs));
+        CancelAllDownloadsCommand.RaiseCanExecuteChanged();
     }
 
     /// <summary>Round-73: called by the close guard so .part cleanup runs while
@@ -2689,6 +2822,7 @@ public partial class MainViewModel : ViewModelBase
     {
         job.EnterStage(key);
         var label = job.Stages.FirstOrDefault(st => st.Key == key)?.Label ?? key;
+        job.SetStageText(label);
         Status = $"正在安装… {label}";
     }
 
@@ -2814,14 +2948,8 @@ public partial class MainViewModel : ViewModelBase
             var missing = _svc.DescribeMissing(instance);
             if (_svc.NeedsRepair(instance))
             {
-                Status = $"正在扫描并补全 {instance.Name} 的游戏文件...（缺: {missing}）";
                 Dispatch(() => AddLog("[Repair] 缺少文件: " + missing));
-                InitStages(BuildStages(instance.LoaderType), $"{instance.Name} 文件补全");
-                Navigate("Downloads");
-                await _svc.RepairAsync(instance, OnDownloadProgress,
-                    s => Dispatch(() => AddLog("[Repair] " + s)), _cts.Token, OnInstallStage);
-                _svc.Instances.Update(instance);
-                CompleteStages();
+                await RunRepairJobAsync(instance).ConfigureAwait(true);
                 InstallSuccess = $"实例「{instance.Name}」文件已补全，正在启动…";
             }
             else

@@ -80,8 +80,15 @@ public sealed class DownloadJob : INotifyPropertyChanged
     }
 
     /// <summary>Called from the installer's stage callback (background thread).</summary>
+    /// <summary>Round-96: which stage is currently running (watchdog chooses
+    /// its timeout from this, not from a global busy flag).</summary>
+    public string? CurrentStageKey { get; private set; }
+
     public void EnterStage(string key)
     {
+        Touch();
+        EnsureRunning();
+        CurrentStageKey = key;
         var idx = -1;
         for (var i = 0; i < Stages.Count; i++)
         {
@@ -133,6 +140,7 @@ public sealed class DownloadJob : INotifyPropertyChanged
     public string StateText => _state switch
     {
         JobState.Queued => "排队中",
+        JobState.Preparing => "准备中",
         JobState.Running => "下载中",
         JobState.Done => "已完成",
         JobState.Failed => "失败",
@@ -149,9 +157,25 @@ public sealed class DownloadJob : INotifyPropertyChanged
         _ => "\uE90F"
     };
 
-    public bool CanCancel => _state is JobState.Queued or JobState.Running;
+    public bool CanCancel => _state is JobState.Queued or JobState.Preparing or JobState.Running;
 
     public bool IsFinished => _state is JobState.Done or JobState.Failed or JobState.Canceled;
+
+    /// <summary>Round-96: last time ANY progress reached this job (bytes, a
+    /// stage change or a human-readable log line). The watchdog uses it to
+    /// distinguish "quiet but working" from "hung".</summary>
+    public DateTime LastProgressUtc { get; private set; } = DateTime.UtcNow;
+
+    private void Touch() => LastProgressUtc = DateTime.UtcNow;
+
+    /// <summary>Round-96: first real stage / first byte ends the 准备中 phase.
+    /// Until then the row is visible but honestly says it is preparing.</summary>
+    private void EnsureRunning()
+    {
+        if (_state != JobState.Preparing) return;
+        _state = JobState.Running;
+        _post(() => { Raise(nameof(StateText)); Raise(nameof(RowSubtitle)); });
+    }
 
     /// <summary>Shown under the title: "实例：xxx · 下载中 · 42%".</summary>
     public string RowSubtitle =>
@@ -161,7 +185,7 @@ public sealed class DownloadJob : INotifyPropertyChanged
     public void Cancel()
     {
         try { _cts.Cancel(); } catch { }
-        if (_state == JobState.Queued) MarkCanceled();
+        if (_state is JobState.Queued or JobState.Preparing) MarkCanceled();
     }
 
     internal void MarkCanceled()
@@ -170,17 +194,51 @@ public sealed class DownloadJob : INotifyPropertyChanged
         MarkFinished(JobState.Canceled, "已取消");
     }
 
+    /// <summary>Round-96: watchdog abort. Cancels the linked token so the
+    /// underlying install really stops, while leaving the row in FAILED (not
+    /// "已取消") so the user sees what happened and can retry.</summary>
+    public void AbortAsFailure(string message)
+    {
+        try { _cts.Cancel(); } catch { }
+        MarkFailed(message);
+    }
+
+    /// <summary>Round-96: called immediately after Create, so the row exists
+    /// and reads 准备中 while metadata / installer jar / library prefill are
+    /// still in flight but no byte has moved yet.</summary>
+    public void MarkPreparing(string text = "准备中…")
+    {
+        if (IsFinished) return;
+        _state = JobState.Preparing;
+        _stageText = text;
+        Touch();
+        _post(RaiseAll);
+    }
+
     internal void MarkRunning()
     {
         _state = JobState.Running;
         _stageText = "开始下载";
+        Touch();
         _post(RaiseAll);
+    }
+
+    /// <summary>Round-96: a human-readable line from the install pipeline
+    /// ("预填充安装器依赖 29/29") counts as progress for the watchdog, even
+    /// though no bytes were reported.</summary>
+    public void NoteProgress(string? line)
+    {
+        if (string.IsNullOrWhiteSpace(line)) return;
+        Touch();
+        SetStageText(line.Length > 60 ? line[..60] + "…" : line);
     }
 
     /// <summary>Engine progress callback. Runs on a background thread; only the
     /// throttled push reaches the UI thread.</summary>
     public void Report(DownloadProgress p)
     {
+        Touch();
+        EnsureRunning();
         var stageFrac = p.TotalFiles > 0
             ? Math.Clamp((double)p.CompletedFiles / p.TotalFiles, 0, 1)
             : 0;
@@ -203,6 +261,7 @@ public sealed class DownloadJob : INotifyPropertyChanged
     {
         if (string.IsNullOrWhiteSpace(text)) return;
         _stageText = text.Trim();
+        Touch();
         RequestPush();
     }
 

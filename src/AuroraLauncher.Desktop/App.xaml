@@ -10,6 +10,7 @@
                 <ResourceDictionary Source="pack://application:,,,/Styles/AuroraControls.xaml"/>
             </ResourceDictionary.MergedDictionaries>
             <conv:PageActiveConverter x:Key="PageActive"/>
+            <conv:PageActiveBorderConverter x:Key="PageActiveBorder"/>
             <conv:TextMatchConverter x:Key="TextMatch"/>
             <conv:BoolToTextConverter x:Key="BoolToText"/>
             <conv:BoolToOpacityConverter x:Key="BoolToOpacity"/>

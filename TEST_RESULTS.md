@@ -1,7 +1,7 @@
 # 自测结论（AuroraSelfTest）
 
-> 更新于 2026-11-15（第 95 轮）。
-> **上次全绿：2026-11-15 —— Unit 129/129（离线）、All 136/136（含网络集成）。**
+> 更新于 2026-11-15（第 96 轮）。
+> **上次全绿：2026-11-15 —— Unit 135/135（离线）、All 142/142（含网络集成）。**
 > 运行命令：`dotnet run --project tests/AuroraSelfTest -c Debug [-- --unit|--integration|--all]`
 > 一键脚本：`powershell -File scripts/run-tests.ps1 [-Full]`（CI 见 `.github/workflows/selftest.yml`）
 > 测试分层：**unit（离线，CI 必跑）/ integration（联网，CI 定时跑）/ all**。
@@ -141,6 +141,12 @@
 [PASS] GameInstaller.IsVersionJsonInstalled: 空壳 loader profile 不算已安装（第 95 轮）
 [PASS] Guard: 本地版本 JSON 优先于官方清单，第三方 id 不得发起清单查询（第 95 轮）
 [PASS] Guard: 安装器运行前必须预填充依赖，且成功必须校验真实 profile 文件（第 95 轮）
+[PASS] LoaderProfileLocator: 认领已装好的 profile，拒绝空壳与假 id（第 96 轮）
+[PASS] JobWatchdogPolicy: 准备 30 秒 / 安装器下载 90 秒 / 运行 15 分钟（第 96 轮）
+[PASS] JobProgressPolicy / JobState: Preparing 也算活跃任务（第 96 轮）
+[PASS] NavigationHighlight: 单一 CurrentPageKey 最多一个高亮（第 96 轮）
+[PASS] Guard: 补全必须走 DownloadJob，标题栏不得脱离任务队列（第 96 轮）
+[PASS] Guard: 全部取消置灰 / 错误可重试 / 导航单一来源（第 96 轮）
 
 === Result: 123 passed, 0 failed, 7 skipped ===（跳过的 7 项为网络集成测试）
 

@@ -48,6 +48,11 @@ public static class JobProgressPolicy
                     percentSum += 0;
                     counted++;
                     break;
+                // Round-96: a preparing job is already visible and busy even
+                // though no byte has moved — it counts as active so the summary
+                // panel and the header never claim "当前没有下载任务" while the
+                // installer is being fetched.
+                case JobState.Preparing:
                 case JobState.Running:
                     active++;
                     speed += j.SpeedBytesPerSec;
@@ -143,7 +148,7 @@ public sealed class DownloadJobManager
     /// <summary>Waits for a download slot (max <see cref="MaxConcurrent"/> jobs).
     /// The job stays 排队中 until a slot frees; cancelling it while queued
     /// aborts the wait instead of silently starting later.</summary>
-    public async Task StartAsync(DownloadJob job)
+    public async Task StartAsync(DownloadJob job, bool markRunning = true)
     {
         if (job.IsFinished) return;
         try
@@ -162,14 +167,19 @@ public sealed class DownloadJobManager
             job.MarkCanceled();
             throw new OperationCanceledException(job.Token);
         }
-        job.MarkRunning();
+        // Round-96: repair jobs stay visibly 准备中 until their first real
+        // stage arrives, instead of flipping to 下载中 with an empty list.
+        if (markRunning) job.MarkRunning();
         Version++;
     }
 
     /// <summary>Called exactly once per started job (success, failure or cancel).</summary>
     public void Finish(DownloadJob job, Exception? error = null, bool canceled = false, string? message = null)
     {
-        var wasStarted = !job.IsFinished && job.State == JobState.Running;
+        // Round-96: a keepPreparing job also occupies a slot, so it must be
+        // released here too (the try/catch around Release tolerates the case
+        // where a job was finished before it ever took a slot).
+        var wasStarted = !job.IsFinished && job.State is JobState.Running or JobState.Preparing;
         if (canceled) job.MarkCanceled();
         else if (error != null) job.MarkFailed(Humanize(error));
         else job.MarkDone(message);

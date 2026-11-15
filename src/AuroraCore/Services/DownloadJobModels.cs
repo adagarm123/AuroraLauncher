@@ -9,6 +9,11 @@ namespace AuroraCore.Services;
 public enum JobState
 {
     Queued,
+    /// <summary>Round-96: the job exists and is visible BEFORE the first byte
+    /// moves (resolving metadata, fetching the installer jar, pre-filling
+    /// libraries). "正在安装…" with an empty list was this state going
+    /// unrepresented.</summary>
+    Preparing,
     Running,
     Done,
     Failed,

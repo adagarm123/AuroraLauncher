@@ -59,6 +59,7 @@
 
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                     <Button Content="全部取消" Command="{Binding CancelAllDownloadsCommand}"
+                            IsEnabled="{Binding HasCancellableJobs}"
                             Style="{StaticResource DangerButton}" Padding="14,7" Margin="0,0,8,0"
                             ToolTip="取消所有进行中与排队中的任务；已完成的记录留在列表里"/>
                     <Button Content="清理已完成" Command="{Binding ClearFinishedDownloadsCommand}"
@@ -149,8 +150,17 @@
                 </Border>
                 <Border CornerRadius="8" Background="{DynamicResource DangerSoftBrush}" Padding="12,9" Margin="0,0,0,10"
                         Visibility="{Binding InstallError, Converter={StaticResource NullToCollapsed}}">
-                    <TextBlock Text="{Binding InstallError}" FontSize="12" TextWrapping="Wrap"
-                               Foreground="{DynamicResource DangerBrush}"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="{Binding InstallError}" FontSize="12" TextWrapping="Wrap"
+                                   VerticalAlignment="Center" Foreground="{DynamicResource DangerBrush}"/>
+                        <Button Grid.Column="1" Content="重试" Margin="10,0,0,0" Padding="12,4"
+                                VerticalAlignment="Center" Command="{Binding RetryLastFailedJobCommand}"
+                                ToolTip="用同一个实例重新跑一次失败的补全任务"/>
+                    </Grid>
                 </Border>
             </StackPanel>
 

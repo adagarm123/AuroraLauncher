@@ -18,12 +18,21 @@ public static class HelpContent
     /// <summary>Round number of the newest entry in <see cref="Changelog"/> —
     /// bump together with the changelog entry; drives the one-time "已更新"
     /// startup toast (dismissed permanently once the user opens the page).</summary>
-    public const int LatestChangelogRound = 95;
+    public const int LatestChangelogRound = 96;
     /// <summary>更新日志（说人话版本：无技术名词、用户视角）——独立页面
     /// 「更新日志」使用；模板见 docs/release-notes-template.md。
     /// 每轮发布时在此置顶新增一条。</summary>
     public static IEnumerable<HelpTopicVM> Changelog() => new[]
     {
+        new HelpTopicVM
+        {
+            Category = "更新日志", Glyph = "\uE777", Title = "【第 96 轮更新】下载管理不再空白，Forge 补全也能认领已装好的版本",
+            Summary = "补全任务进下载列表并带准备中/失败/重试；状态栏跟着任务走；修正上一轮误伤",
+            Body = "你截的三件事（顶部「正在安装…」、汇总 0%、列表空白）确实是同一个病根：补全流程只改了全局状态字符串和一张脱离任务队列的阶段表，压根没进 DownloadJobManager。\n\n" +
+                   "这一轮把补全整个包进 DownloadJob：一点补全就有一行「准备中」，随后跟随每个阶段；失败会留成红色任务并可一键重试；顶部状态栏改成读当前活跃任务，没有任务就回「空闲」；没有可取消任务时「全部取消」置灰；30 秒准备阶段 / 90 秒安装器下载 / 15 分钟运行阶段的超时看门狗会判卡住并中止。导航高亮仍是唯一的 CurrentPageKey，另加一条左侧竖条，免得鼠标悬停被看成第二个选中页。\n\n" +
+                   "另外要如实更正：上一轮那句「安装器运行结束，但没有生成可用的加载器版本文件」这次是**误伤，不是抓到假成功**。日志显示 13:06 安装器其实重写了 versions/1.20.1-forge-47.4.22/1.20.1-forge-47.4.22.json（mainClass 齐全、29 个库）；只是这个目录 11:43 就存在，被「只看新建目录」的检测排除，才误报失败。现在安装器跑完会扫描并认领已装好的 profile，同时把真实版本 id 写回旧实例。\n\n" +
+                   "升级后点「实例管理 → 补全文件」即可，之前那个实例会被自动认领；网络瞬时断掉导致的失败现在也能在原地点「重试」。"
+        },
         new HelpTopicVM
         {
             Category = "更新日志", Glyph = "\uE777", Title = "【第 95 轮更新】Forge 装一半、启动时报 not found in manifest",
