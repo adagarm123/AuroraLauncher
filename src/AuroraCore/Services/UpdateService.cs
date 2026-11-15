@@ -21,8 +21,29 @@ public sealed class UpdateManifest
     public long Size { get; set; }
     public string Signature { get; set; } = "";
 
-    /// <summary>The exact byte string the RSA signature covers.</summary>
+    // ---- round-74: optional binary delta ----
+    /// <summary>URL of a patch that turns round <see cref="PatchFromRound"/> into
+    /// THIS build. Empty = full package only (the always-available fallback).</summary>
+    public string PatchUrl { get; set; } = "";
+    public string PatchSha256 { get; set; } = "";
+    public long PatchSize { get; set; }
+    /// <summary>The launcher round the patch applies to. Only that round may use
+    /// it; everyone else downloads the full package.</summary>
+    public int PatchFromRound { get; set; }
+    /// <summary>RSA signature over <see cref="PatchSignedPayload"/>.</summary>
+    public string PatchSignature { get; set; } = "";
+
+    /// <summary>The exact byte string the RSA signature covers. UNCHANGED from
+    /// round-72 on purpose: a client on an older build must still be able to
+    /// verify (and accept) this manifest, otherwise shipping patches would lock
+    /// every existing installation out of auto-update.</summary>
     public string SignedPayload => $"{Round}|{Version}|{Url}|{Sha256}|{Size}";
+
+    /// <summary>Signed separately because appending fields to
+    /// <see cref="SignedPayload"/> would break older clients. The end-to-end
+    /// guarantee still comes from the produced EXE having to match
+    /// <see cref="Sha256"/> — this signature only pins the patch routing.</summary>
+    public string PatchSignedPayload => $"{Round}|{PatchUrl}|{PatchSha256}|{PatchSize}";
 }
 
 /// <summary>
@@ -64,6 +85,7 @@ public sealed class UpdateService
     private readonly DownloadEngine _engine = new();
     private readonly Logger _log = Logger.Instance;
 
+    public static string UpdateDir => Path.Combine(LauncherConfig.Instance.RootDirectory, "update");
     public static string StagedExePath => Path.Combine(LauncherConfig.Instance.RootDirectory, "update", "AuroraLauncher.new.exe");
     public static string StagedInfoPath => Path.Combine(LauncherConfig.Instance.RootDirectory, "update", "build-info.txt");
     public static bool HasStagedUpdate() => File.Exists(StagedExePath);
@@ -90,6 +112,37 @@ public sealed class UpdateService
         catch { return false; }
     }
 
+    /// <summary>Verifies the patch routing signature when the manifest has one.
+    /// A manifest without patch fields needs no extra check.</summary>
+    public static bool VerifyPatchSignature(UpdateManifest manifest, string? publicKeyXmlOverride = null)
+    {
+        if (string.IsNullOrWhiteSpace(manifest.PatchUrl)) return true; // nothing claimed
+        if (string.IsNullOrWhiteSpace(manifest.PatchSignature)) return false;
+        var keyXml = publicKeyXmlOverride ?? PublicKeyXml;
+        if (string.IsNullOrWhiteSpace(keyXml)) return false;
+        try
+        {
+            using var rsa = RSA.Create();
+            rsa.FromXmlString(keyXml);
+            return rsa.VerifyData(Encoding.UTF8.GetBytes(manifest.PatchSignedPayload),
+                Convert.FromBase64String(manifest.PatchSignature),
+                HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        }
+        catch { return false; }
+    }
+
+    /// <summary>Is the patch usable by THIS installation? Requires: the author
+    /// published one, it targets our exact round, its routing signature checks
+    /// out, and it really is smaller than the package.</summary>
+    public static bool ShouldUsePatch(UpdateManifest manifest, int currentRound, string? publicKeyXmlOverride = null)
+    {
+        if (string.IsNullOrWhiteSpace(manifest.PatchUrl)) return false;
+        if (manifest.PatchFromRound != currentRound) return false;
+        if (manifest.PatchSize <= 0 || manifest.Size <= 0) return false;
+        if (!BinaryDelta.ShouldUsePatch(manifest.PatchSize, manifest.Size)) return false;
+        return VerifyPatchSignature(manifest, publicKeyXmlOverride);
+    }
+
     /// <summary>防降级: only a STRICTLY higher round is an update.</summary>
     public static bool IsNewer(UpdateManifest manifest, int currentRound) => manifest.Round > currentRound;
 
@@ -102,6 +155,18 @@ public sealed class UpdateService
     /// negative result; <see cref="LastCheckMessage"/> explains which one.</summary>
     public async Task<UpdateManifest?> CheckAsync(CancellationToken ct = default)
     {
+        // Round-87: an interrupted update leaves megabytes in update/ that nothing
+        // ever removed. Every check is a free opportunity to drop anything older
+        // than a day that is NOT the package waiting to be installed.
+        try
+        {
+            UpdateStaging.Clean(UpdateDir, DateTime.UtcNow, new[] { StagedExePath, StagedInfoPath });
+        }
+        catch (Exception ex)
+        {
+            _log.Trace("Update", "清理更新暂存目录失败（忽略）: " + ex.Message);
+        }
+
         var feed = ResolveFeedUrl();
         if (string.IsNullOrWhiteSpace(feed))
         {
@@ -155,9 +220,27 @@ public sealed class UpdateService
     /// <summary>Downloads the new exe into the staging folder and verifies it
     /// against the manifest SHA-256. On success the update applies on the
     /// NEXT startup (see <see cref="ApplyStagedAndRestart"/>).</summary>
+    /// <summary>"增量更新（补丁 1.2 MB）" / "完整更新（62.2 MB）" — shown in 设置 →
+    /// 更新 after a download so the saving is visible, not assumed.</summary>
+    public string LastDownloadMode { get; private set; } = "";
+
+    public static string PatchPath => Path.Combine(LauncherConfig.Instance.RootDirectory, "update", "AuroraLauncher.patch");
+    public static string MergedPath => Path.Combine(LauncherConfig.Instance.RootDirectory, "update", "AuroraLauncher.merged.exe");
+
     public async Task DownloadStagedAsync(UpdateManifest manifest, Action<DownloadProgress>? progress, CancellationToken ct)
     {
         PathEx.EnsureDirectory(Path.GetDirectoryName(StagedExePath)!);
+
+        // Round-74: try the delta first. Every failure path falls through to the
+        // full package — a patch is an optimisation, never the only way in.
+        if (ShouldUsePatch(manifest, BuildInfo.CurrentRound) &&
+            await TryDownloadAndApplyPatchAsync(manifest, progress, ct).ConfigureAwait(false))
+        {
+            WriteStagedInfo(manifest);
+            return;
+        }
+
+        LastDownloadMode = $"完整更新（{FormatMb(manifest.Size)}）";
         await _engine.DownloadAsync(new[]
         {
             new DownloadEntry
@@ -178,6 +261,87 @@ public sealed class UpdateService
             throw new IOException("更新包校验失败（SHA-256 不匹配），已删除下载文件。");
         }
 
+        WriteStagedInfo(manifest);
+    }
+
+    /// <summary>Downloads the patch, merges it with the RUNNING exe and only
+    /// accepts the result when its SHA-256 equals the signed manifest hash.
+    /// Any problem (wrong base build, truncated patch, merge error) returns
+    /// false so the caller can fall back to the full package.</summary>
+    private async Task<bool> TryDownloadAndApplyPatchAsync(UpdateManifest manifest, Action<DownloadProgress>? progress, CancellationToken ct)
+    {
+        var patchPath = PatchPath;
+        var mergedPath = MergedPath;
+        try
+        {
+            TryDelete(patchPath);
+            TryDelete(mergedPath);
+
+            await _engine.DownloadAsync(new[]
+            {
+                new DownloadEntry
+                {
+                    Url = manifest.PatchUrl,
+                    Destination = patchPath,
+                    ExpectedSize = manifest.PatchSize,
+                    Required = true,
+                    DisplayName = "增量更新补丁"
+                }
+            }, progress, ct).ConfigureAwait(false);
+
+            var patchHash = await Task.Run(() => Sha256OfFile(patchPath), ct).ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(manifest.PatchSha256) &&
+                !string.Equals(patchHash, manifest.PatchSha256.Trim().Replace("-", ""), StringComparison.OrdinalIgnoreCase))
+                throw new IOException("补丁文件校验失败（SHA-256 不匹配）。");
+
+            var currentExe = Environment.ProcessPath;
+            if (string.IsNullOrEmpty(currentExe) || !File.Exists(currentExe))
+                throw new IOException("无法定位当前启动器文件，无法合并补丁。");
+
+            // Merge on a worker thread: it reads ~63 MB and hashes ~63 MB, which
+            // is tens of milliseconds of pure CPU the UI thread should not pay.
+            await Task.Run(() =>
+            {
+                BinaryDelta.Apply(currentExe, patchPath, mergedPath);
+                var mergedHash = Sha256OfFile(mergedPath);
+                if (!string.IsNullOrWhiteSpace(manifest.Sha256) &&
+                    !string.Equals(mergedHash, manifest.Sha256.Trim().Replace("-", ""), StringComparison.OrdinalIgnoreCase))
+                    throw new IOException("合并结果与清单 SHA-256 不一致（补丁与当前版本不匹配）。");
+                TryDelete(StagedExePath);
+                File.Move(mergedPath, StagedExePath, overwrite: true);
+            }, ct).ConfigureAwait(false);
+
+            LastDownloadMode = $"增量更新（补丁 {FormatMb(manifest.PatchSize)}，比完整包 {FormatMb(manifest.Size)} 少下 " +
+                               $"{Math.Max(0, 100 - (int)Math.Round(manifest.PatchSize * 100.0 / Math.Max(1, manifest.Size)))}%）";
+            _log.Info("Update", $"第 {manifest.Round} 轮已用增量补丁合并完成（{manifest.PatchSize:n0} B），SHA-256 与清单一致。");
+            TryDelete(patchPath);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            TryDelete(patchPath);
+            TryDelete(mergedPath);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Update", "增量更新不可用，回退到完整包: " + ex.Message);
+            TryDelete(patchPath);
+            TryDelete(mergedPath);
+            return false;
+        }
+    }
+
+    private static string Sha256OfFile(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20);
+        return Convert.ToHexString(SHA256.HashData(stream));
+    }
+
+    private static string FormatMb(long bytes) => bytes > 0 ? $"{bytes / (1024.0 * 1024.0):0.0} MB" : "未知大小";
+
+    private void WriteStagedInfo(UpdateManifest manifest)
+    {
         File.WriteAllText(StagedInfoPath,
             "build-time : " + manifest.ReleaseTime + "\r\n" +
             "git-commit : (see release notes)\r\n" +

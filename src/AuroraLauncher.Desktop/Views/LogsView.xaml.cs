@@ -14,6 +14,10 @@ public partial class LogsView : UserControl
     {
         InitializeComponent();
         DataContextChanged += (_, _) => HookVm(DataContext as MainViewModel);
+        // Round-63: Unloaded unsubscribes the log auto-scroll hook, but a
+        // cached page keeps the same DataContext — without re-hooking here the
+        // subscription was lost forever after the first page switch.
+        Loaded += (_, _) => HookVm(DataContext as MainViewModel);
         Unloaded += (_, _) => HookVm(null);
     }
 
@@ -31,7 +35,10 @@ public partial class LogsView : UserControl
     private void Logs_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
         if (e.Action != NotifyCollectionChangedAction.Add || LogList.Items.Count == 0) return;
-        if (!_autoScroll) return;
+        // Round-65: pages now stay in the visual tree (Collapsed when hidden).
+        // Never force a layout/ScrollIntoView on a hidden page — log lines can
+        // arrive hundreds of times per second while the game is running.
+        if (!IsVisible || !_autoScroll) return;
         LogList.ScrollIntoView(LogList.Items[^1]);
     }
 

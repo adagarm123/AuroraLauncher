@@ -15,6 +15,7 @@
     <Resource Include="app.ico" />
   </ItemGroup>
 
+
   <ItemGroup>
     <ProjectReference Include="..\AuroraCore\AuroraCore.csproj" />
   </ItemGroup>

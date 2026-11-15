@@ -1,0 +1,38 @@
+<Window x:Class="AuroraLauncher.Desktop.Views.GlassWarningWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="性能警告" Width="540" SizeToContent="Height"
+        WindowStyle="ToolWindow" ResizeMode="NoResize" ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource PanelBrush}">
+    <!-- Round-80: the red gate. Deliberately loud: red border, red title, red
+         confirm button, and the cancel button is the default (Enter = cancel). -->
+    <Border Margin="10" Padding="18" CornerRadius="10"
+            Background="{DynamicResource DangerSoftBrush}"
+            BorderBrush="{DynamicResource DangerBrush}" BorderThickness="2">
+        <StackPanel>
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="&#xE7BA;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                           FontSize="20" Foreground="{DynamicResource DangerBrush}"
+                           VerticalAlignment="Center" Margin="0,0,10,0"/>
+                <TextBlock x:Name="TitleText" FontSize="16" FontWeight="Bold" TextWrapping="Wrap"
+                           Foreground="{DynamicResource DangerBrush}" VerticalAlignment="Center"/>
+            </StackPanel>
+
+            <TextBlock x:Name="BodyText" TextWrapping="Wrap" LineHeight="20" FontSize="12.5"
+                       Foreground="{DynamicResource TextBrush}" Margin="0,12,0,0"/>
+
+            <Border Background="{DynamicResource PanelBrush}" CornerRadius="8" Padding="12,8" Margin="0,14,0,0">
+                <TextBlock Text="提示：如果在开启后觉得卡顿，回到「设置 → 外观」选「关闭」即可立刻恢复；不会影响存档、模组或游戏文件。"
+                           TextWrapping="Wrap" FontSize="11.5" Foreground="{DynamicResource TextMutedBrush}"/>
+            </Border>
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+                <Button Content="取消（保持原主题）" Click="Cancel_Click" Padding="16,7"
+                        IsCancel="True" IsDefault="True" Margin="0,0,8,0"/>
+                <Button Content="我已知晓风险，仍然开启" Click="Confirm_Click" Padding="16,7"
+                        Style="{StaticResource DangerButton}"/>
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</Window>

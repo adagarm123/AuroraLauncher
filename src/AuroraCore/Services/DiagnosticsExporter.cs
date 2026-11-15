@@ -24,6 +24,11 @@ public static class DiagnosticsExporter
         Directory.CreateDirectory(tmp);
         try
         {
+            // 0) File logging is batched on a background thread (round-69) —
+            //    flush first, or the bundle would miss the newest lines, i.e.
+            //    exactly the ones that explain the crash.
+            await Task.Run(() => Logger.Instance.Flush()).ConfigureAwait(false);
+
             // 1) Recent logs (up to 3 newest) — TAIL-truncated per file and
             //    fully sanitized (tokens, device codes, user paths, proxies).
             var logs = Directory.Exists(logDir)
@@ -166,22 +171,75 @@ public static class DiagnosticsExporter
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+            File.WriteAllText(dst, ReadSanitizedTail(src, maxBytes, rootDir));
+        }
+        catch { /* best effort */ }
+    }
+
+    /// <summary>Round-70: the newest log file's tail, fully sanitized. Shared by
+    /// the diagnostics bundle and the new「导出日志」button so both paths can
+    /// never disagree about what counts as personal data.</summary>
+    public static string ReadSanitizedTail(string src, long maxBytes, string rootDir)
+    {
+        try
+        {
             using var fs = new FileStream(src, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             long start = Math.Max(0, fs.Length - maxBytes);
             fs.Seek(start, SeekOrigin.Begin);
             using var ms = new MemoryStream();
             fs.CopyTo(ms);
-                var text = System.Text.Encoding.UTF8.GetString(ms.ToArray());
-                if (start > 0)
-                {
-                    // Drop the first (likely mid-line) fragment.
-                    var nl = text.IndexOf('\n');
-                    if (nl >= 0) text = text[(nl + 1)..];
-                    text = TruncateTail(text, maxBytes); // ensures the tail marker + consistency
-                }
-                File.WriteAllText(dst, Sanitize(text, rootDir));
+            var text = System.Text.Encoding.UTF8.GetString(ms.ToArray());
+            if (start > 0)
+            {
+                // Drop the first (likely mid-line) fragment.
+                var nl = text.IndexOf('\n');
+                if (nl >= 0) text = text[(nl + 1)..];
+                text = TruncateTail(text, maxBytes); // ensures the tail marker + consistency
+            }
+            return Sanitize(text, rootDir);
         }
-        catch { /* best effort */ }
+        catch
+        {
+            return "";
+        }
+    }
+
+    /// <summary>Newest rolling log file under &lt;root&gt;/logs, or null.</summary>
+    public static string? NewestLogFile(string rootDir)
+    {
+        var logDir = Path.Combine(rootDir, "logs");
+        if (!Directory.Exists(logDir)) return null;
+        return Directory.EnumerateFiles(logDir, "*.log")
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault();
+    }
+
+    /// <summary>Round-70: "导出日志" — a single plain-text file the user can
+    /// attach to a bug report: a short header (build + export time), then the
+    /// sanitized tail of the newest log. The async logger is flushed first so
+    /// the newest lines — the interesting ones — are included.</summary>
+    public static async Task<(bool Ok, long Bytes, string Message)> ExportLogTextAsync(
+        string destPath, string rootDir, long maxBytes = MaxLogBytes)
+    {
+        Logger.Instance.Flush();
+        var newest = NewestLogFile(rootDir);
+        if (newest == null) return (false, 0, "还没有生成日志文件");
+
+        var body = await Task.Run(() => ReadSanitizedTail(newest, maxBytes, rootDir)).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(body)) return (false, 0, "日志文件为空");
+
+        var header = new System.Text.StringBuilder()
+            .AppendLine("=== Aurora Launcher 日志导出 ===")
+            .AppendLine($"版本：{BuildInfo.Version}（第 {BuildInfo.CurrentRound} 轮）")
+            .AppendLine($"导出时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}")
+            .AppendLine($"来源文件：{Path.GetFileName(newest)}")
+            .AppendLine("说明：访问令牌 / 设备码 / 用户目录已脱敏；仅保留日志末尾部分。")
+            .AppendLine()
+            .ToString();
+
+        var text = header + body;
+        await File.WriteAllTextAsync(destPath, text, new System.Text.UTF8Encoding(false)).ConfigureAwait(false);
+        return (true, text.Length, Path.GetFileName(destPath));
     }
 
     /// <summary>Field-level redaction (keeps structure: field exists, value

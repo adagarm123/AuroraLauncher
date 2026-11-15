@@ -243,7 +243,7 @@
 
             <!-- 结果卡片列表 / 详情页 -->
             <Border Grid.Row="1" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}"
-                    BorderThickness="1" CornerRadius="12" Padding="12,8" Effect="{StaticResource CardShadow}">
+                    BorderThickness="1" CornerRadius="12" Padding="12,8">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="*"/>

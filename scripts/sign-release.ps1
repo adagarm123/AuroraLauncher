@@ -46,6 +46,33 @@ $sig = [Convert]::ToBase64String($rsa.SignData([Text.Encoding]::UTF8.GetBytes($p
     [System.Security.Cryptography.HashAlgorithmName]::SHA256,
     [System.Security.Cryptography.RSASignaturePadding]::Pkcs1))
 
+# ---- round-74: optional delta patch published next to the EXE ----
+# publish.ps1 writes patch-info.txt only when a patch against the previous build
+# was small enough to be worth shipping; its absence simply means "full package".
+$patchFile = Join-Path $root "publish\AuroraLauncher.patch"
+$patchInfo = Join-Path $root "publish\patch-info.txt"
+$patchUrl = ""
+$patchSha = ""
+$patchSize = 0
+$patchFrom = 0
+$patchSig = ""
+if ((Test-Path $patchFile) -and (Test-Path $patchInfo)) {
+    $pi = Get-Content $patchInfo -Raw
+    if ($pi -match 'from-round\s*:\s*(\d+)') { $patchFrom = [int]$Matches[1] }
+    $patchSha = (Get-FileHash $patchFile -Algorithm SHA256).Hash
+    $patchSize = (Get-Item $patchFile).Length
+    $patchUrl = $DownloadUrl -replace 'AuroraLauncher\.exe$', 'AuroraLauncher.patch'
+    if ($patchUrl -eq $DownloadUrl) { $patchUrl = "$DownloadUrl.patch" }
+    $patchPayload = "$Round|$patchUrl|$patchSha|$patchSize"
+    $patchSig = [Convert]::ToBase64String($rsa.SignData([Text.Encoding]::UTF8.GetBytes($patchPayload),
+        [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+        [System.Security.Cryptography.RSASignaturePadding]::Pkcs1))
+    Write-Host "Patch: $patchSize bytes (from round $patchFrom) -> $patchUrl"
+}
+else {
+    Write-Host "No patch for this release - clients download the full package."
+}
+
 $manifest = [ordered]@{
     round       = $Round
     version     = $Version
@@ -55,6 +82,13 @@ $manifest = [ordered]@{
     sha256      = $sha
     size        = $exeItem.Length
     signature   = $sig
+}
+if ($patchUrl) {
+    $manifest["patchUrl"] = $patchUrl
+    $manifest["patchSha256"] = $patchSha
+    $manifest["patchSize"] = $patchSize
+    $manifest["patchFromRound"] = $patchFrom
+    $manifest["patchSignature"] = $patchSig
 }
 $json = ($manifest | ConvertTo-Json)
 Set-Content (Join-Path $root "publish\latest.json") $json -Encoding utf8

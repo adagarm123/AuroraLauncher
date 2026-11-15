@@ -14,6 +14,8 @@
 
 **换装阶段（round-61，用户看到什么）**：启动器把已校验的新包复制成 `update/updater.exe`，以 `--apply-update|<pid>|<目标>|<新包>|<版本信息>` 启动这份临时副本，随后主进程退出。副本不创建主窗口，而是显示一个置顶、无边框的小窗口「正在应用更新并重启…」，阶段文字与进度条依次报告：等待旧版本退出 → 按 `exe-sha256` 二次校验更新包 → 替换文件（被占用时显示重试次数，最多 10 次）→ 写入 build-info.txt → 重新启动启动器。任一步失败都会显示原因和「重试 / 关闭」按钮，不再黑屏无提示。运行中的 EXE 在 Windows 上被锁定，所以换装进程**必须是另一份文件**；旧的隐藏 cmd 脚本只在可见更新器启动失败时兜底，临时副本在下次正常启动时清理。
 
+**版本列表「一键更新」（round-62）**：游戏下载页的版本列表顶部有一张常驻卡片，显示当前启动器版本与「一键更新」按钮。启动检查发现新版后（即使弹窗被关闭，或模式 1 后台静默下载），卡片会明确写出「检测到新版启动器（第 N 轮）」；点击直接进两按钮更新弹窗 → 下载 → 可见换装窗口，无需先去设置页。从未检查过或已是最新版时点击会先检查并明确回报结果；待安装的更新包也会在卡片上提示。判定由 `UpdateBannerPolicy` 集中（轮次不高于当前一律不算更新，防降级）。
+
 手动「检查更新」：检查阶段进度条显示不确定进度，下载阶段按字节数显示百分比，状态文字同时给出**已下载 / 总大小与实时速度**（如「正在下载更新 42%（26.5 / 63.0 MB · 2.4 MB/s）」），并同步到主窗口状态栏；自动下载时轻提示会告知「设置 → 更新 可查看进度」。下载完成后设置页出现「立即重启并应用更新」按钮，点击即进入上面的可见换装窗口。与内容中心搜索进度条同款做法。
 
 ## 决策逻辑单一来源
@@ -65,3 +67,22 @@
 - `scripts/signing/public_key.xml` — 公钥备份（已内嵌 UpdateService.PublicKeyXml）
 - `scripts/sign-release.ps1` — 生成签名的 latest.json
 - `publish/latest.json` — 更新清单（与 EXE 一起上传）
+
+## 增量更新（第 74 轮）
+
+一次完整包 65 MB；多数轮次只改几个 DLL，因此发布时同时生成二进制补丁。
+
+**发布侧（本地）**
+1. `scripts/publish.ps1` 会先把当前 `publish/AuroraLauncher.exe` 归档到 `artifacts/prev/`，并把当前轮次写进 `publish/.last-round`；
+2. 编译新 EXE 后用 `--make-patch` 生成 `publish/AuroraLauncher.patch`，并写 `patch-info.txt`（来源轮次 / SHA-256 / 体积）；
+3. **补丁超过完整包 70% 就自动丢弃**（不划算，且多一条失败路径）；
+4. `scripts/sign-release.ps1` 读取 `patch-info.txt`，在 `latest.json` 里写入 `patchUrl / patchSha256 / patchSize / patchFromRound`，并对 `round|patchUrl|patchSha256|patchSize` **单独签名**。
+
+**为什么单独签名**：`SignedPayload`（`round|version|url|sha256|size`）从第 72 轮起未变。若把补丁字段拼进去，所有旧版本客户端算出的载荷就会与签名不符，从而**拒绝整份清单**——等于用一个优化把所有存量用户锁在旧版。
+
+**客户端**
+- 只有 `patchFromRound == 当前轮次`、补丁签名有效、且补丁确实更小时才走增量；
+- 补丁下载后先校验自身 SHA-256，再用 `BinaryDelta.Apply` 与**正在运行的 EXE** 合并；
+- 合并结果必须等于清单里的 `sha256`，否则日志记一条并**自动回退完整下载**（补丁永远只是优化，不是唯一入口）。
+
+**CI 注意**：GitHub Actions 的新 runner 上没有上一版 EXE，因此 CI 发布的是"仅完整包"。需要补丁时，在本机保留 `artifacts/prev/` 后发布，或后续把 `artifacts/prev/` 做成缓存。

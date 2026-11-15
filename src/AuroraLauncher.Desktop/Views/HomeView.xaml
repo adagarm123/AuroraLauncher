@@ -10,33 +10,69 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <!-- ======== Hero ======== -->
-        <Border Grid.Row="0" CornerRadius="14" Background="{DynamicResource AccentGradient}"
-                Padding="28,24" Margin="0,0,0,18" Effect="{StaticResource HeroShadow}">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <StackPanel VerticalAlignment="Center">
-                    <TextBlock Text="欢迎使用 Aurora Launcher" FontSize="24" FontWeight="Bold" Foreground="White"/>
-                    <TextBlock FontSize="13" Foreground="#D8FFFFFF" Margin="0,6,0,0" TextWrapping="Wrap">
-                        <Run Text="当前实例："/>
-                        <Run Text="{Binding SelectedInstance.Name, Mode=OneWay, TargetNullValue=未选择}"/>
-                        <Run Text="  ·  账户："/>
-                        <Run Text="{Binding SelectedAccount.Username, Mode=OneWay, TargetNullValue=未登录}"/>
-                    </TextBlock>
-                    <TextBlock Text="选择账户与实例，一键启动 Minecraft。" FontSize="12" Foreground="#B8FFFFFF" Margin="0,3,0,0"/>
-                </StackPanel>
-                <Button Grid.Column="1" Content="启 动 游 戏" Command="{Binding LaunchCommand}"
-                        Background="White" Foreground="#232741" FontSize="16" FontWeight="Bold"
-                        Padding="28,13" VerticalAlignment="Center"
-                        Template="{StaticResource PrimaryButtonTemplate}"/>
-            </Grid>
-        </Border>
+        <!-- ======== Hero（round-81：去掉大色块，文字直接站在背景上） ======== -->
+        <Grid Grid.Row="0" Margin="4,6,4,24">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="欢迎使用 Aurora Launcher" FontSize="32" FontWeight="Bold"
+                           Foreground="{DynamicResource TextBrush}"/>
+                <TextBlock FontSize="13.5" Margin="0,10,0,0" TextWrapping="Wrap"
+                           Foreground="{DynamicResource TextMutedBrush}">
+                    <Run Text="当前实例："/>
+                    <Run Text="{Binding SelectedInstanceNameText, Mode=OneWay}" FontWeight="SemiBold"/>
+                    <Run Text="  ·  账户："/>
+                    <Run Text="{Binding SelectedAccountNameText, Mode=OneWay}" FontWeight="SemiBold"/>
+                </TextBlock>
+                <TextBlock Text="选择账户与实例，一键启动 Minecraft。" FontSize="12.5" Margin="0,6,0,0"
+                           Foreground="{DynamicResource TextMutedBrush}"/>
+            </StackPanel>
 
-        <!-- ======== Cards ======== -->
-        <Grid Grid.Row="1">
+            <!-- 主按钮 + 氛围光晕（用径向渐变矩形代替 DropShadowEffect：零特效开销） -->
+            <Grid Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="20,0,0,0">
+                <Rectangle Width="230" Height="76" RadiusX="38" RadiusY="38" IsHitTestVisible="False"
+                           HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Rectangle.Fill>
+                        <RadialGradientBrush>
+                            <GradientStop Color="#4D7C6AF8" Offset="0"/>
+                            <GradientStop Color="#1F7C6AF8" Offset="0.6"/>
+                            <GradientStop Color="#007C6AF8" Offset="1"/>
+                        </RadialGradientBrush>
+                    </Rectangle.Fill>
+                </Rectangle>
+                <Button Content="{Binding LaunchButtonText}" Command="{Binding LaunchCommand}"
+                        FontSize="15" Padding="30,13"
+                        HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource PillButton}">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding HasInstances}" Value="False">
+                                    <Setter Property="ToolTip" Value="还没有实例：点了会带你到「游戏下载」创建"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+            </Grid>
+        </Grid>
+
+        <!-- ======== Cards ========
+             Round-91: 1280×720 / 全屏 + 缩放时，卡片区比窗口高，底部性能卡被裁掉且
+             没有滚动条。包一层 ScrollViewer：内容高出视口时可滚动，窗口够高时
+             MinHeight（由代码后置跟随 ViewportHeight）让两张卡继续撑满。
+             HorizontalScrollBarVisibility=Disabled：卡片是自适应宽度，不该横向滚。 -->
+        <ScrollViewer Grid.Row="1" x:Name="HomeScroller"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled"
+                      Padding="0,0,8,0"
+                      Focusable="False">
+            <Grid x:Name="CardArea" MinHeight="{Binding ActualHeight, ElementName=HomeScroller}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="*"/>
@@ -64,15 +100,18 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <TextBox Text="{Binding OfflineName, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,8,0"/>
-                        <Button Grid.Column="1" Content="添加" Command="{Binding AddOfflineAccountCommand}" Style="{StaticResource PrimaryButton}"/>
+                        <Button Grid.Column="1" Content="添加" Command="{Binding AddOfflineAccountCommand}" Style="{StaticResource OutlineButton}"/>
                     </Grid>
 
                     <Separator Margin="0,14"/>
 
                     <TextBlock Text="微软账号 (Microsoft)" FontWeight="SemiBold" Margin="0,0,0,8"/>
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                        <Button Content="开始微软登录" Command="{Binding MicrosoftBeginCommand}" Margin="0,0,8,0"/>
-                        <Button Content="完成登录" Command="{Binding MicrosoftCompleteCommand}"/>
+                        <Button Content="开始微软登录" Command="{Binding MicrosoftBeginCommand}" Margin="0,0,8,0"
+                                Style="{StaticResource OutlineButton}"/>
+                        <Button Command="{Binding MicrosoftCompleteCommand}"
+                                Content="{Binding MicrosoftCompleteCommand.IsRunning, Converter={StaticResource BoolToText}, ConverterParameter='登录中…|完成登录'}"
+                                Style="{StaticResource OutlineButton}"/>
                     </StackPanel>
                     <!-- 未配置 Azure 应用 ID 时的引导提示（点击"开始微软登录"也会显示完整步骤） -->
                     <TextBlock Text="{Binding MicrosoftLoginHint}" TextWrapping="Wrap" FontSize="11.5"
@@ -100,10 +139,57 @@
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
-                    <Button Content="启动游戏" Command="{Binding LaunchCommand}" Style="{StaticResource PrimaryButton}" FontSize="15" Padding="14,9"/>
-                    <TextBlock Text="提示：未安装所选实例时会自动触发下载安装。" Foreground="{DynamicResource TextMutedBrush}" FontSize="11" Margin="0,10,0,0" TextWrapping="Wrap"/>
+                    <Button Content="{Binding LaunchButtonText}" Command="{Binding LaunchCommand}"
+                            FontSize="14" Padding="22,10" HorizontalAlignment="Left"
+                            Style="{StaticResource PillButton}"/>
+                    <TextBlock Text="{Binding InstanceCardHint}" Foreground="{DynamicResource TextMutedBrush}" FontSize="11"
+                               Margin="0,10,0,0" TextWrapping="Wrap"/>
                 </StackPanel>
             </Border>
-        </Grid>
+
+            <!-- ======== 性能概览（round-79） ======== -->
+            <Border Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource Card}" Margin="0,18,0,0" Padding="16">
+                <StackPanel>
+                    <Grid Margin="0,0,0,12">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="性能概览" Style="{StaticResource CardTitle}" VerticalAlignment="Center"/>
+                            <Border Style="{StaticResource Chip}" Margin="10,0,0,0" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding RunVerdictLevel, StringFormat='上次运行：{0}'}" FontSize="11"
+                                           Foreground="{DynamicResource TextMutedBrush}"/>
+                            </Border>
+                        </StackPanel>
+                        <Button Content="调整内存" Command="{Binding NavigateCommand}" CommandParameter="Settings"
+                                HorizontalAlignment="Right" Padding="12,5"
+                                ToolTip="内存吃紧时，去设置页把最大内存调高一档"/>
+                    </Grid>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="CPU" Style="{StaticResource FieldLabel}"/>
+                            <TextBlock Text="{Binding SystemCpuText}" FontSize="22" FontWeight="Bold"/>
+                            <TextBlock Text="整机占用（3 秒刷新）" Style="{StaticResource FieldLabel}" FontSize="11"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="内存" Style="{StaticResource FieldLabel}"/>
+                            <TextBlock Text="{Binding SystemMemoryText}" FontSize="14" FontWeight="SemiBold" Margin="0,6,0,0"/>
+                            <TextBlock Text="{Binding SystemLoadNote}" Style="{StaticResource FieldLabel}" FontSize="11"
+                                       TextWrapping="Wrap" Margin="0,4,0,0"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="上次运行" Style="{StaticResource FieldLabel}"/>
+                            <TextBlock Text="{Binding RunPerfText}" FontSize="12.5" FontWeight="SemiBold"
+                                       TextWrapping="Wrap" Margin="0,4,0,0"/>
+                            <TextBlock Text="{Binding RunVerdictText}" Style="{StaticResource FieldLabel}" FontSize="11"
+                                       TextWrapping="Wrap" Margin="0,4,0,0"/>
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+            </Border>
+            </Grid>
+        </ScrollViewer>
     </Grid>
 </UserControl>

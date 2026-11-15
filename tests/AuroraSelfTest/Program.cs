@@ -5,6 +5,7 @@ using AuroraCore.Download;
 using AuroraCore.Models;
 using AuroraCore.Services;
 using AuroraCore.Utils;
+using AuroraLauncher.ViewModels;
 
 namespace AuroraSelfTest;
 
@@ -41,6 +42,57 @@ internal static class Program
 
     private static void Assert(bool cond, string msg) { if (!cond) throw new Exception(msg); }
 
+    /// <summary>Round-74: applies a patch from the command line (diagnostics +
+    /// verifying that a published patch really rebuilds the published EXE).</summary>
+    private static int ApplyPatch(string oldExe, string patchPath, string outPath)
+    {
+        try
+        {
+            var hash = BinaryDelta.Apply(oldExe, patchPath, outPath);
+            Console.WriteLine("[patch] applied OK, sha256=" + hash);
+            Console.WriteLine("[patch] output: " + outPath);
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("[patch] APPLY FAILED: " + ex.Message);
+            return 1;
+        }
+    }
+
+    /// <summary>Round-74: builds a delta patch at publish time and prints a
+    /// machine-readable summary line the release script can parse.</summary>
+    private static int MakePatch(string oldExe, string newExe, string patchPath)
+    {
+        if (!File.Exists(oldExe)) { Console.WriteLine("[patch] ERROR: old build not found: " + oldExe); return 2; }
+        if (!File.Exists(newExe)) { Console.WriteLine("[patch] ERROR: new build not found: " + newExe); return 2; }
+        try
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            BinaryDelta.Create(oldExe, newExe, patchPath);
+            clock.Stop();
+
+            var fullSize = new FileInfo(newExe).Length;
+            var patchSize = new FileInfo(patchPath).Length;
+            var ratio = fullSize > 0 ? (double)patchSize / fullSize : 1;
+            Console.WriteLine($"[patch] {Path.GetFileName(newExe)}: {fullSize:n0} B -> patch {patchSize:n0} B " +
+                              $"({ratio:P1}, built in {clock.Elapsed.TotalSeconds:F1}s)");
+            Console.WriteLine("[patch] saved: " + patchPath);
+            if (!BinaryDelta.IsWorthPublishing(patchSize, fullSize))
+            {
+                Console.WriteLine("[patch] NOT WORTH PUBLISHING (above the 70% threshold) — publish the full package only.");
+                try { File.Delete(patchPath); } catch { }
+                return 3;
+            }
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("[patch] ERROR: " + ex.Message);
+            return 1;
+        }
+    }
+
     /// <summary>Walks up from CWD to find the repo root (marker: src/AuroraCore).</summary>
     private static string? FindSourceRoot()
     {
@@ -55,6 +107,71 @@ internal static class Program
 
     static async Task Main(string[] args)
     {
+        // Opt-in WPF smoke diagnostic (round-67). Not part of CI test modes.
+        if (args.Contains("--nav-smoke")) { Environment.Exit(NavSmoke.Run()); return; }
+        // Opt-in crash-card smoke (round-78): renders the real card with a real
+        // ViewModel and verifies every new binding + the one-click repair.
+        if (args.Contains("--crash-smoke")) { Environment.Exit(CrashCardSmoke.Run()); return; }
+        // Opt-in round-79 smoke: performance card / save-backup card / Ctrl+K semantics.
+        if (args.Contains("--round79-smoke")) { Environment.Exit(Round79Smoke.Run()); return; }
+        // Opt-in round-80 smoke: glass brushes are reversible, the red gate renders.
+        if (args.Contains("--glass-smoke")) { Environment.Exit(GlassSmoke.Run()); return; }
+        // Opt-in round-83 smoke: auto memory / over-limit warning / manual clean.
+        if (args.Contains("--memory-smoke")) { Environment.Exit(MemorySmoke.Run()); return; }
+        // Opt-in round-87 smoke: residue scan → banner → navigate → clean for real.
+        if (args.Contains("--residue-smoke")) { Environment.Exit(ResidueSmoke.Run()); return; }
+        // Opt-in round-88 smoke: storage scan → category list → clean for real.
+        if (args.Contains("--cleanup-smoke")) { Environment.Exit(CleanupSmoke.Run()); return; }
+        // Opt-in round-90 smoke: unsaved settings guard (navigate + close paths).
+        if (args.Contains("--settings-smoke")) { Environment.Exit(SettingsSmoke.Run()); return; }
+        // Opt-in round-92 smoke: a modpack with zero mods must not launch vanilla.
+        if (args.Contains("--launch-gate-smoke")) { Environment.Exit(LaunchGateSmoke.Run()); return; }
+        // Diagnostic (round-94): write the launcher-profile file the way the
+        // installer path does, so a real Forge install can be probed by hand.
+        var peIndex = Array.IndexOf(args, "--profiles-ensure");
+        if (peIndex >= 0 && args.Length > peIndex + 1)
+        {
+            var r = LauncherProfiles.Ensure(args[peIndex + 1]);
+            var ok = File.Exists(r.Path) && LauncherProfiles.HasProfiles(File.ReadAllText(r.Path));
+            Console.WriteLine($"[profiles] {r.Path} created={r.Created} repaired={r.Repaired} hasProfiles={ok}");
+            Environment.Exit(ok ? 0 : 1);
+            return;
+        }
+        // Round-94 opt-in network smoke: the real Forge installer must finish
+        // green through our own install path (launcher_profiles.json included).
+        if (args.Contains("--forge-install-smoke")) { Environment.Exit(ForgeInstallSmoke.Run().GetAwaiter().GetResult()); return; }
+        // Read-only diagnostic: what does the launch gate think of the REAL instances?
+        if (args.Contains("--readiness-scan")) { Environment.Exit(LaunchGateSmoke.ScanRealRootForDiagnostics()); return; }
+        // Diagnostic (read-only, never in CI): what WOULD the storage cleaner find
+        // in the real data root? Deletes nothing.
+        if (args.Contains("--cleanup-scan"))
+        {
+            Environment.Exit(CleanupSmoke.ScanRealRootForDiagnostics());
+            return;
+        }
+        // Round-86 opt-in network check: the real Forge installer URL (6 MB) on
+        // both routes — proves the reported 404 is gone through our own engine.
+        if (args.Contains("--forge-url-check")) { Environment.Exit(ForgeUrlCheck.Run().GetAwaiter().GetResult()); return; }
+        // Opt-in layout benchmark (round-68): measures the REAL Collapsed->Visible
+        // cost of each page so navigation tuning is evidence-based, not guesswork.
+        if (args.Contains("--nav-bench")) { Environment.Exit(NavBench.Run()); return; }
+
+        // Round-74: publish-time delta generation, so scripts/publish.ps1 does not
+        // need a second tool. Usage:
+        //   --make-patch <old.exe> <new.exe> <out.patch>
+        var patchIndex = Array.IndexOf(args, "--make-patch");
+        if (patchIndex >= 0 && args.Length > patchIndex + 3)
+        {
+            Environment.Exit(MakePatch(args[patchIndex + 1], args[patchIndex + 2], args[patchIndex + 3]));
+            return;
+        }
+        var applyIndex = Array.IndexOf(args, "--apply-patch");
+        if (applyIndex >= 0 && args.Length > applyIndex + 3)
+        {
+            Environment.Exit(ApplyPatch(args[applyIndex + 1], args[applyIndex + 2], args[applyIndex + 3]));
+            return;
+        }
+
         // Test layering switch: --unit (offline, CI default) / --integration / --all.
         var flag = args.FirstOrDefault(a => a.StartsWith("--"));
         if (flag is "--unit" or "--integration" or "--all") Mode = flag[2..];
@@ -63,7 +180,7 @@ internal static class Program
 
         // Use an isolated temp root so we never touch the user's real data.
         var root = Path.Combine(Path.GetTempPath(), "AuroraSelfTest_" + Guid.NewGuid().ToString("N")[..6]);
-        LauncherConfig.Instance.RootDirectory = root;
+        LauncherConfig.UseTestRoot(root); // round-84: isolate the config FILE too, not just the root
         LauncherConfig.Instance.EnsureDirectories();
         Logger.Instance.Configure(root);
 
@@ -693,10 +810,13 @@ internal static class Program
         // any future ResourceDictionary (bin/obj excluded). "Style-provided
         // commands" are only defended if the scan actually looks there.
         var uiDesktop = Path.Combine(FindSourceRoot()!, "src", "AuroraLauncher.Desktop");
+        // Round-87: the VM is split across MainViewModel*.cs partials (round 79
+        // onwards). Reading only MainViewModel.cs made every command declared in a
+        // partial look "missing" — scan them all, or the guard punishes correct code.
         var uiVmCommands = new HashSet<string>(
-            System.Text.RegularExpressions.Regex.Matches(
-                File.ReadAllText(Path.Combine(uiDesktop, "ViewModels", "MainViewModel.cs")),
-                @"public\s+RelayCommand\s+(\w+Command)")
+            Directory.EnumerateFiles(Path.Combine(uiDesktop, "ViewModels"), "MainViewModel*.cs")
+                .SelectMany(f => System.Text.RegularExpressions.Regex.Matches(
+                    File.ReadAllText(f), @"public\s+RelayCommand\s+(\w+Command)"))
                 .Select(m => m.Groups[1].Value),
             StringComparer.Ordinal);
         var uiAllXaml = Directory.EnumerateFiles(uiDesktop, "*.xaml", SearchOption.AllDirectories)
@@ -817,18 +937,124 @@ internal static class Program
                 Console.WriteLine("  [WARN] VM 命令从未被任何 XAML 绑定（死代码候选，仅警告不失败）: " + string.Join(", ", dead));
         });
 
-        Check("NetworkProbe.Decide: data-driven source selection (pure logic)", () =>
+        Check("Guard: 首页内容必须可滚动，且列表有高度上限（第 91 轮）", () =>
         {
-            var r1 = new NetworkProbe.ProbeResult(OfficialOk: true, OfficialMs: 80, MirrorOk: true, MirrorMs: 800);
-            Assert(r1.Decide(DownloadSource.Official) == DownloadSource.Official, "both ok: faster (official) should win");
-            var r2 = new NetworkProbe.ProbeResult(OfficialOk: true, OfficialMs: 3000, MirrorOk: true, MirrorMs: 90);
-            Assert(r2.Decide(DownloadSource.Official) == DownloadSource.BMCLAPI, "both ok: mirror faster should win");
-            var r3 = new NetworkProbe.ProbeResult(OfficialOk: false, OfficialMs: null, MirrorOk: true, MirrorMs: 90);
-            Assert(r3.Decide(DownloadSource.Official) == DownloadSource.BMCLAPI, "official dead → mirror");
-            var r4 = new NetworkProbe.ProbeResult(OfficialOk: true, OfficialMs: 90, MirrorOk: false, MirrorMs: null);
-            Assert(r4.Decide(DownloadSource.BMCLAPI) == DownloadSource.Official, "mirror dead → official");
-            var r5 = new NetworkProbe.ProbeResult(OfficialOk: false, OfficialMs: null, MirrorOk: false, MirrorMs: null);
-            Assert(r5.Decide(DownloadSource.BMCLAPI) == DownloadSource.BMCLAPI, "both dead → keep current");
+            // 用户截图：1280×720 / 全屏缩放时，卡片区比窗口高，底部「性能概览」被裁掉
+            // 且没有滚动条。HomeView 现在把卡片区包在 ScrollViewer 里。
+            var home = File.ReadAllText(Path.Combine(FindSourceRoot()!, "src", "AuroraLauncher.Desktop",
+                "Views", "HomeView.xaml"));
+            Assert(home.Contains("x:Name=\"HomeScroller\""), "首页必须有具名的滚动容器（冒烟按名字断言）");
+            Assert(System.Text.RegularExpressions.Regex.IsMatch(home,
+                    @"<ScrollViewer[^>]*VerticalScrollBarVisibility=""Auto""", System.Text.RegularExpressions.RegexOptions.Singleline),
+                "首页滚动条必须是 Auto（内容超出才出现，够高时不打扰）");
+            Assert(System.Text.RegularExpressions.Regex.IsMatch(home,
+                    @"HorizontalScrollBarVisibility=""Disabled"""),
+                "首页不该出现横向滚动条（卡片是自适应宽度）");
+            // 第 68 轮的坑：无限制高度的 ScrollViewer 里的 ListBox 会全量生成容器。
+            Assert(System.Text.RegularExpressions.Regex.IsMatch(home,
+                    @"<ListBox[^>]*MaxHeight=""\d+""", System.Text.RegularExpressions.RegexOptions.Singleline),
+                "实例列表必须带 MaxHeight：放进 ScrollViewer 后没有上限会全量生成容器");
+            // hero（欢迎语 + 启动按钮）不能被一起包进去：它是页面最主要的操作入口。
+            var heroIdx = home.IndexOf("欢迎使用 Aurora Launcher", StringComparison.Ordinal);
+            var scrollerIdx = home.IndexOf("<ScrollViewer", StringComparison.Ordinal);
+            Assert(heroIdx > 0 && scrollerIdx > heroIdx,
+                "ScrollViewer 必须只包卡片区，hero 区要留在外面（否则启动按钮会跟着滚走）");
+
+            // 设置页与帮助页更早就有滚动容器；这里一并守住，防止重构时被换掉。
+            foreach (var (file, needle) in new[]
+                     {
+                         ("SettingsView.xaml", "<ScrollViewer"),
+                         ("HelpView.xaml", "<ScrollViewer"),
+                     })
+            {
+                var text = File.ReadAllText(Path.Combine(FindSourceRoot()!, "src", "AuroraLauncher.Desktop", "Views", file));
+                Assert(text.Contains(needle), $"{file} 失去滚动容器后，矮窗口会裁掉内容");
+            }
+        });
+
+        Check("DownloadRoutePolicy: 测速择优 / 强制单线路 / 回退集合（第 85 轮）", () =>
+        {
+            // ---- pure decision ----
+            Assert(DownloadRoutePolicy.Decide(100, 500, RoutePreference.Official) == RoutePreference.Official,
+                "官方 100ms / 镜像 500ms → 官方");
+            Assert(DownloadRoutePolicy.Decide(500, 100, RoutePreference.Official) == RoutePreference.Mirror,
+                "镜像更快时必须改选镜像（哪怕上次是官方）");
+            Assert(DownloadRoutePolicy.Decide(null, 90, RoutePreference.Official) == RoutePreference.Mirror,
+                "官方不可达 → 镜像");
+            Assert(DownloadRoutePolicy.Decide(90, null, RoutePreference.Mirror) == RoutePreference.Official,
+                "镜像不可达 → 官方");
+            Assert(DownloadRoutePolicy.Decide(null, null, RoutePreference.Mirror) == RoutePreference.Mirror,
+                "两条都不通 → 保持上次的选择，别乱翻");
+            Assert(DownloadRoutePolicy.Decide(4000, 200, RoutePreference.Official) == RoutePreference.Mirror,
+                "4s 的响应等于不可达，不能被当成「官方也行」");
+            Assert(DownloadRoutePolicy.Decide(240, 250, RoutePreference.Mirror) == RoutePreference.Mirror,
+                "差距在 40ms 内视为平手，不来回跳");
+            Assert(DownloadRoutePolicy.Decide(300, 500, RoutePreference.Mirror) == RoutePreference.Official,
+                "超过裕度就该换边");
+
+            // ProbeResult delegates to the same rule (one source of truth).
+            var probe = new NetworkProbe.ProbeResult(true, 80, true, 800);
+            Assert(probe.Decide(RoutePreference.Mirror) == RoutePreference.Official,
+                "ProbeResult 必须用同一套判定，不能各算各的");
+
+            // ---- route sets ----
+            const string officialUrl = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+            IReadOnlyList<string> Kinds(DownloadPolicy p, RoutePreference pref)
+                => DownloadRoutePolicy.Order(p, pref);
+
+            Assert(Kinds(DownloadPolicy.Official, RoutePreference.Mirror).SequenceEqual(new[] { "官方" }),
+                "强制官方就是只有官方");
+            Assert(Kinds(DownloadPolicy.Mirror, RoutePreference.Official).SequenceEqual(new[] { "镜像" }),
+                "强制镜像就是只有镜像");
+            Assert(Kinds(DownloadPolicy.Auto, RoutePreference.Official).SequenceEqual(new[] { "官方", "镜像" }),
+                "自动：快的那条在前，另一条兜底");
+            Assert(Kinds(DownloadPolicy.Auto, RoutePreference.Mirror).SequenceEqual(new[] { "镜像", "官方" }),
+                "自动 + 镜像更快：镜像在前");
+
+            // Core files honour a forced route strictly; non-core may fall back.
+            var coreForced = DownloadRoutePolicy.BuildHosts(officialUrl, null, DownloadPolicy.Official,
+                RoutePreference.Official, allowFallback: false);
+            Assert(coreForced.Count == 1 && coreForced[0].Kind == "官方",
+                "强制官方 + 核心文件：不允许出现镜像");
+
+            var iconForced = DownloadRoutePolicy.BuildHosts(
+                "https://resources.download.minecraft.net/ab/abcdef", null, DownloadPolicy.Official,
+                RoutePreference.Official, allowFallback: true);
+            Assert(iconForced.Count == 2, "强制官方 + 非核心资源：失败可以静默走镜像");
+            Assert(iconForced[0].Kind == "官方", "但仍然是官方优先");
+
+            // Non-Mojang URL has no mirror: never invent one, never return empty.
+            var thirdParty = DownloadRoutePolicy.BuildHosts("https://api.modrinth.com/v2/search", null,
+                DownloadPolicy.Mirror, RoutePreference.Mirror, allowFallback: false);
+            Assert(thirdParty.Count == 1 && thirdParty[0].Url.Contains("modrinth"),
+                "第三方接口没有镜像可换，必须原样返回而不是空集合");
+
+            // ---- core vs non-core classification ----
+            Assert(DownloadRoutePolicy.IsCoreAsset("https://x/versions/1.21.1/1.21.1.jar"), "client jar 是核心");
+            Assert(DownloadRoutePolicy.IsCoreAsset("https://x/libraries/org/lwjgl/lwjgl.jar"), "库是核心");
+            Assert(DownloadRoutePolicy.IsCoreAsset("https://x/versions/1.21.1/1.21.1.json"), "版本 JSON 是核心");
+            Assert(DownloadRoutePolicy.IsCoreAsset("https://x/assets/indexes/17.json"), "资源索引是核心");
+            Assert(!DownloadRoutePolicy.IsCoreAsset("https://x/assets/ab/abcdef"), "声音/材质可以静默回退");
+            Assert(!DownloadRoutePolicy.IsCoreAsset("https://cdn.modrinth.com/data/x/icon.png"), "图标不是核心");
+
+            // ---- legacy config migration ----
+            Assert(LauncherConfig.MigrateLegacySource(1) == DownloadPolicy.Auto,
+                "老配置里的 BMCLAPI(1) 多数是旧的自动探测写进去的，迁成「自动」而不是「永久镜像」");
+            Assert(LauncherConfig.MigrateLegacySource(0) == DownloadPolicy.Auto,
+                "老配置里的官方(0) 同样迁成自动（默认已经是双线竞速）");
+            Assert(DownloadRoutePolicy.Parse("仅使用镜像线路（BMCLAPI）") == DownloadPolicy.Mirror,
+                "真需要强制镜像的人仍然可以在设置里选到它");
+
+            // ---- display names round-trip (the settings combo relies on it) ----
+            foreach (var p in new[] { DownloadPolicy.Auto, DownloadPolicy.Official, DownloadPolicy.Mirror })
+                Assert(DownloadRoutePolicy.Parse(DownloadRoutePolicy.DisplayName(p)) == p,
+                    $"{p}: 显示名必须能反解");
+            Assert(DownloadRoutePolicy.Describe(DownloadPolicy.Auto, RoutePreference.Mirror, 300, 120, true)
+                    .Contains("镜像"),
+                "自动模式的说明必须写明当前优先哪条");
+            Assert(DownloadRoutePolicy.Describe(DownloadPolicy.Mirror, RoutePreference.Mirror, 300, 120, true)
+                    .Contains("强制镜像"),
+                "强制模式必须说清「强制」");
         });
 
         Check("AuthService: Microsoft client id resolution + configuration guard", () =>
@@ -1106,6 +1332,744 @@ internal static class Program
                 "legacy Analyze() must keep working");
         });
 
+        Check("CrashResolutionEngine: 常见崩溃 → 具体修复动作（第 78 轮规则库）", () =>
+        {
+            // Round-78: the crash card no longer stops at "here is a reason" —
+            // each rule carries an ACTION with the parameters it needs.
+            var modded = new CrashContext
+            {
+                MaxMemoryMb = 2048, TotalPhysicalMb = 16384,
+                Loader = ModLoaderType.Fabric, MinecraftVersion = "1.21.1"
+            };
+
+            var oom = CrashResolutionEngine.Diagnose("java.lang.OutOfMemoryError: Java heap space", modded);
+            var oomFix = oom.Solutions.Single(s => s.RuleId == "out_of_memory");
+            Assert(oomFix.Action == FixAction.RaiseMemory && oomFix.Kind == FixKind.Auto,
+                "OOM must offer an automatic memory raise");
+            Assert(int.TryParse(oomFix.Payload, out var raised) && raised > 2048,
+                $"the payload must carry the new -Xmx, got '{oomFix.Payload}'");
+            Assert(oomFix.Diagnosis.Contains("2048"), "the diagnosis must quote the current limit");
+
+            // A machine with no headroom: claiming "I can fix it" would be a lie.
+            var tiny = CrashResolutionEngine.Diagnose("OutOfMemoryError",
+                modded with { MaxMemoryMb = 8192, TotalPhysicalMb = 4096 });
+            var tinyFix = tiny.Solutions.Single(s => s.RuleId == "out_of_memory");
+            Assert(tinyFix.Action == FixAction.OpenSettings && tinyFix.Kind == FixKind.Guided,
+                "without physical headroom the engine must downgrade to guidance");
+
+            // Java too old, nothing suitable installed → download the exact major.
+            var javaOld = CrashResolutionEngine.Diagnose(
+                "java.lang.UnsupportedClassVersionError: class file version 65.0",
+                modded with { CurrentJavaMajor = 8 });
+            var javaFix = javaOld.Solutions.Single(s => s.RuleId == "java_version_old");
+            Assert(javaFix.Action == FixAction.InstallJava && javaFix.Payload == "21",
+                $"class file 65 = Java 21, got {javaFix.Action}/{javaFix.Payload}");
+            Assert(javaFix.Diagnosis.Contains("Java 8") && javaFix.Diagnosis.Contains("21"),
+                "the diagnosis must name both the current and the required Java");
+
+            // Java already present → reuse it, never re-download.
+            var javaPresent = CrashResolutionEngine.Diagnose(
+                "UnsupportedClassVersionError: class file version 61.0",
+                modded with { CurrentJavaMajor = 8, InstalledJavaMajors = new[] { 8, 17 } });
+            var useFix = javaPresent.Solutions.Single(s => s.RuleId == "java_version_old");
+            Assert(useFix.Action == FixAction.UseInstalledJava && useFix.Payload == "17",
+                "an installed Java 17 must be reused instead of installed again");
+
+            // Missing prerequisites.
+            Assert(CrashResolutionEngine
+                    .Diagnose("ModResolutionException: Could not find required mod: fabric-api", modded)
+                    .Solutions.Any(s => s.Action == FixAction.InstallFabricApi),
+                "missing fabric-api must offer a one-click download");
+            var dup = CrashResolutionEngine.Diagnose("Duplicate mods: sodium.jar, sodium-1.jar", modded);
+            var dupFix = dup.Solutions.Single(s => s.RuleId == "duplicate_mods");
+            Assert(dupFix.Action == FixAction.OpenModsFolder && dupFix.Kind == FixKind.Guided,
+                "deleting mods is the user's call — we only open the folder");
+
+            // "Heap too big" is the mirror image of OOM: lower, don't raise.
+            var heap = CrashResolutionEngine.Diagnose("Could not reserve enough space for object heap", modded);
+            var heapFix = heap.Solutions.Single(s => s.RuleId == "heap_reserve");
+            Assert(heapFix.Action == FixAction.LowerMemory &&
+                   int.TryParse(heapFix.Payload, out var lowered) && lowered < 2048,
+                $"a heap-reserve failure must LOWER -Xmx, got {heapFix.Payload}");
+
+            // Ambiguous / unknown crash → no invented cause, but a stable fingerprint.
+            var unknown = CrashResolutionEngine.Diagnose("everything looks fine", modded);
+            Assert(!unknown.HasSolutions, "no rule → no solutions (card offers the mail-the-author path)");
+            Assert(unknown.Signature == "unknown", "no exception line → the unknown marker");
+            Assert(CrashResolutionEngine.BuildSignature("a\njava.lang.RuntimeException: boom\nb") ==
+                   CrashResolutionEngine.BuildSignature("x\njava.lang.RuntimeException: boom\nz"),
+                "the fingerprint must depend on the exception line only (reports group together)");
+
+            // Pure memory math.
+            Assert(CrashResolutionEngine.JavaMajorForClassFile(52) == 8 &&
+                   CrashResolutionEngine.JavaMajorForClassFile(61) == 17 &&
+                   CrashResolutionEngine.JavaMajorForClassFile(65) == 21 &&
+                   CrashResolutionEngine.JavaMajorForClassFile(44) == 0, "class-file → Java major mapping");
+            Assert(CrashResolutionEngine.MemoryCeiling(0) == 8192, "unknown RAM → conservative 8 GB ceiling");
+            Assert(CrashResolutionEngine.MemoryCeiling(32768) == 16384, "never suggest more than 16 GB");
+            Assert(CrashResolutionEngine.MemoryCeiling(4096) == 2252, "55% of physical memory, rounded down");
+            Assert(!CrashResolutionEngine.SuggestHigherMemory(4096, 8192, true).Useful,
+                "already above the ceiling → raising is not useful");
+            Assert(CrashResolutionEngine.SuggestLowerMemory(16384, 1024).Target == 1024 &&
+                   !CrashResolutionEngine.SuggestLowerMemory(16384, 1024).Useful,
+                "1 GB is the floor — never suggest going lower");
+        });
+
+        Check("CrashFixSafety: 自动修复只能改启动器自己的设置/下载文件", () =>
+        {
+            // The safety property is structural: the action enum has no
+            // destructive member, and every action's config footprint is a
+            // subset of the three launch-settings keys. Guard both.
+            var allowedKeys = new[] { "MaxMemoryMb", "MinMemoryMb", "JavaPath" };
+            foreach (var action in Enum.GetValues<FixAction>())
+            {
+                var keys = CrashFixSafety.AffectedConfigKeys(action);
+                Assert(keys.All(allowedKeys.Contains),
+                    $"{action} writes unexpected config keys: {string.Join(",", keys)}");
+                Assert(CrashFixSafety.IsNonDestructive(action),
+                    $"{action} must be non-destructive by construction");
+            }
+            foreach (var name in Enum.GetNames<FixAction>())
+                foreach (var banned in new[] { "Delete", "Remove", "Kill", "Env", "Format", "Overwrite", "Admin" })
+                    Assert(!name.Contains(banned, StringComparison.OrdinalIgnoreCase),
+                        $"FixAction.{name} looks like something a repair engine must never do");
+
+            Assert(CrashFixSafety.CanAutoApply(FixAction.RaiseMemory), "memory raise is auto");
+            Assert(CrashFixSafety.CanAutoApply(FixAction.InstallFabricApi), "a mod download is auto");
+            Assert(!CrashFixSafety.CanAutoApply(FixAction.OpenModsFolder), "opening a folder is guided");
+            Assert(!CrashFixSafety.CanAutoApply(FixAction.MailAuthor), "mailing is the user's own action");
+            Assert(CrashFixSafety.Describe(FixAction.RaiseMemory).Contains("config.json"),
+                "the log line must say exactly what is touched");
+        });
+
+        Check("SupportReport: 求助邮件由用户亲手发送（mailto 可回读）", () =>
+        {
+            var solutions = new[]
+            {
+                new CrashSolution("java_version_old", "Java 版本过低",
+                    "当前 Java 8，需要 Java 21。", "换 Java",
+                    FixKind.Auto, FixAction.InstallJava, "一键安装 Java 21", "21")
+            };
+            var mailto = SupportReport.BuildMailto(solutions, new SupportReport.Context
+            {
+                InstanceName = "测试 & 特殊字符实例",
+                ExitCode = -1,
+                MinecraftVersion = "1.21.1",
+                Loader = "Fabric 0.20.1",
+                BundlePath = @"D:\reports\aurora-diagnostics.zip",
+                Signature = "abc12345",
+                AttemptedFixes = new[] { "把最大内存从 2048 MB 调到 4096 MB" }
+            });
+
+            Assert(mailto.StartsWith("mailto:" + SupportReport.AuthorEmail + "?", StringComparison.Ordinal),
+                "the report must be addressed to the author");
+            Assert(!mailto.Contains('\n') && !mailto.Contains('\r'),
+                "newlines must be percent-encoded or the mail client truncates the body");
+            Assert(mailto.Length < 2000, $"mailto too long for a mail client ({mailto.Length})");
+            Assert(SupportReport.TryParse(mailto, out var to, out var subject, out var body),
+                "the URL must be well formed");
+            Assert(to == SupportReport.AuthorEmail, "the recipient must survive encoding");
+            Assert(subject.Contains($"第 {AuroraCore.BuildInfo.CurrentRound} 轮"),
+                "the subject must name the build round");
+            Assert(body.Contains("Java 版本过低") && body.Contains("当前 Java 8，需要 Java 21"),
+                "the body must carry the diagnosis the launcher already made");
+            Assert(body.Contains(@"D:\reports\aurora-diagnostics.zip"),
+                "the body must tell the user which bundle to attach");
+            Assert(body.Contains("2048"), "already-attempted repairs must be listed");
+            Assert(!body.Contains("SMTP"), "no credentials flow through the launcher");
+            Assert(!SupportReport.TryParse("https://example.com", out _, out _, out _),
+                "a non-mailto URL must be rejected");
+        });
+
+        Check("Guard: 崩溃修复不删文件、不阻塞界面（第 78 轮）", () =>
+        {
+            var root = FindSourceRoot()!;
+            var vm = File.ReadAllText(Path.Combine(root, "src", "AuroraLauncher.Desktop",
+                "ViewModels", "MainViewModel.cs"));
+
+            // (1) The repair executor may not delete/move user data or touch the
+            //     environment. Static, so a future "just delete the mod folder"
+            //     shortcut fails before merge.
+            var start = vm.IndexOf("private async Task ApplyCrashFixAsync", StringComparison.Ordinal);
+            Assert(start > 0, "ApplyCrashFixAsync must exist");
+            var end = vm.IndexOf("private void AdoptJavaForSelectedInstance", start, StringComparison.Ordinal);
+            Assert(end > start, "the repair executor must end before the next helper");
+            var fixBody = vm[start..end];
+            foreach (var banned in new[] { "File.Delete", "Directory.Delete", "File.Move",
+                                           "Directory.Move", "SetEnvironmentVariable", ".Kill(" })
+                Assert(!fixBody.Contains(banned), $"crash repair must never call {banned}");
+            Assert(fixBody.Contains("MaxMemoryMb") && fixBody.Contains("cfg.Save()"),
+                "the memory repair must write launcher config (and nothing else)");
+            Assert(fixBody.Contains("await "),
+                "repairs must be async — the crash card may not freeze");
+
+            // (2) The diagnosis (regex over up to 600 lines × N rules) must run
+            //     off the UI thread: the game just died, the window must breathe.
+            var diagStart = vm.IndexOf("private async Task ShowCrashCardAsync", StringComparison.Ordinal);
+            Assert(diagStart > 0, "ShowCrashCardAsync must exist");
+            var diagEnd = vm.IndexOf("private CrashContext BuildCrashContext", diagStart, StringComparison.Ordinal);
+            Assert(diagEnd > diagStart, "the diagnosis method must end before the context helper");
+            var diagBody = vm[diagStart..diagEnd];
+            Assert(diagBody.Contains("Task.Run(() => CrashResolutionEngine.Diagnose"),
+                "diagnosis must run on a background thread");
+        });
+
+        Check("SaveBackup: 触发矩阵 / 保留策略 / 只读存档（第 79 轮）", () =>
+        {
+            // --- policy ---
+            Assert(SaveBackupPolicy.ShouldRun(SaveBackupMode.Both, BackupTrigger.BeforeLaunch), "Both must fire before launch");
+            Assert(SaveBackupPolicy.ShouldRun(SaveBackupMode.Both, BackupTrigger.AfterExit), "Both must fire after exit");
+            Assert(!SaveBackupPolicy.ShouldRun(SaveBackupMode.AfterExit, BackupTrigger.BeforeLaunch),
+                "AfterExit must NOT delay a launch");
+            Assert(!SaveBackupPolicy.ShouldRun(SaveBackupMode.Off, BackupTrigger.AfterExit), "Off must never fire");
+            Assert(SaveBackupPolicy.ShouldRun(SaveBackupMode.Off, BackupTrigger.Manual),
+                "the manual button must work even when automatic backup is off");
+
+            Assert(SaveBackupPolicy.ClampKeep(0) == SaveBackupPolicy.DefaultKeep, "0 → default keep");
+            Assert(SaveBackupPolicy.ClampKeep(999) == SaveBackupPolicy.MaxKeep, "absurd keep must clamp");
+
+            var name = SaveBackupPolicy.BuildFileName(new DateTime(2026, 11, 12, 20, 41, 5),
+                BackupTrigger.BeforeLaunch, "我的 世界/A");
+            Assert(name.StartsWith("saves-") && name.EndsWith("-before.zip"), "file name shape: " + name);
+            Assert(!name.Contains('/') && !name.Contains('\\') && !name.Contains(' '), "file name must be filesystem-safe: " + name);
+            Assert(name.Contains("20261112-204105"), "timestamp must be sortable: " + name);
+
+            // --- retention ---
+            var six = Enumerable.Range(0, 6)
+                .Select(i => ($"C:/b/saves-x-{i}.zip", new DateTime(2026, 1, 1).AddDays(i)))
+                .ToList();
+            var doomed = SaveBackupPolicy.PlanPrune(six, 2);
+            Assert(doomed.Count == 4, $"keep=2 of 6 must delete 4, got {doomed.Count}");
+            Assert(!doomed.Contains(six[5].Item1) && !doomed.Contains(six[4].Item1), "the two newest must survive");
+            var withUserZip = six.Append(("C:/b/my-own-backup.zip", new DateTime(2020, 1, 1))).ToList();
+            Assert(!SaveBackupPolicy.PlanPrune(withUserZip, 2).Contains("C:/b/my-own-backup.zip"),
+                "a zip the user dropped in the folder must never be pruned");
+
+            Assert(SaveBackupPolicy.SkipReason(0, 0) != null, "empty saves folder must be reported, not zipped");
+            Assert(SaveBackupPolicy.SkipReason(120, 5 * 1024L * 1024 * 1024) != null, "oversized saves must be skipped");
+            Assert(SaveBackupPolicy.SkipReason(120, 40 * 1024 * 1024) == null, "normal saves must pass");
+
+            // --- service round-trip: zip exists, saves untouched, retention applied ---
+            var root = Path.Combine(Path.GetTempPath(), "aurora-backup-" + Guid.NewGuid().ToString("N")[..8]);
+            var instanceDir = Path.Combine(root, "instances", "abc");
+            var saves = Path.Combine(instanceDir, "saves");
+            var backupDir = Path.Combine(root, "backups", "abc");
+            Directory.CreateDirectory(Path.Combine(saves, "World1"));
+            File.WriteAllText(Path.Combine(saves, "World1", "level.dat"), "LEVELDATA");
+            File.WriteAllText(Path.Combine(saves, "World1", "region.mca"), new string('x', 4096));
+            try
+            {
+                for (var i = 0; i < 3; i++)
+                {
+                    var r = SaveBackupService.CreateAsync(saves, backupDir, "实例" + i,
+                        BackupTrigger.Manual, keep: 2).GetAwaiter().GetResult();
+                    Assert(r.Ok, "backup must succeed: " + r.Message);
+                    Assert(File.Exists(r.Path), "the zip must exist");
+                }
+                var all = SaveBackupService.List(backupDir);
+                Assert(all.Count == 2, $"keep=2 must leave exactly 2 zips, got {all.Count}");
+                Assert(File.Exists(Path.Combine(saves, "World1", "level.dat")),
+                    "the backup must never move/delete the original save");
+                using (var zip = System.IO.Compression.ZipFile.OpenRead(all[0].Path))
+                    Assert(zip.GetEntry("World1/level.dat") != null,
+                        "the zip must contain the world data (relative paths, no base folder)");
+
+                var empty = Path.Combine(root, "empty-saves");
+                Directory.CreateDirectory(empty);
+                var fail = SaveBackupService.CreateAsync(empty, Path.Combine(root, "b2"), "x",
+                    BackupTrigger.Manual, 3).GetAwaiter().GetResult();
+                Assert(!fail.Ok && fail.Message.Contains("空"), "an empty saves folder must fail with a readable reason");
+            }
+            finally { try { Directory.Delete(root, true); } catch { } }
+        });
+
+        Check("PerformanceReport: FPS 解析 / 结论阈值 / CPU 数学（第 79 轮）", () =>
+        {
+            var fps = PerformanceReport.ParseFps(new[]
+            {
+                "[20:41:05] [Render thread/INFO]: fps: 60",
+                "[x] 144 fps",
+                "fps: 0",        // startup noise → ignored
+                "fps: 5000",     // garbage → ignored
+                "no numbers here"
+            });
+            Assert(fps.Samples == 2 && fps.Average == 102 && fps.Peak == 144,
+                $"expected 2 samples avg 102 peak 144, got {fps.Samples}/{fps.Average}/{fps.Peak}");
+            Assert(!PerformanceReport.ParseFps(new[] { "nothing" }).HasData, "no FPS lines → no data");
+            Assert(!PerformanceReport.ParseFps(null).HasData, "null input must not throw");
+
+            Assert(PerformanceReport.Verdict(0, 4096, FpsSummary.None).Level == "无数据", "no run → 无数据");
+            var tight = PerformanceReport.Verdict(3900, 4096, FpsSummary.None);
+            Assert(tight.Level == "吃紧" && tight.Text.Contains("4096"), "92%+ of -Xmx must warn about OOM");
+            var slow = PerformanceReport.Verdict(2048, 4096, new FpsSummary(22, 30, 6));
+            Assert(slow.Level == "偏低", "20-something FPS must be called out");
+            var ok = PerformanceReport.Verdict(2048, 4096, new FpsSummary(60, 72, 6));
+            Assert(ok.Level == "健康", "plenty of headroom → 健康");
+
+            // GetSystemTimes reports kernel time INCLUDING idle — the classic bug.
+            var prev = new CpuTimes(100, 300, 200);
+            var cur = new CpuTimes(200, 500, 400);   // Δidle 100, Δkernel 200, Δuser 200
+            var pct = CpuLoadMath.Percent(prev, cur);
+            Assert(Math.Abs(pct - 75) < 0.01, $"busy = (400-100)/400 = 75%, got {pct}");
+            Assert(CpuLoadMath.Percent(cur, cur) == 0, "no counter movement → 0%");
+            Assert(CpuLoadMath.Percent(cur, prev) == 0, "counter reset must clamp to 0, never negative");
+        });
+
+        Check("GlassEffectPolicy: 默认关闭 / 降级 / 三种玻璃方案的边界（第 80–81 轮）", () =>
+        {
+            // Default must be Off: the original theme is the only zero-risk option.
+            Assert(GlassEffectPolicy.DisplayNames.Count == 3, "three modes: off / glass / local");
+            Assert(GlassEffectPolicy.Parse(GlassEffectPolicy.DisplayNames[0]) == GlassMode.Off, "index 0 must be Off");
+
+            foreach (var mode in new[] { GlassMode.Off, GlassMode.Faux, GlassMode.Local })
+                Assert(GlassEffectPolicy.Parse(GlassEffectPolicy.DisplayName(mode)) == mode,
+                    $"{mode}: display name must round-trip");
+
+            Assert(!GlassEffectPolicy.NeedsWarning(GlassMode.Off), "Off must apply silently");
+            Assert(GlassEffectPolicy.NeedsWarning(GlassMode.Faux) &&
+                   GlassEffectPolicy.NeedsWarning(GlassMode.Local),
+                "every non-default mode must sit behind the red warning");
+
+            // Round-81: the wallpaper design replaced the native Mica path, so a
+            // config that still says "System" is reported as the glass skin.
+            Assert(GlassEffectPolicy.Resolve(GlassMode.System, 22621) == GlassMode.Faux,
+                "legacy System config must fold into the wallpaper skin");
+            Assert(GlassEffectPolicy.DisplayName(GlassMode.System) == GlassEffectPolicy.DisplayName(GlassMode.Faux),
+                "legacy System must display the glass option, not a dead mode");
+            Assert(GlassEffectPolicy.Resolve(GlassMode.Faux, 19045) == GlassMode.Faux, "glass works on every build");
+            Assert(GlassEffectPolicy.Resolve(GlassMode.Off, 19045) == GlassMode.Off, "Off is never upgraded");
+
+            Assert(!GlassEffectPolicy.UsesTransientBlur(GlassMode.Faux), "the wallpaper skin must not blur anything");
+            Assert(GlassEffectPolicy.UsesTransientBlur(GlassMode.Local), "only Local uses the transient blur");
+            Assert(GlassEffectPolicy.UsesTranslucentSurfaces(GlassMode.Faux) &&
+                   !GlassEffectPolicy.UsesTranslucentSurfaces(GlassMode.Off),
+                "surface recolouring only in glass modes");
+
+            var warn = GlassEffectPolicy.WarningBody(GlassEffectPolicy.DisplayName(GlassMode.Faux),
+                GlassMode.Faux, 19045);
+            Assert(warn.Contains("卡顿") && warn.Contains("崩溃"), "the warning must name the real risks");
+            Assert(warn.Contains("改回"), "the warning must tell the user how to undo it");
+            Assert(GlassEffectPolicy.StatusLine(GlassMode.Faux, GlassMode.Faux, 19045).Contains("半透明"),
+                "the status line must describe what the skin actually does");
+        });
+
+        Check("GlassGuardPolicy: 模糊只允许在 MainWindow 的 Glass* 元素上（第 80 轮）", () =>
+        {
+            // Legal: whitelisted element in the whitelisted file.
+            var ok = """
+                     <Border x:Name="GlassPalette">
+                       <Border.Effect><BlurEffect Radius="12"/></Border.Effect>
+                     </Border>
+                     """;
+            Assert(GlassGuardPolicy.ScanXaml(ok, "MainWindow.xaml").Count == 0, "Glass* in MainWindow must pass");
+
+            // Illegal: named element, wrong file (this is the round-66 cliff).
+            Assert(GlassGuardPolicy.ScanXaml(ok, "HomeView.xaml").Count > 0,
+                "blur in a page must be rejected even when the element is named Glass*");
+
+            // Illegal: right file, ordinary element.
+            var wrongName = """
+                            <Border x:Name="RootGrid">
+                              <Border.Effect><BlurEffect Radius="12"/></Border.Effect>
+                            </Border>
+                            """;
+            Assert(GlassGuardPolicy.ScanXaml(wrongName, "MainWindow.xaml").Count > 0,
+                "blur on a non-Glass element must be rejected");
+
+            // Illegal: inside a list row, even with a Glass name.
+            var inTemplate = """
+                             <ListBox.ItemTemplate>
+                               <DataTemplate>
+                                 <Border x:Name="GlassRow">
+                                   <Border.Effect><BlurEffect Radius="8"/></Border.Effect>
+                                 </Border>
+                               </DataTemplate>
+                             </ListBox.ItemTemplate>
+                             """;
+            Assert(GlassGuardPolicy.ScanXaml(inTemplate, "MainWindow.xaml").Count > 0,
+                "blur inside a DataTemplate must be rejected (list rows are the freeze case)");
+
+            Assert(GlassGuardPolicy.ScanXaml("<Border/>", "HomeView.xaml").Count == 0,
+                "no blur → no violations");
+            Assert(GlassGuardPolicy.ScanXaml("", "MainWindow.xaml").Count == 0, "empty input must not throw");
+
+            Assert(GlassGuardPolicy.IsCodeBlurAllowed("MainWindow.xaml.cs",
+                "var glassBlur = new BlurEffect { Radius = 14 };"), "GlassBlur member in MainWindow is allowed");
+            Assert(!GlassGuardPolicy.IsCodeBlurAllowed("MainWindow.xaml.cs",
+                "var e = new BlurEffect();"), "an unnamed blur in MainWindow is still a violation");
+            Assert(!GlassGuardPolicy.IsCodeBlurAllowed("InstancesView.xaml.cs",
+                "var GlassBlurEffect = new BlurEffect();"), "the marker does not legalize other files");
+        });
+
+        Check("CommandPalette: 排序 / 多词 AND / 索引来源（第 79 轮）", () =>
+        {
+            var items = CommandPalette.BuildIndex(
+                new[] { ("a1", "整合包测试", "1.21.1", "Fabric") },
+                new[] { ("Sodium", "sodium-0.5.jar") }, "sodium");
+
+            var head = CommandPalette.Search(items, "");
+            Assert(head.Count > 0 && head[0].Kind == PaletteKind.Action, "empty query must lead with actions");
+
+            var backup = CommandPalette.Search(items, "备份");
+            Assert(backup.Any(i => i.Action == CommandPalette.ActionBackupNow), "「备份」must find the backup action");
+            Assert(backup.Any(i => i.Kind == PaletteKind.Setting), "「备份」must also find the backup setting");
+
+            Assert(CommandPalette.Search(items, "整合包").Any(i => i.Kind == PaletteKind.Instance),
+                "instance names must be searchable");
+            Assert(CommandPalette.Search(items, "SODIUM").Any(i => i.Kind == PaletteKind.Mod),
+                "search must be case-insensitive");
+            Assert(CommandPalette.Search(items, "sodium").Any(i => i.Kind == PaletteKind.Web),
+                "a typed query must offer the Modrinth web row");
+
+            Assert(!CommandPalette.Search(items, "备份 sodium").Any(i => i.Action == CommandPalette.ActionBackupNow),
+                "two terms must BOTH match (AND, not OR)");
+
+            var exact = CommandPalette.Search(CommandPalette.StaticItems, "启动游戏");
+            Assert(exact.Count > 0 && exact[0].Action == CommandPalette.ActionLaunch,
+                "an exact title must rank first");
+            Assert(CommandPalette.Search(items, "zzzz-nothing").Count == 0, "no match → empty list");
+            Assert(CommandPalette.Search(items, "备份", limit: 1).Count == 1, "limit must be honoured");
+
+            // Every page payload must be a page the window can actually build.
+            var root = FindSourceRoot()!;
+            var windowCode = File.ReadAllText(Path.Combine(root, "src", "AuroraLauncher.Desktop", "MainWindow.xaml.cs"));
+            foreach (var page in CommandPalette.StaticItems.Where(i => i.Kind == PaletteKind.Page))
+                Assert(page.Payload == "Home" || windowCode.Contains($"\"{page.Payload}\" =>"),
+                    $"palette page '{page.Payload}' has no CreatePage branch"); // Home is the default branch
+
+            // Every action id must be handled by RunPalette (index-only rows are dead buttons).
+            var vmText = File.ReadAllText(Path.Combine(root, "src", "AuroraLauncher.Desktop", "ViewModels", "MainViewModel.cs"))
+                       + File.ReadAllText(Path.Combine(root, "src", "AuroraLauncher.Desktop", "ViewModels", "MainViewModel.Round79.cs"));
+            foreach (var field in typeof(CommandPalette)
+                         .GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+                         .Where(f => f.IsLiteral && f.Name.StartsWith("Action", StringComparison.Ordinal)))
+                Assert(vmText.Contains("CommandPalette." + field.Name),
+                    $"palette action {field.Name} is indexed but never handled in RunPalette");
+        });
+
+        Check("LaunchGuardPolicy: 没有实例时按钮变成引导而非死按钮（第 82 轮）", () =>
+        {
+            // The first-run state. A launch click MUST go somewhere useful.
+            Assert(LaunchGuardPolicy.Decide(0, false, false) == LaunchGuardPolicy.Block.NoInstances,
+                "no instances must win over every other reason");
+            Assert(LaunchGuardPolicy.Decide(0, true, true) == LaunchGuardPolicy.Block.NoInstances,
+                "the instance count is the source of truth, not the selection flag");
+            Assert(LaunchGuardPolicy.Decide(2, false, true) == LaunchGuardPolicy.Block.NoSelection,
+                "instances exist but none selected → pick one");
+            Assert(LaunchGuardPolicy.Decide(2, true, false) == LaunchGuardPolicy.Block.NoAccount,
+                "ready except no account");
+            Assert(LaunchGuardPolicy.Decide(2, true, true) == LaunchGuardPolicy.Block.None, "all clear");
+
+            var (noInstMsg, noInstPage) = LaunchGuardPolicy.Describe(LaunchGuardPolicy.Block.NoInstances);
+            Assert(noInstPage == "Download" && noInstMsg.Contains("游戏下载"),
+                "『没有实例』必须跳到游戏下载页，并说明原因");
+            Assert(LaunchGuardPolicy.Describe(LaunchGuardPolicy.Block.NoSelection).Page == "Instances",
+                "『没选实例』必须跳到实例管理");
+            Assert(LaunchGuardPolicy.Describe(LaunchGuardPolicy.Block.NoAccount).Page == null,
+                "缺账户不该把人跳走（账户就在首页）");
+
+            Assert(LaunchGuardPolicy.ButtonText(false) == "去下载游戏" &&
+                   LaunchGuardPolicy.ButtonText(true) == "启动游戏",
+                "the label must promise exactly what the click does");
+            Assert(LaunchGuardPolicy.InstanceHint(false).Contains("还没有实例") &&
+                   LaunchGuardPolicy.InstanceHint(true).Contains("自动触发下载安装"),
+                "the instance-card hint must follow the same state");
+
+            // Static guard: the VM must actually consult the policy. Otherwise the
+            // label and the click can drift apart again (the round-82 bug).
+            var vm = File.ReadAllText(Path.Combine(FindSourceRoot()!, "src", "AuroraLauncher.Desktop",
+                "ViewModels", "MainViewModel.cs"));
+            Assert(vm.Contains("LaunchGuardPolicy.Decide"), "LaunchAsync must guard through LaunchGuardPolicy");
+            Assert(vm.Contains("LaunchGuardPolicy.ButtonText"), "the button label must come from the policy");
+        });
+
+        Check("MemoryAllocationPolicy: 推荐阶梯 / 物理内存上限 / 不越界（第 83 轮）", () =>
+        {
+            // Vanilla on a normal machine: 2 GB is plenty.
+            Assert(MemoryAllocationPolicy.Recommend(16384, 0, false, false).RecommendedMb == 2048,
+                "vanilla → 2048 MB");
+
+            // Heavier instance → more heap, monotonically.
+            var light = MemoryAllocationPolicy.Recommend(16384, 20, false, true).RecommendedMb;
+            var medium = MemoryAllocationPolicy.Recommend(16384, 60, false, true).RecommendedMb;
+            var heavy = MemoryAllocationPolicy.Recommend(16384, 200, false, true).RecommendedMb;
+            Assert(light < medium && medium < heavy,
+                $"mod count must move the number (got {light}/{medium}/{heavy})");
+
+            // Shaders raise the floor to 4 GB and never lower it.
+            Assert(MemoryAllocationPolicy.Recommend(16384, 0, true, true).RecommendedMb >= 4096,
+                "shaders → at least 4 GB");
+            Assert(MemoryAllocationPolicy.Recommend(16384, 200, true, true).RecommendedMb >=
+                   MemoryAllocationPolicy.Recommend(16384, 200, false, true).RecommendedMb,
+                "a shader must never reduce the recommendation");
+
+            // THE guard the user asked for: sweep every automatic path and assert
+            // no result ever exceeds 60% of physical RAM (we aim at 55%).
+            for (var ram = 1024; ram <= 131072; ram += 512)
+            {
+                foreach (var mods in new[] { 0, 25, 70, 120, 300 })
+                foreach (var shader in new[] { false, true })
+                foreach (var modded in new[] { false, true })
+                {
+                    var a = MemoryAllocationPolicy.Recommend(ram, mods, shader, modded);
+                    Assert(a.RecommendedMb * 1.0 / ram <= 0.60 + 1e-9,
+                        $"{ram} MB RAM / {mods} mods / shader {shader} → {a.RecommendedMb} MB exceeds 60%");
+                    Assert(a.RecommendedMb <= MemoryAllocationPolicy.HardCapMb,
+                        "never above the 16 GB hard cap");
+                    Assert(a.RecommendedMb >= Math.Min(MemoryAllocationPolicy.FloorMb, a.CeilingMb),
+                        "never below the floor (unless the machine cannot afford it)");
+                    Assert(a.RecommendedMb % MemoryAllocationPolicy.QuantumMb == 0,
+                        "heaps stay round numbers");
+                    Assert(MemoryAllocationPolicy.SafeCeiling(ram) * 1.0 / ram <= 0.60 + 1e-9,
+                        "the ceiling itself must respect 60%");
+                }
+            }
+
+            // A 4 GB laptop: capped by RAM instead of the mod table, and told so.
+            var small = MemoryAllocationPolicy.Recommend(4096, 120, true, true);
+            Assert(small.CappedByPhysical &&
+                   small.RecommendedMb == MemoryAllocationPolicy.SafeCeiling(4096),
+                $"a 4 GB machine is capped by RAM, got {small.RecommendedMb}");
+            Assert(small.RecommendedMb <= 2252, "4 GB → at most 2252 MB (55%), never the 5120 the table wants");
+            Assert(small.LowPhysical, "≤6 GB must carry the low-memory warning");
+            Assert(MemoryAllocationPolicy.Describe(small, 4096, 120, true, true).Contains("上限"),
+                "the hint must explain the ceiling, not just print a number");
+
+            // Probe failure must not invent a big number.
+            var unknown = MemoryAllocationPolicy.Recommend(0, 20, false, true);
+            Assert(unknown.RecommendedMb == 3072 &&
+                   unknown.CeilingMb == MemoryAllocationPolicy.HardCapMb,
+                "unknown RAM → the table value, bounded only by the hard cap");
+
+            // Manual numbers are honoured verbatim: silently rewriting a setup
+            // that already works is worse than a suboptimal number.
+            Assert(MemoryAllocationPolicy.Effective(3000, false, 8192, 200, true, true) == 3000,
+                "manual mode must never be rewritten");
+            Assert(MemoryAllocationPolicy.Effective(3000, true, 8192, 200, true, true) ==
+                   MemoryAllocationPolicy.Recommend(8192, 200, true, true).RecommendedMb,
+                "auto mode ignores the stored number");
+            Assert(MemoryAllocationPolicy.ExceedsSafeShare(7373, 8192), "7373 > 55% of 8 GB");
+            Assert(!MemoryAllocationPolicy.ExceedsSafeShare(4096, 8192), "4096 is fine on 8 GB");
+
+            // Probe: missing folders are normal, jars and shader zips are counted.
+            var dir = Path.Combine(Path.GetTempPath(), "aurora-mem-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(dir);
+            var (m0, s0) = MemoryAllocationPolicy.Probe(dir);
+            Assert(m0 == 0 && !s0, "empty instance → vanilla, no shader");
+            var modsDir = Directory.CreateDirectory(Path.Combine(dir, "mods")).FullName;
+            File.WriteAllText(Path.Combine(modsDir, "a.jar"), "");
+            File.WriteAllText(Path.Combine(modsDir, "b.jar"), "");
+            File.WriteAllText(Path.Combine(modsDir, "notes.txt"), "");
+            var shaderDir = Directory.CreateDirectory(Path.Combine(dir, "shaderpacks")).FullName;
+            File.WriteAllText(Path.Combine(shaderDir, "complementary.zip"), "");
+            var (m1, s1) = MemoryAllocationPolicy.Probe(dir);
+            Assert(m1 == 2 && s1, $"two jars + one shader pack, got {m1}/{s1}");
+            Directory.Delete(dir, true);
+        });
+
+        Check("DataRootPolicy: 临时目录不得成为数据根（第 84 轮）", () =>
+        {
+            // The exact shape of the bug: a smoke test's temp root got persisted
+            // into the real config, so the launcher read an empty folder.
+            var temp = Path.GetTempPath();
+            Assert(DataRootPolicy.IsEphemeral(Path.Combine(temp, "aurora-crash-smoke-3ecf5c")),
+                "smoke root under %TEMP% must be recognized");
+            Assert(DataRootPolicy.IsEphemeral(Path.Combine(temp, "aurora-mem-smoke-abc123")),
+                "any aurora-* temp root must be recognized");
+            Assert(!DataRootPolicy.IsEphemeral(Path.Combine(temp, "some-other-app")),
+                "unrelated temp folders are not ours");
+            Assert(!DataRootPolicy.IsEphemeral(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)),
+                "%APPDATA% is a legitimate root");
+            Assert(!DataRootPolicy.IsEphemeral(@"D:\AuroraData"), "an explicit drive path is legitimate");
+            Assert(!DataRootPolicy.IsEphemeral(""), "empty is not ephemeral");
+            Assert(!DataRootPolicy.IsEphemeral(null), "null is not ephemeral");
+            // Prefix confusion: "TempX" must not match "Temp".
+            Assert(!DataRootPolicy.IsEphemeral(Path.Combine(temp.TrimEnd('\\') + "X", "aurora-x")),
+                "a sibling folder whose name starts with the temp path must not match");
+
+            var root = FindSourceRoot()!;
+            var cfg = File.ReadAllText(Path.Combine(root, "src", "AuroraCore", "LauncherConfig.cs"));
+            Assert(cfg.Contains("DataRootPolicy.IsEphemeral(RootDirectory)"),
+                "Save() must refuse to persist a temp root");
+            Assert(cfg.Contains("DataRootPolicy.Sanitize(cfg.RootDirectory"),
+                "Load() must heal a config that already points at a temp folder");
+            Assert(cfg.Contains("public static void UseTestRoot"),
+                "tests need a way to isolate the CONFIG FILE, not only the root");
+
+            // The heal itself, without touching a real config file.
+            var fallback = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AuroraLauncher");
+            var (healedRoot, healed) = DataRootPolicy.Sanitize(Path.Combine(temp, "aurora-crash-smoke-3ecf5c"), fallback);
+            Assert(healed && healedRoot == fallback, "a temp root must be healed back to the default root");
+            var (keptRoot, kept) = DataRootPolicy.Sanitize(@"D:\AuroraData", fallback);
+            Assert(!kept && keptRoot == @"D:\AuroraData", "a legitimate custom root must be left alone");
+        });
+
+        Check("InstanceManager: 删除先删文件夹，失败保留记录；扫描不碰陌生文件夹（第 84 轮）", () =>
+        {
+            var mgr = new InstanceManager();
+
+            // ---- delete: folder first, then the record ----
+            var a = mgr.Create("__round84_del__", "1.21.1", ModLoaderType.Vanilla);
+            File.WriteAllText(Path.Combine(a.Directory, "marker.txt"), "x");
+            var res = mgr.DeleteChecked(a.Id);
+            Assert(res.Ok, "delete of an unlocked instance must succeed: " + res.Message);
+            Assert(!Directory.Exists(a.Directory), "the FOLDER must be gone, not just the list row");
+            Assert(mgr.LoadAll().All(i => i.Id != a.Id), "the record must be gone too");
+
+            // ---- locked folder: record must survive ----
+            var b = mgr.Create("__round84_locked__", "1.21.1", ModLoaderType.Vanilla);
+            var victim = Path.Combine(b.Directory, "locked.dat");
+            File.WriteAllText(victim, "held");
+            using (var hold = new FileStream(victim, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                var locked = mgr.DeleteChecked(b.Id, attempts: 1, delayMs: 0);
+                Assert(locked.Outcome == InstanceManager.DeleteOutcome.FilesLocked,
+                    $"a locked folder must report FilesLocked, got {locked.Outcome}");
+                Assert(Directory.Exists(b.Directory), "the folder is still there — nothing was deleted");
+                Assert(mgr.LoadAll().Any(i => i.Id == b.Id),
+                    "THE record must stay when the folder survives (otherwise it becomes a ghost)");
+                Assert(locked.Describe("B").Contains("文件夹"), "the message must tell the user files remain");
+            }
+            // After the lock is released the retry path works.
+            var retry = mgr.DeleteChecked(b.Id);
+            Assert(retry.Ok && !Directory.Exists(b.Directory), "delete must succeed once the file is released");
+
+            // ---- scan: recover with the ORIGINAL id, never touch strangers ----
+            var instancesDir = LauncherConfig.Instance.InstancesDir;
+            var ghostId = "ghost" + Guid.NewGuid().ToString("N")[..6];
+            var ghostDir = Path.Combine(instancesDir, ghostId);
+            Directory.CreateDirectory(ghostDir);
+            File.WriteAllText(Path.Combine(ghostDir, InstanceManager.MetaFileName),
+                JsonHelper.SerializeIndented(new GameInstance
+                {
+                    Id = ghostId, Name = "幽灵实例", MinecraftVersion = "1.20.1", LoaderType = ModLoaderType.Fabric
+                }));
+
+            var strangerDir = Path.Combine(instancesDir, "my-own-folder");
+            Directory.CreateDirectory(strangerDir);
+            File.WriteAllText(Path.Combine(strangerDir, "important.txt"), "do not touch");
+
+            var brokenDir = Path.Combine(instancesDir, "broken-meta");
+            Directory.CreateDirectory(brokenDir);
+            File.WriteAllText(Path.Combine(brokenDir, InstanceManager.MetaFileName), "{ not json");
+
+            var scan = mgr.Scan();
+            var recovered = scan.Recovered.SingleOrDefault(i => i.Id == ghostId);
+            Assert(recovered != null, "the folder with a valid marker must be recovered");
+            Assert(recovered!.Id == ghostId, "the ORIGINAL id must be preserved (a new GUID would orphan saves/mods)");
+            Assert(recovered.Name == "幽灵实例", "metadata must be read from the marker, not invented");
+            Assert(scan.UnrecognizedFolders.Contains("my-own-folder"), "a folder without a marker must be reported");
+            Assert(File.Exists(Path.Combine(strangerDir, "important.txt")),
+                "an unrecognized folder must never be modified");
+            Assert(scan.CorruptedFolders.Contains("broken-meta"), "a broken marker must be reported as corrupted");
+            Assert(scan.MissingIds.Count == 0 || scan.MissingIds.All(id => !string.IsNullOrWhiteSpace(id)),
+                "dead links are ids, never empty strings");
+
+            // Dead link: record without a folder.
+            var orphan = mgr.Create("__round84_orphan__", "1.21.1", ModLoaderType.Vanilla);
+            Directory.Delete(orphan.Directory, true);
+            var scan2 = mgr.Scan();
+            Assert(scan2.MissingIds.Contains(orphan.Id), "a record whose folder is gone must be listed as a dead link");
+            mgr.DeleteChecked(orphan.Id); // drops the record; folder already gone
+
+            Directory.Delete(ghostDir, true);
+            Directory.Delete(strangerDir, true);
+            Directory.Delete(brokenDir, true);
+
+            // Static ordering guard: the UI may only drop the row AFTER the folder
+            // is confirmed gone — "先删列表再删文件" is how ghosts are born.
+            var vm = File.ReadAllText(Path.Combine(FindSourceRoot()!, "src", "AuroraLauncher.Desktop",
+                "ViewModels", "MainViewModel.cs"));
+            var start = vm.IndexOf("public async Task DeleteSelectedInstanceAsync()", StringComparison.Ordinal);
+            Assert(start > 0, "DeleteSelectedInstanceAsync must exist");
+            var body = vm.Substring(start, Math.Min(4200, vm.Length - start));
+            var okIndex = body.IndexOf("if (result.Ok)", StringComparison.Ordinal);
+            var removeIndex = body.IndexOf("Instances.Remove(removed)", StringComparison.Ordinal);
+            Assert(body.Contains("DeleteChecked"), "delete must go through DeleteChecked (which reports the reason)");
+            Assert(okIndex > 0 && removeIndex > okIndex,
+                "Instances.Remove must happen only inside the success branch");
+            Assert(body.Contains("MessageBoxResult.Yes"), "a destructive delete needs an explicit confirmation");
+        });
+
+        Check("Guard: 新建实例只跳转，绝不偷偷建空实例（第 84 轮）", () =>
+        {
+            var root = FindSourceRoot()!;
+            var vm = File.ReadAllText(Path.Combine(root, "src", "AuroraLauncher.Desktop",
+                "ViewModels", "MainViewModel.cs"));
+            var start = vm.IndexOf("public void CreateInstance()", StringComparison.Ordinal);
+            Assert(start > 0, "CreateInstance must exist");
+            var body = vm.Substring(start, Math.Min(900, vm.Length - start));
+            Assert(body.Contains("Navigate(\"Download\")"), "「新建实例」必须跳转到游戏下载页");
+            Assert(!body.Contains("Instances.Create("),
+                "「新建实例」不得直接生成实例记录——版本还没装，建出来就是一个无法启动的空壳");
+        });
+
+        Check("Guard: 冒烟测试必须隔离配置文件（第 84 轮）", () =>
+        {
+            // The round-78 smoke set RootDirectory to a temp dir but saved through
+            // the REAL config.json, permanently pointing the user's launcher at
+            // %TEMP%. Every harness must isolate the config file itself.
+            var tests = Path.Combine(FindSourceRoot()!, "tests", "AuroraSelfTest");
+            var harnesses = Directory.EnumerateFiles(tests, "*.cs")
+                .Where(f => f.Contains("Smoke", StringComparison.OrdinalIgnoreCase) ||
+                            f.EndsWith("Program.cs", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            Assert(harnesses.Count >= 4, $"expected several harnesses, found {harnesses.Count}");
+            foreach (var file in harnesses)
+            {
+                var text = File.ReadAllText(file);
+                if (!text.Contains("RootDirectory", StringComparison.Ordinal)) continue;
+                Assert(text.Contains("LauncherConfig.UseTestRoot("),
+                    $"{Path.GetFileName(file)} must isolate the config file via UseTestRoot");
+                Assert(!System.Text.RegularExpressions.Regex.IsMatch(text,
+                        @"LauncherConfig\.Instance\.RootDirectory\s*="),
+                    $"{Path.GetFileName(file)} must not assign RootDirectory directly (config path stays real)");
+            }
+        });
+
+        Check("Guard: 内存清理只碰自己，GC.Collect 只在后台（第 83 轮）", () =>
+        {
+            var root = FindSourceRoot()!;
+            var desktop = Path.Combine(root, "src", "AuroraLauncher.Desktop");
+            var hygiene = File.ReadAllText(Path.Combine(desktop, "Services", "MemoryHygiene.cs"));
+
+            // (1) No other-process memory work. That is the "one-click RAM
+            // booster" pattern: everything it pages out is paged straight back
+            // in, and trimming a running JVM stalls the game.
+            foreach (var banned in new[] { "Process.GetProcesses", "GetProcessesByName", "OpenProcess(", "\"javaw\"", "\"java\"" })
+                Assert(!hygiene.Contains(banned, StringComparison.Ordinal), $"MemoryHygiene must not use {banned}");
+            Assert(hygiene.Contains("SetProcessWorkingSetSize(GetCurrentProcess()"),
+                "the trim must target this process only");
+
+            // (2) GC.Collect exists in exactly one file — the hygiene helper.
+            foreach (var file in Directory.EnumerateFiles(desktop, "*.cs", SearchOption.AllDirectories))
+            {
+                if (file.Contains("\\obj\\")) continue;
+                if (!File.ReadAllText(file).Contains("GC.Collect")) continue;
+                Assert(Path.GetFileName(file) == "MemoryHygiene.cs",
+                    $"{Path.GetFileName(file)} calls GC.Collect outside the hygiene helper");
+            }
+
+            // (3) ...and the VM reaches it from a worker thread, never inline.
+            var vm = File.ReadAllText(Path.Combine(desktop, "ViewModels", "MainViewModel.Round83.cs"));
+            Assert(vm.Contains("Task.Run(() => MemoryHygiene.Trim(aggressive: true))"),
+                "the deep clean must run on a worker thread");
+            Assert(!vm.Contains("MemoryHygiene.Trim(aggressive: true);"),
+                "no inline trim on the UI thread");
+            Assert(vm.Contains("Task.Run(() => MemoryHygiene.Trim(aggressive: false))"),
+                "the idle path must be background too");
+
+            // (4) The launch path resolves -Xmx through the policy, and auto mode
+            // is a persisted switch — otherwise "auto" would be a UI-only myth.
+            var svc = File.ReadAllText(Path.Combine(root, "src", "AuroraCore", "Services", "LauncherService.cs"));
+            Assert(svc.Contains("MemoryAllocationPolicy.Effective("),
+                "the launch must resolve -Xmx through MemoryAllocationPolicy");
+            Assert(svc.Contains("Math.Min(cfg.MinMemoryMb, maxMemoryMb)"),
+                "-Xms must be clamped to -Xmx or the JVM refuses to start");
+            var cfg = File.ReadAllText(Path.Combine(root, "src", "AuroraCore", "LauncherConfig.cs"));
+            Assert(cfg.Contains("public bool AutoMemory"), "auto mode must be a persisted switch");
+        });
+
         Check("CurseForgeService: search parse + official-page URL builders (pure logic)", () =>
         {
             var json = "{\"data\":[" +
@@ -1239,6 +2203,2304 @@ internal static class Program
             }
         });
 
+        Check("JavaRequirement: MC version -> recommended Java major (pure logic)", () =>
+        {
+            // Round-62: a 1.12 pack must stay on Java 8 while a 1.21 pack
+            // uses Java 21. This mapping is the point of per-instance Java —
+            // guard the boundary versions explicitly.
+            var cases = new (string Mc, int Major)[]
+            {
+                ("1.7.10", 8), ("1.12.2", 8), ("1.16.5", 8),
+                ("1.17", 17), ("1.18.2", 17), ("1.20", 17), ("1.20.4", 17),
+                ("1.20.5", 21), ("1.21", 21), ("1.21.1", 21), ("1.22", 21),
+                ("24w14a", 21), ("", 21), ("fabric-loader-0.20.1-1.21", 21)
+            };
+            foreach (var (mc, major) in cases)
+                Assert(JavaRequirement.RecommendMajor(mc) == major, $"'{mc}' should recommend Java {major}");
+            Assert(JavaRequirement.Describe("1.12.2").Contains("Java 8"), "hint must name the recommended major");
+        });
+
+        Check("UpdateBannerPolicy: outdated launcher CTA + staged wording (pure logic)", () =>
+        {
+            Assert(!UpdateBannerPolicy.IsOutdated(62, null), "no manifest → not outdated");
+            Assert(!UpdateBannerPolicy.IsOutdated(62, 62), "same round → not outdated");
+            Assert(!UpdateBannerPolicy.IsOutdated(62, 61), "downgrade must never count as an update");
+            Assert(UpdateBannerPolicy.IsOutdated(62, 63), "higher round → outdated");
+            Assert(UpdateBannerPolicy.Text(62, 63, false).Contains("第 63 轮"), "banner must name the available round");
+            Assert(UpdateBannerPolicy.Text(62, 63, false).Contains("一键更新"), "banner must point at the button");
+            Assert(UpdateBannerPolicy.Text(62, null, false).Contains("检查"), "unchecked state must offer a check");
+            Assert(UpdateBannerPolicy.Text(62, 62, false).Contains("已是最新"), "latest state must say so");
+            Assert(UpdateBannerPolicy.Text(62, 63, true).Contains("已下载"), "staged package takes priority in wording");
+        });
+
+        Check("BulkObservableCollection + NavigationPolicy: one-shot UI updates / no redundant navigation", () =>
+        {
+            // Round-63 freeze: Clear + 103 Add events on the UI thread, and
+            // re-assigning Content for the already-active page. Both are now
+            // pure logic with an explicit contract.
+            var col = new AuroraLauncher.Desktop.ViewModels.BulkObservableCollection<int>();
+            var events = new List<string>();
+            col.CollectionChanged += (_, e) => events.Add(e.Action.ToString());
+            col.Replace(new[] { 1, 2, 3, 4, 5 });
+            Assert(events.Count == 1 && events[0] == "Reset",
+                $"Replace must raise exactly ONE Reset, got: {string.Join(",", events)}");
+            Assert(col.Count == 5 && col[4] == 5, "contents must be swapped in one pass");
+            col.Replace(Array.Empty<int>());
+            Assert(col.Count == 0 && events.Count == 2, "a second Replace must also be a single Reset");
+
+            Assert(NavigationPolicy.Normalize(null) == "Home", "null key → Home");
+            Assert(NavigationPolicy.Normalize("  ") == "Home", "blank key → Home");
+            Assert(NavigationPolicy.Normalize("Mods") == "Mods", "explicit key survives");
+            Assert(NavigationPolicy.ShouldNavigate("Home", "Home", false), "first navigation must proceed");
+            Assert(!NavigationPolicy.ShouldNavigate("Home", "Home", true), "repeat click on active page must be a no-op");
+            Assert(NavigationPolicy.ShouldNavigate("Home", "Mods", true), "different page must proceed");
+        });
+
+        Check("Guard: cached pages never re-run init on every Loaded (round-63)", () =>
+        {
+            // Cached page instances re-raise Loaded on EVERY re-attach. Any
+            // new async init hooked there without a single-shot guard would
+            // bring the "未响应" freeze back.
+            var root = FindSourceRoot()!;
+            var views = Path.Combine(root, "src", "AuroraLauncher.Desktop", "Views");
+            foreach (var file in Directory.EnumerateFiles(views, "*.xaml.cs"))
+            {
+                var text = File.ReadAllText(file);
+                if (!text.Contains("Loaded +=")) continue;
+                var name = Path.GetFileName(file);
+                Assert(LoadedGuardPolicy.IsGuarded(text),
+                    $"{name} registers Loaded without a single-shot guard or a re-entrant hook");
+                if (text.Contains("Loaded += async"))
+                    Assert(LoadedGuardPolicy.IsGuarded(text),
+                        $"{name} uses an async Loaded handler without a guard");
+            }
+            var vm = File.ReadAllText(Path.Combine(root, "src", "AuroraLauncher.Desktop", "ViewModels", "MainViewModel.cs"));
+            Assert(!vm.Contains("Versions.Clear()"), "version list must use bulk Replace (one Reset)");
+            Assert(!vm.Contains("ModSearchResults.Clear()"), "search results must use bulk Replace");
+            Assert(!vm.Contains("JavaList.Clear()"), "Java list must use bulk Replace");
+        });
+
+        Check("CoalescingSingleFlight: A→B→C collapses to ONE rerun with the latest arg", () =>
+        {
+            // Round-64 review: the two easy regressions are a QUEUE (5 rapid
+            // triggers → 5 reruns) and a DROP (newest choice lost). Assert
+            // both halves of the contract with an injectable, gated runner.
+            var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var seen = new List<string>();
+            var flight = new CoalescingSingleFlight<string>(async arg =>
+            {
+                seen.Add(arg);
+                await gate.Task.ConfigureAwait(false);
+            });
+
+            var first = flight.RequestAsync("A");
+            Assert(flight.IsRunning, "the first request must own the in-flight run");
+            foreach (var k in new[] { "B", "C", "D", "E" })
+                flight.RequestAsync(k).GetAwaiter().GetResult(); // coalesced → completed Task
+            gate.SetResult(true);
+            first.GetAwaiter().GetResult();
+
+            Assert(flight.RunCount == 2, $"exactly ONE extra run expected, got {flight.RunCount} (queue degradation)");
+            Assert(seen.Count == 2 && seen[1] == "E",
+                $"newest argument must win, got [{string.Join(",", seen)}] (drop degradation)");
+            Assert(flight.Latest == "E", "latest argument must be retained");
+
+            flight.RequestAsync("F").GetAwaiter().GetResult();
+            Assert(flight.RunCount == 3 && seen[2] == "F", "an idle request must run exactly once");
+            Assert(!flight.IsRunning, "flight must be idle afterwards");
+        });
+
+        Check("UiPolicies: selection restore / debounce guard / navigation sub-key", () =>
+        {
+            var items = new[] { "1.21", "1.20.4", "1.12.2" };
+            Assert(SelectionPolicy.RestoreByKey(items, s => s, "1.20.4") == "1.20.4", "restore by stable key");
+            Assert(SelectionPolicy.RestoreByKey(items, s => s, "9.9") == "1.21", "missing key → first item");
+            Assert(SelectionPolicy.RestoreByKey(items, s => s, null) == "1.21", "null key → first item");
+            Assert(SelectionPolicy.RestoreByKey(Array.Empty<string>(), s => s, "1.21") == null, "empty list → null");
+
+            Assert(LoaderDebouncePolicy.ShouldFire("Download", "1.21", "1.21"), "normal case fires");
+            Assert(!LoaderDebouncePolicy.ShouldFire("Home", "1.21", "1.21"), "user navigated away → no stale fetch");
+            Assert(!LoaderDebouncePolicy.ShouldFire("Download", "1.21", "1.20.4"), "version changed → no stale fetch");
+            Assert(!LoaderDebouncePolicy.ShouldFire("Download", "", ""), "no target version → no fetch");
+
+            Assert(!NavigationPolicy.ShouldNavigate("Mods", "Mods", true), "same page → no-op");
+            Assert(NavigationPolicy.ShouldNavigate("Mods", "Mods", true, "模组", "光影包"),
+                "different sub-key must NOT be swallowed by the early-return");
+            Assert(!NavigationPolicy.ShouldNavigate("Mods", "Mods", true, "模组", "模组"), "same sub-key → no-op");
+            Assert(NavigationPolicy.ShouldNavigate("Home", "Home", false), "first navigation always proceeds");
+        });
+
+        Check("LoadedGuardPolicy: accepts any single-shot field name, rejects unguarded Loaded", () =>
+        {
+            const string altName = "Loaded += (_, _) => { if (_isLoaded) return; };\nprivate bool _isLoaded;";
+            const string negated = "private bool _firstLoadDone;\nLoaded += async (_, _) => { if (!_firstLoadDone) return; };";
+            Assert(LoadedGuardPolicy.IsGuarded(altName), "_isLoaded must be accepted");
+            Assert(LoadedGuardPolicy.IsGuarded(negated), "negated guard must be accepted");
+            Assert(LoadedGuardPolicy.IsGuarded("Loaded += (_, _) => HookVm(vm);\nprivate void HookVm(object? o) { }"),
+                "re-entrant hook must be accepted");
+            Assert(!LoadedGuardPolicy.IsGuarded("Loaded += (_, _) => { DoWork(); };"),
+                "unguarded Loaded must be rejected");
+            Assert(!LoadedGuardPolicy.IsGuarded("private bool _whatever;\nLoaded += (_, _) => { DoWork(); };"),
+                "a bool field alone is not a guard");
+        });
+
+        Check("PageHostPolicy: lazy page creation + exactly one visible page", () =>
+        {
+            // Round-65: the third "未响应" report. The fix is architectural —
+            // keep pages in the visual tree and flip Visibility instead of
+            // re-assigning ContentControl.Content.
+            var created = new List<string>();
+            Assert(PageHostPolicy.ShouldCreate(created, "Home"), "first visit must create the page");
+            created.Add("Home");
+            Assert(!PageHostPolicy.ShouldCreate(created, "Home"), "second visit must NOT rebuild it");
+            Assert(PageHostPolicy.ShouldCreate(created, "Mods"), "a new key must be created once");
+            created.Add("Mods");
+            Assert(PageHostPolicy.IsVisible("Home", "Home") && !PageHostPolicy.IsVisible("Home", "Mods"),
+                "exactly one page may be visible");
+            Assert(!PageHostPolicy.IsVisible("Mods", "Home") && PageHostPolicy.IsVisible("Mods", "Mods"),
+                "switching must move visibility, not rebuild");
+            Assert(!PageHostPolicy.IsVisible("Mods", "mods"), "keys compare ordinally");
+
+            var keys = new[] { "Home", "Mods", "Settings", "Download" };
+            var set = new HashSet<string>();
+            for (var i = 0; i < 40; i++)
+            {
+                var k = keys[i % keys.Length];
+                if (PageHostPolicy.ShouldCreate(set, k)) set.Add(k);
+            }
+            Assert(set.Count == 4, $"40 rapid switches must create only 4 pages, got {set.Count}");
+        });
+
+        Check("Guard: navigation keeps pages in the visual tree (round-65)", () =>
+        {
+            var root = FindSourceRoot()!;
+            var desktop = Path.Combine(root, "src", "AuroraLauncher.Desktop");
+            var mainXaml = File.ReadAllText(Path.Combine(desktop, "MainWindow.xaml"));
+            var mainCs = File.ReadAllText(Path.Combine(desktop, "MainWindow.xaml.cs"));
+            var vm = File.ReadAllText(Path.Combine(desktop, "ViewModels", "MainViewModel.cs"));
+            Assert(!mainXaml.Contains("Content=\"{Binding CurrentPage}\""),
+                "swapping ContentControl.Content rebuilds the whole visual tree on every click");
+            Assert(mainXaml.Contains("x:Name=\"PageHost\""), "a persistent page host is required");
+            Assert(mainCs.Contains("PageHost.Children.Add"), "pages must be added once and kept");
+            Assert(mainCs.Contains("Visibility.Collapsed") && mainCs.Contains("Visibility.Visible"),
+                "navigation must flip Visibility");
+            Assert(!vm.Contains("CurrentPage ="), "the VM must not assign a page object to a ContentControl");
+
+            // Hidden pages keep their subscriptions now — they must not force
+            // layout from collection-changed / property-changed callbacks.
+            var logs = File.ReadAllText(Path.Combine(desktop, "Views", "LogsView.xaml.cs"));
+            var mods = File.ReadAllText(Path.Combine(desktop, "Views", "ModsView.xaml.cs"));
+            Assert(logs.Contains("!IsVisible"), "hidden LogsView must skip ScrollIntoView");
+            Assert(mods.Contains("!IsVisible"), "hidden ModsView must skip scroll-to-compatible layout");
+        });
+
+        Check("Guard: no animation clocks / software effects in the UI (round-67, glass-whitelist round-80)", () =>
+        {
+            // Round-67 regression: round-66 released Card Effect/CacheMode on
+            // hidden pages, making EVERY navigation regenerate all shadow
+            // bitmaps on the incoming page — one click could freeze/crash.
+            // Final policy: remove the whole class, plus all animation clocks.
+            //
+            // Round-80: "liquid glass" needs ONE narrow exception, so the ban is
+            // now enforced through GlassGuardPolicy: a BlurEffect is legal only
+            // in MainWindow.xaml on a Glass*-named element (never inside a
+            // DataTemplate), and in code only from a GlassBlur-named member.
+            var root = FindSourceRoot()!;
+            var desktop = Path.Combine(root, "src", "AuroraLauncher.Desktop");
+            var styles = File.ReadAllText(Path.Combine(desktop, "Styles", "AuroraControls.xaml"));
+
+            // (1) No time-based animation at all (zero clocks to accumulate).
+            //     Check TAGS, not words — explanatory comments mention them.
+            Assert(!styles.Contains("<BeginStoryboard") && !styles.Contains("<Storyboard")
+                   && !styles.Contains("RepeatBehavior="),
+                "indeterminate bars must be STATIC — no animation clock may run");
+
+            // (2) No software-rendered shadow / bitmap cache anywhere. Blur is
+            //     NOT banned outright any more, but every occurrence must pass
+            //     the whitelist policy below.
+            Assert(!styles.Contains("<DropShadowEffect") && !styles.Contains("<BitmapCache")
+                   && !styles.Contains("Property=\"Effect\"") && !styles.Contains("Property=\"CacheMode\""),
+                "DropShadowEffect / BitmapCache must stay removed (round-67 regression)");
+            foreach (var xaml in Directory.EnumerateFiles(desktop, "*.xaml", SearchOption.AllDirectories))
+                Assert(!File.ReadAllText(xaml).Contains("Effect=\"{StaticResource"),
+                    $"{Path.GetFileName(xaml)} applies a StaticResource Effect");
+
+            // (2b) Round-80 whitelist: blur may live only behind a Glass* element
+            //      of MainWindow.xaml, never in a list row.
+            var blurViolations = new List<string>();
+            foreach (var xaml in Directory.EnumerateFiles(desktop, "*.xaml", SearchOption.AllDirectories))
+                blurViolations.AddRange(GlassGuardPolicy.ScanXaml(File.ReadAllText(xaml), Path.GetFileName(xaml)));
+            Assert(blurViolations.Count == 0, string.Join("; ", blurViolations));
+
+            foreach (var cs in Directory.EnumerateFiles(desktop, "*.cs", SearchOption.AllDirectories))
+            {
+                if (cs.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}") ||
+                    cs.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")) continue;
+                var file = Path.GetFileName(cs);
+                var lineNo = 0;
+                foreach (var line in File.ReadLines(cs))
+                {
+                    lineNo++;
+                    if (!line.Contains("BlurEffect", StringComparison.Ordinal)) continue;
+                    if (line.TrimStart().StartsWith("//") || line.TrimStart().StartsWith("///")) continue;
+                    Assert(GlassGuardPolicy.IsCodeBlurAllowed(file, line),
+                        $"{file}:{lineNo} 在非白名单位置创建/引用 BlurEffect —— 只允许 MainWindow 的 GlassBlur* 成员");
+                }
+            }
+
+            // (3) Every ListBox recycles containers.
+            Assert(styles.Contains("VirtualizingPanel.VirtualizationMode\" Value=\"Recycling\"")
+                   && styles.Contains("ScrollViewer.CanContentScroll\" Value=\"True\""),
+                "all lists must virtualize with container recycling");
+
+            // (4) No synchronous Dispatcher.Invoke in product code.
+            foreach (var f in Directory.EnumerateFiles(desktop, "*.cs", SearchOption.AllDirectories))
+                Assert(!File.ReadAllText(f).Contains("Dispatcher.Invoke("),
+                    $"{Path.GetFileName(f)} uses synchronous Dispatcher.Invoke (UI-thread stall)");
+
+            // (5) No per-navigation allocation in the nav converter.
+            var conv = File.ReadAllText(Path.Combine(desktop, "Converters", "PageActiveConverter.cs"));
+            Assert(conv.Contains("Brushes.Transparent"), "nav converter must reuse a frozen brush");
+
+            // (6) Runtime smoke diagnostic must remain available.
+            Assert(File.Exists(Path.Combine(root, "tests", "AuroraSelfTest", "NavSmoke.cs")),
+                "the nav-smoke WPF diagnostic must stay in the repo");
+
+            // Behavioural check: with zero clocks, 40 show/hide cycles add
+            // exactly zero running animations.
+            var hasClock = styles.Contains("<BeginStoryboard");
+            var running = 0;
+            for (var i = 0; i < 40; i++)
+            {
+                if (hasClock) running++;    // the round-66 accumulation
+                Assert(running == 0, $"animation clocks accumulated after {i + 1} switches: {running}");
+            }
+        });
+
+        Check("UiLatencyTrace: flags slow switches and summarises them", () =>
+        {
+            // Round-68: every remaining "卡顿" theory has to produce a number.
+            // The trace is the thing that turns a vague report into "nav:Mods
+            // 128ms".
+            var trace = new AuroraCore.Services.UiLatencyTrace();
+            Assert(!trace.Record("nav:Home", 3.0), "a fast switch must not be flagged");
+            Assert(trace.Record("nav:Mods", 128.0), "a switch over 50ms must be flagged");
+            Assert(trace.Record("nav:Mods", 61.0), "second slow sample must be flagged too");
+            Assert(!trace.Record("nav:Mods", 12.0), "a later fast sample is not slow");
+
+            Assert(trace.Count("nav:Mods") == 3, "every sample is counted");
+            Assert(trace.SlowCount("nav:Mods") == 2, "only samples above the threshold are slow");
+            Assert(Math.Abs(trace.LastMs("nav:Mods") - 12.0) < 0.001, "last sample wins");
+            Assert(trace.LastMs("nav:Help") < 0, "unknown stage reports -1");
+            Assert(trace.SlowestStage == "nav:Mods", "slowest stage must be reported");
+
+            var summary = trace.Summary();
+            Assert(summary.Contains("4"), $"summary must carry the sample count: {summary}");
+            Assert(!trace.Record("", 999), "blank stage must be ignored");
+            Assert(!trace.Record("nav:X", double.NaN), "NaN must be ignored");
+
+            trace.Reset();
+            Assert(trace.TotalSamples == 0 && trace.TotalSlow == 0, "Reset clears everything");
+            Assert(trace.Summary().Contains("暂无"), "empty trace says so instead of dividing by zero");
+        });
+
+        Check("PageWarmupPolicy: sidebar order, skip built pages, never warm while busy", () =>
+        {
+            // Round-68: pre-warming builds every page during idle so the first
+            // click on each tab is a warm 0.3ms flip instead of a 5-60ms build.
+            var created = new List<string> { "Home" };
+            Assert(AuroraCore.Services.PageWarmupPolicy.NextToWarm(created) == "Download",
+                "the next unbuilt page in sidebar order must be warmed");
+
+            created.AddRange(new[] { "Download", "Instances" });
+            Assert(AuroraCore.Services.PageWarmupPolicy.NextToWarm(created) == "Mods",
+                "already built pages must be skipped");
+
+            var all = AuroraCore.Services.PageWarmupPolicy.PageOrder.ToList();
+            Assert(AuroraCore.Services.PageWarmupPolicy.NextToWarm(all) == null,
+                "nothing left to warm once every page exists");
+            Assert(all.Count == 9 && all[0] == "Home" && all[^1] == "Help",
+                "PageOrder must list all nine pages, Home first (most likely next click)");
+
+            Assert(AuroraCore.Services.PageWarmupPolicy.ShouldWarmNow(false, false, false),
+                "idle launcher may pre-warm");
+            Assert(!AuroraCore.Services.PageWarmupPolicy.ShouldWarmNow(true, false, false),
+                "never steal the UI thread while the launcher is busy");
+            Assert(!AuroraCore.Services.PageWarmupPolicy.ShouldWarmNow(false, true, false),
+                "never pre-warm while a download is reporting progress");
+            Assert(!AuroraCore.Services.PageWarmupPolicy.ShouldWarmNow(false, false, true),
+                "never pre-warm during shutdown");
+        });
+
+        Check("Guard: lists nested in a ScrollViewer stay bounded (round-68)", () =>
+        {
+            // Item #2 of the round-68 review: an unbounded list inside a page
+            // ScrollViewer is measured with infinite height, realises every
+            // container and disables virtualization — the round-17 lesson.
+            var root = FindSourceRoot()!;
+            var views = Path.Combine(root, "src", "AuroraLauncher.Desktop", "Views");
+            var offenders = new List<string>();
+            var scanned = 0;
+            foreach (var xaml in Directory.EnumerateFiles(views, "*.xaml"))
+            {
+                scanned++;
+                foreach (var problem in NestedScrollPolicy.FindUnboundedLists(File.ReadAllText(xaml)))
+                    offenders.Add($"{Path.GetFileName(xaml)} {problem}");
+            }
+            Assert(scanned >= 9, $"expected to scan every page, saw {scanned}");
+            Assert(offenders.Count == 0, "unbounded ListBox in a ScrollViewer: " + string.Join("; ", offenders));
+
+            // The policy itself must not be toothless.
+            Assert(NestedScrollPolicy.FindUnboundedLists(
+                    "<ScrollViewer>\n<ListBox ItemsSource=\"{Binding X}\"/>\n</ScrollViewer>").Count == 1,
+                "a plain nested ListBox must be flagged");
+            Assert(NestedScrollPolicy.FindUnboundedLists(
+                    "<ScrollViewer>\n<ListBox MaxHeight=\"220\" ItemsSource=\"{Binding X}\"/>\n</ScrollViewer>").Count == 0,
+                "MaxHeight restores a finite viewport");
+            Assert(NestedScrollPolicy.FindUnboundedLists(
+                    "<StackPanel>\n<ListBox ItemsSource=\"{Binding X}\"/>\n</StackPanel>").Count == 0,
+                "a list outside any ScrollViewer is fine");
+            Assert(NestedScrollPolicy.FindUnboundedLists(
+                    "<ScrollViewer HorizontalScrollBarVisibility=\"Auto\"/>\n<ListBox ItemsSource=\"{Binding X}\"/>").Count == 0,
+                "a self-closing ScrollViewer does not open a scope");
+        });
+
+        Check("Guard: page init runs on first SHOWN, not on first attach (round-68)", () =>
+        {
+            // Pre-warming attaches every page Hidden during idle. Any async
+            // init still hooked on Loaded would then fire a Modrinth search /
+            // Java probe / manifest fetch for a page nobody opened.
+            var root = FindSourceRoot()!;
+            var views = Path.Combine(root, "src", "AuroraLauncher.Desktop", "Views");
+            foreach (var file in Directory.EnumerateFiles(views, "*.xaml.cs"))
+            {
+                var text = File.ReadAllText(file);
+                var name = Path.GetFileName(file);
+                // Only page hosts are pre-warmed; a dialog Window (updater)
+                // attaches and shows once, so Loaded is still the right hook.
+                if (!text.Contains(": UserControl")) continue;
+                if (!text.Contains("Loaded +=")) continue;
+                if (!text.Contains("async")) continue;
+                Assert(text.Contains("PageLifecycle.OnFirstShown("),
+                    $"{name} runs async init from Loaded — use PageLifecycle.OnFirstShown so idle pre-warm cannot trigger it");
+            }
+
+            foreach (var name in new[] { "DownloadView.xaml.cs", "ModsView.xaml.cs", "SettingsView.xaml.cs" })
+            {
+                var text = File.ReadAllText(Path.Combine(views, name));
+                Assert(text.Contains("PageLifecycle.OnFirstShown("),
+                    $"{name} must run its first init through PageLifecycle.OnFirstShown");
+            }
+
+            var lifecycle = File.ReadAllText(Path.Combine(views, "PageLifecycle.cs"));
+            Assert(lifecycle.Contains("IsVisibleChanged") && lifecycle.Contains("TryEnter"),
+                "the first-shown hook must be single-shot and visibility-driven");
+        });
+
+        Check("Logger: file writes are batched off-thread and flushed on demand", () =>
+        {
+            // Round-69: the user's own log showed `切换页面 Download 用时 62ms（已缓存）`
+            // while the page flip measured 0.3 ms — the UI thread was blocked by
+            // something else. The biggest such something was the logger itself:
+            // every line did File.AppendAllText ON THE CALLING THREAD.
+            var dir = Path.Combine(Path.GetTempPath(), "aurora-logs-" + Guid.NewGuid().ToString("N")[..8]);
+            var prev = Logger.Instance.LogFilePath;
+            Logger.Instance.Configure(dir);
+            try
+            {
+                const int lines = 40;
+                for (var i = 0; i < lines; i++)
+                    Logger.Instance.Info("selftest", $"batch-line-{i:00}");
+
+                Assert(Logger.Instance.Flush(5000), "Flush must drain the write queue");
+                var file = Logger.Instance.LogFilePath!;
+                Assert(File.Exists(file), "the log file must exist after Flush");
+
+                var text = File.ReadAllText(file);
+                for (var i = 0; i < lines; i++)
+                    Assert(text.Contains($"batch-line-{i:00}"), $"line {i} was lost by the async writer");
+
+                var first = text.IndexOf("batch-line-00", StringComparison.Ordinal);
+                var last = text.IndexOf($"batch-line-{lines - 1:00}", StringComparison.Ordinal);
+                Assert(first >= 0 && last > first, "log lines must keep their order");
+
+                Logger.Instance.Info("selftest", "second-burst");
+                Assert(Logger.Instance.Flush(5000), "a second Flush must also drain");
+                Assert(File.ReadAllText(file).Contains("second-burst"), "later lines must be appended after a Flush");
+            }
+            finally
+            {
+                if (prev != null) Logger.Instance.Configure(Path.GetDirectoryName(prev));
+            }
+        });
+
+        Check("NavigationLatencyPolicy: 'page is slow' vs 'UI thread was busy'", () =>
+        {
+            // Round-69: the round-68 warning blamed the page for a slow switch
+            // that was actually queue delay. These are the two cases that must
+            // stay distinguishable, because they lead to opposite optimizations.
+            var fast = AuroraCore.Services.NavigationLatencyPolicy.FromPhases(0.3, 1.2, 2.0);
+            Assert(fast.PageMs is > 1.4 and < 1.6, $"page cost = flip + paint, got {fast.PageMs}");
+            Assert(AuroraCore.Services.NavigationLatencyPolicy.Classify(fast)
+                   == AuroraCore.Services.NavigationSlowKind.None, "a 2ms switch is not slow");
+
+            var busyThread = AuroraCore.Services.NavigationLatencyPolicy.FromPhases(0.3, 1.0, 62.0);
+            Assert(AuroraCore.Services.NavigationLatencyPolicy.Classify(busyThread)
+                   == AuroraCore.Services.NavigationSlowKind.UiThreadBusy,
+                "a fast page behind a busy dispatcher must not be blamed on the page");
+            Assert(AuroraCore.Services.NavigationLatencyPolicy.Describe("Download", busyThread, built: false, initial: false)
+                   .Contains("UI 线程"), "the busy-thread message must name the real cause");
+
+            var slowPage = AuroraCore.Services.NavigationLatencyPolicy.FromPhases(4.0, 120.0, 124.0);
+            Assert(AuroraCore.Services.NavigationLatencyPolicy.Classify(slowPage)
+                   == AuroraCore.Services.NavigationSlowKind.PageRender,
+                "layout over the threshold is a page problem");
+            Assert(AuroraCore.Services.NavigationLatencyPolicy.Describe("Logs", slowPage, built: true, initial: false)
+                   .Contains("页面排版"), "the page message must say the page is slow");
+
+            // Clock skew / negative deltas must never produce nonsense.
+            var skewed = AuroraCore.Services.NavigationLatencyPolicy.FromPhases(-1, -5, 0);
+            Assert(skewed.FlipMs == 0 && skewed.PaintMs == 0 && skewed.QueueMs == 0, "negative phases clamp to 0");
+            Assert(AuroraCore.Services.NavigationLatencyPolicy.Describe("Home", fast, false, true)
+                   .StartsWith("首次进入"), "the initial activation is described as such");
+        });
+
+        Check("Guard: log I/O off the calling thread + Logs feed frozen while hidden (round-69)", () =>
+        {
+            var root = FindSourceRoot()!;
+            var logger = File.ReadAllText(Path.Combine(root, "src", "AuroraCore", "Utils", "Logger.cs"));
+            var logBody = logger[logger.IndexOf("public void Log(", StringComparison.Ordinal)..];
+            logBody = logBody[..logBody.IndexOf("public void Info(", StringComparison.Ordinal)];
+            Assert(!logBody.Contains("File.AppendAllText"),
+                "Log() must never touch the disk on the caller's thread — that is the UI thread");
+            Assert(logger.Contains("WriterLoop") && logger.Contains("_pendingWrites") && logger.Contains("public bool Flush("),
+                "the async writer + Flush contract must stay in place");
+
+            var vm = File.ReadAllText(Path.Combine(root, "src", "AuroraLauncher.Desktop", "ViewModels", "MainViewModel.cs"));
+            Assert(vm.Contains("IsLogsPageActive"), "the Logs feed must be gated on the page being visible");
+            Assert(vm.Contains("Logs.Replace(snapshot)"),
+                "re-entering the Logs page must publish the backlog in ONE Reset, not N Add notifications");
+            Assert(!vm.Contains("if (SetProperty(ref _showErrorsOnly, value))\n                LogsView.Filter"),
+                "the errors-only filter must not be cleared by a redundant assignment");
+        });
+
+        Check("RouteFailurePolicy: 404 is permanent, no retry storm", () =>
+        {
+            // Round-70: the user's log was dominated by `Route '镜像(直连)' failed
+            // (round 1): ... 404` + `All 4 routes failed on round 1; retrying
+            // once...`. Those 404s cannot improve — retrying wasted a whole
+            // round of HTTP + parsing for every loader on every refresh.
+            Assert(AuroraCore.Utils.RouteFailurePolicy.IsPermanent(
+                    "Response status code does not indicate success: 404 (Not Found)."), "404 is permanent");
+            Assert(AuroraCore.Utils.RouteFailurePolicy.IsPermanent("403 (Forbidden)"), "403 is permanent");
+            Assert(!AuroraCore.Utils.RouteFailurePolicy.IsPermanent("A task was canceled."), "cancel is not permanent");
+            Assert(!AuroraCore.Utils.RouteFailurePolicy.IsPermanent("The request timed out"), "timeout is transient");
+            Assert(!AuroraCore.Utils.RouteFailurePolicy.IsPermanent("503 (Service Unavailable)"), "5xx is transient");
+            Assert(!AuroraCore.Utils.RouteFailurePolicy.IsPermanent(null), "null is not permanent");
+
+            var permanentOnly = new[] { "镜像(直连): 404", "镜像(默认通道): 404", "官方(直连): 404", "官方(默认通道): 404" };
+            Assert(!AuroraCore.Utils.RouteFailurePolicy.ShouldRetry(permanentOnly, 1, 2),
+                "all-permanent failures must NOT spend the retry round");
+            var transient = new[] { "404", "The request timed out" };
+            Assert(AuroraCore.Utils.RouteFailurePolicy.ShouldRetry(transient, 1, 2),
+                "one transient failure keeps the retry budget");
+            Assert(!AuroraCore.Utils.RouteFailurePolicy.ShouldRetry(transient, 2, 2), "no retries past the budget");
+
+            var cancelled = new[] { "A task was canceled." };
+            Assert(!AuroraCore.Utils.RouteFailurePolicy.ShouldRetry(cancelled, 1, 2),
+                "a cancelled request must not be retried (the user navigated away)");
+
+            var (warnOn404, text404) = AuroraCore.Utils.RouteFailurePolicy.DescribeFailure("镜像(直连)", 1, "404 (Not Found)");
+            Assert(!warnOn404 && text404.Contains("permanent"), "permanent failures are logged as info, not warnings");
+            var (warnOnTimeout, _) = AuroraCore.Utils.RouteFailurePolicy.DescribeFailure("官方(直连)", 1, "timed out");
+            Assert(warnOnTimeout, "transient failures stay warnings");
+
+            // Round-71: DNS failures are permanent. The dead bmclapi.cn domain
+            // produced "不知道这样的主机" on every route — retrying it is pure delay.
+            Assert(AuroraCore.Utils.RouteFailurePolicy.IsPermanent("不知道这样的主机。"),
+                "the localized 'no such host' string is permanent");
+            Assert(AuroraCore.Utils.RouteFailurePolicy.IsPermanent("No such host is known."),
+                "the English 'no such host' string is permanent");
+            Assert(AuroraCore.Utils.RouteFailurePolicy.IsPermanent("getaddrinfo failed"), "getaddrinfo failure is permanent");
+            Assert(!AuroraCore.Utils.RouteFailurePolicy.ShouldRetry(
+                    new[] { "不知道这样的主机。", "不知道这样的主机。" }, 1, 2),
+                "a DNS-dead host must not be retried");
+        });
+
+        Check("UiStallTrace: attributes a UI freeze to GC or to app work", () =>
+        {
+            // Round-70: 48–218 ms of "waiting for the UI thread" with a 5 ms page
+            // means something else owns the dispatcher. GC and our own code need
+            // opposite fixes, so the watchdog must tell them apart.
+            var trace = new AuroraCore.Services.UiStallTrace();
+            Assert(trace.Sample(10_000) == null, "a normal tick is not a stall");
+
+            var gcDominant = new AuroraCore.Services.StallSample(600, 520);
+            Assert(gcDominant.IsGcDominated, "GC pause covering most of the gap is a collection");
+            Assert(gcDominant.OtherMs <= 80.1, "the remainder is small");
+            var described = AuroraCore.Services.UiStallTrace.Describe(gcDominant);
+            Assert(described.Contains("GC"), $"GC stalls must name GC: {described}");
+            Assert(described.Contains("停顿"), "the message must say how long the UI was stuck");
+
+            var workDominant = new AuroraCore.Services.StallSample(320, 5);
+            Assert(!workDominant.IsGcDominated, "5 ms of GC cannot explain a 320 ms gap");
+            Assert(AuroraCore.Services.UiStallTrace.Describe(workDominant).Contains("界面线程被占用"),
+                "work on the UI thread must be named as such");
+
+            var mixed = new AuroraCore.Services.StallSample(300, 120);
+            var mixedText = AuroraCore.Services.UiStallTrace.Describe(mixed);
+            Assert(mixedText.Contains("120") && mixedText.Contains("其余"), $"mixed stalls report both parts: {mixedText}");
+
+            // The reported number is the EXCESS over the interval (what is felt),
+            // and fast GC bursts inside a small stall are not "GC dominated".
+            Assert(new AuroraCore.Services.StallSample(250, 0).OtherMs == 250, "other = stall - gc");
+            Assert(new AuroraCore.Services.StallSample(250, 240).IsGcDominated, "240/250 is GC dominated");
+            Assert(!new AuroraCore.Services.StallSample(250, 60).IsGcDominated, "60/250 is not GC dominated");
+            Assert(AuroraCore.Services.UiStallTrace.Describe(new AuroraCore.Services.StallSample(600, 0))
+                .Contains("600"), "the stall figure must be the excess, not the raw tick gap");
+        });
+
+        Check("DiagnosticsExporter: 导出日志 writes a sanitized, headered text file", () =>
+        {
+            // Round-70 user request: a one-click log export for bug reports.
+            var root = Path.Combine(Path.GetTempPath(), "aurora-logexp-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(Path.Combine(root, "logs"));
+            var logFile = Path.Combine(root, "logs", "aurora-test.log");
+            File.WriteAllText(logFile,
+                "[12:00:00] [Info] [ui] MARKER-LINE\n" +
+                $"[12:00:01] [Info] [root] {root}\\logs\\x.log\n" +
+                "[12:00:02] [Warn] [Auth] {\"accessToken\":\"SECRET-TOKEN-123\"}\n");
+
+            var dest = Path.Combine(root, "export.txt");
+            var (ok, chars, message) = AuroraCore.Services.DiagnosticsExporter
+                .ExportLogTextAsync(dest, root).GetAwaiter().GetResult();
+
+            Assert(ok, $"export must succeed: {message}");
+            Assert(chars > 0, "the export must report a size");
+            var text = File.ReadAllText(dest);
+            Assert(text.StartsWith("=== Aurora Launcher 日志导出 ==="), "the export must carry a header");
+            Assert(text.Contains($"第 {AuroraCore.BuildInfo.CurrentRound} 轮"), "the header must name the build round");
+            Assert(text.Contains("MARKER-LINE"), "the log body must be present");
+            Assert(!text.Contains("SECRET-TOKEN-123"), "tokens must be redacted before leaving the machine");
+            Assert(!text.Contains(root), "the launcher root path must be redacted");
+            Assert(AuroraCore.Services.DiagnosticsExporter.NewestLogFile(root) == logFile,
+                "the newest log file must be picked for export");
+
+            var (noLogOk, _, noLogMsg) = AuroraCore.Services.DiagnosticsExporter
+                .ExportLogTextAsync(Path.Combine(root, "none.txt"), Path.Combine(root, "empty-root"))
+                .GetAwaiter().GetResult();
+            Assert(!noLogOk && noLogMsg.Contains("日志"), "a missing log must fail with a readable message");
+            Directory.Delete(root, recursive: true);
+        });
+
+        Check("NetRouting.BuildHosts: both hosts survive a mirrored input URL", () =>
+        {
+            // Round-71 root cause: `VersionManifestUrl` returned the BMCLAPI URL
+            // when the source was BMCLAPI, so ToBmclapiUrl(url) == url, the route
+            // set collapsed to two identical dead routes, and the official host
+            // was never tried. The source must only decide ORDER.
+            const string official = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+            const string mirror = "https://bmclapi2.bangbang93.com/mc/game/version_manifest_v2.json";
+
+            var normal = AuroraCore.Utils.NetRouting.BuildHosts(official, LauncherConfig.ToBmclapiUrl(official), preferMirror: false);
+            Assert(normal.Count == 2, $"official source must offer two hosts, got {normal.Count}");
+            Assert(normal[0].Url == official && normal[0].Kind == "官方", "official host first when the user picked official");
+            Assert(normal[1].Url == mirror && normal[1].Kind == "镜像", "mirror stays available as the fallback");
+
+            var preferredMirror = AuroraCore.Utils.NetRouting.BuildHosts(official, LauncherConfig.ToBmclapiUrl(official), preferMirror: true);
+            Assert(preferredMirror.Count == 2 && preferredMirror[0].Url == mirror,
+                "BMCLAPI preference reorders the hosts but keeps the official one");
+
+            // THE regression: a caller hands us an already mirrored URL.
+            var alreadyMirrored = AuroraCore.Utils.NetRouting.BuildHosts(mirror, LauncherConfig.ToBmclapiUrl(mirror), preferMirror: true);
+            Assert(alreadyMirrored.Count == 2,
+                "a mirrored input must still yield two distinct hosts (round-70 collapse was 2 dead mirror routes)");
+            Assert(alreadyMirrored.Any(h => h.Url == official),
+                "the official Mojang host must still be tried when the input URL is a mirror URL");
+
+            // No mirror exists for third-party APIs — do not invent one.
+            var thirdParty = AuroraCore.Utils.NetRouting.BuildHosts("https://api.modrinth.com/v2/search", null, preferMirror: false);
+            Assert(thirdParty.Count == 1, "non-Mojang URLs must not gain a fake mirror route");
+
+            // The configured manifest URL is always official now.
+            var cfg = LauncherConfig.Instance;
+            var before = cfg.RoutePolicy;
+            try
+            {
+                cfg.RoutePolicy = DownloadPolicy.Mirror;
+                Assert(cfg.VersionManifestUrl.StartsWith("https://piston-meta.mojang.com", StringComparison.Ordinal),
+                    "the manifest URL must stay official even when the mirror is forced");
+                Assert(!cfg.VersionManifestUrl.Contains("bmclapi", StringComparison.OrdinalIgnoreCase),
+                    "the dead mirror domain must never be produced as a manifest URL");
+
+                // Round-85: forced routes apply to the URL we hand to the engine.
+                Assert(cfg.RewriteUrl(official).Contains("bmclapi"),
+                    "强制镜像时，二进制下载地址必须真的换成镜像");
+                cfg.RoutePolicy = DownloadPolicy.Official;
+                Assert(cfg.RewriteUrl(official) == official,
+                    "强制官方时不能偷偷改写成镜像");
+            }
+            finally { cfg.RoutePolicy = before; }
+        });
+
+        Check("Guard: 测速只用 HEAD / 有缓存 / 下载路径不等测速（第 85 轮）", () =>
+        {
+            var root = FindSourceRoot()!;
+            var probe = File.ReadAllText(Path.Combine(root, "src", "AuroraCore", "Utils", "NetworkProbe.cs"));
+
+            // (1) No full-body download in a latency probe. HEAD first, with a
+            // 1-byte Range GET as the fallback for hosts that refuse HEAD.
+            Assert(probe.Contains("HttpMethod.Head"), "测速必须先发 HEAD");
+            Assert(probe.Contains("RangeHeaderValue(0, 0)"),
+                "HEAD 被拒时只能取 1 个字节，不能顺手把整个清单拉下来");
+            Assert(!probe.Contains("GetByteArrayAsync") && !probe.Contains("ReadAsByteArrayAsync"),
+                "测速绝不能把响应体读进内存");
+            Assert(probe.Contains("ResponseHeadersRead"),
+                "只读响应头就够，别把内容缓冲起来");
+
+            // (2) Cached, single-flight.
+            Assert(probe.Contains("CacheTtl") && probe.Contains("TimeSpan.FromMinutes(5)"),
+                "测速结果必须有 5 分钟缓存（每次下载都测速是 10 秒级卡顿的经典来源）");
+            Assert(probe.Contains("_inFlight"), "并发调用必须共享同一次测速，不能五路一起打");
+
+            // (3) The download path must never await the probe.
+            var routing = File.ReadAllText(Path.Combine(root, "src", "AuroraCore", "Utils", "NetRouting.cs"));
+            Assert(routing.Contains("NetworkProbe.Preference"),
+                "NetRouting 应该读缓存好的 Preference（静态字段，零 IO）");
+            Assert(!routing.Contains("await NetworkProbe."),
+                "下载路径里不许 await 测速");
+
+            var engine = File.ReadAllText(Path.Combine(root, "src", "AuroraCore", "Download", "DownloadEngine.cs"));
+            Assert(!engine.Contains("NetworkProbe"),
+                "下载引擎不得直接接触测速（只能通过 URL 选择 + 失败换线）");
+
+            // (4) Cross-route fallback exists and is policy-gated.
+            Assert(engine.Contains("RouteSwitchAllowed") && engine.Contains("AlternateRouteUrl"),
+                "单线路失败后必须能换另一条线路，否则强制官方 = 强制失败");
+            Assert(engine.Contains("switchedRoute"), "换线只能换一次，不能两条来回弹");
+
+            // Pure URL mapping used by that fallback.
+            const string official = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+            var mirror = DownloadEngine.AlternateRouteUrl(official);
+            Assert(mirror != null && mirror.Contains("bmclapi"), "官方 URL 的备胎是镜像");
+            Assert(DownloadEngine.AlternateRouteUrl(mirror!) == official, "镜像 URL 的备胎是官方");
+            Assert(DownloadEngine.AlternateRouteUrl("https://api.modrinth.com/v2/search") == null,
+                "第三方接口没有备胎，必须返回 null 而不是错误地改写");
+
+            // Forced policy: core files must NOT silently switch hosts.
+            var cfg = LauncherConfig.Instance;
+            var before = cfg.RoutePolicy;
+            try
+            {
+                cfg.RoutePolicy = DownloadPolicy.Official;
+                Assert(!DownloadEngine.RouteSwitchAllowed("https://x/versions/1.21.1/1.21.1.jar"),
+                    "强制官方时，核心文件失败必须报错，不能偷偷走镜像");
+                Assert(DownloadEngine.RouteSwitchAllowed("https://x/assets/ab/abcdef"),
+                    "非核心资源（声音/材质）允许静默回退");
+                cfg.RoutePolicy = DownloadPolicy.Auto;
+                Assert(DownloadEngine.RouteSwitchAllowed("https://x/versions/1.21.1/1.21.1.jar"),
+                    "自动模式下任何文件都可以换线重试");
+            }
+            finally { cfg.RoutePolicy = before; }
+        });
+
+        Check("Forge 安装器 URL：必须拼成「MC版本-Forge版本」（第 86 轮）", () =>
+        {
+            // The reported 404: a modpack gives the bare forge version
+            // ("47.4.22"), and ".../forge/47.4.22/forge-47.4.22-installer.jar"
+            // does not exist — verified 404 on maven.minecraftforge.net and on
+            // BMCLAPI, while "1.20.1-47.4.22" returns 200.
+            Assert(ModLoaderInstaller.ForgeMavenVersion("1.20.1", "47.4.22") == "1.20.1-47.4.22",
+                "bare forge version must gain the MC prefix");
+            Assert(ModLoaderInstaller.ForgeMavenVersion("1.20.1", "1.20.1-47.4.22") == "1.20.1-47.4.22",
+                "an already-combined version must not be double-prefixed");
+            Assert(ModLoaderInstaller.ForgeMavenVersion("1.20.1", "forge-1.20.1-47.4.22") == "1.20.1-47.4.22",
+                "a full version id must be unwrapped");
+            Assert(ModLoaderInstaller.ForgeMavenVersion("1.20.1", " 47.4.22 ") == "1.20.1-47.4.22",
+                "surrounding whitespace must not leak into the URL");
+            Assert(ModLoaderInstaller.ForgeMavenVersion("1.20.1", "") == "", "empty input stays empty");
+
+            const string forgeBase = "https://maven.minecraftforge.net/net/minecraftforge/forge";
+            var (url, file) = ModLoaderInstaller.BuildMavenInstallerUrl(forgeBase, "forge", "1.20.1-47.4.22");
+            Assert(url == forgeBase + "/1.20.1-47.4.22/forge-1.20.1-47.4.22-installer.jar",
+                "installer URL shape: " + url);
+            Assert(file == "forge-1.20.1-47.4.22-installer.jar", "file name must match the path version");
+
+            // The regression: the exact URL from the bug report must be impossible.
+            var bad = ModLoaderInstaller.BuildMavenInstallerUrl(forgeBase, "forge", "47.4.22").Url;
+            Assert(bad.Contains("/forge/47.4.22/"), "sanity: the raw builder is dumb on purpose");
+            Assert(ModLoaderInstaller.BuildMavenInstallerUrl(forgeBase, "forge",
+                    ModLoaderInstaller.ForgeMavenVersion("1.20.1", "47.4.22")).Url != bad,
+                "the resolver must never emit the 404 URL from the report");
+
+            // NeoForge is NOT prefixed: its versions already carry the MC series
+            // ("21.1.72"), and prefixing would create a second 404 class.
+            const string neoBase = "https://maven.neoforged.net/releases/net/neoforged/neoforge";
+            var neo = ModLoaderInstaller.BuildMavenInstallerUrl(neoBase, "neoforge", "21.1.72");
+            Assert(neo.Url == neoBase + "/21.1.72/neoforge-21.1.72-installer.jar",
+                "NeoForge path must stay as provided: " + neo.Url);
+        });
+
+        Check("LauncherConfig.ToOfficialUrl: maven 路径可按 group 反解（第 86 轮）", () =>
+        {
+            // Round-85's cross-route switch needs a reversible URL. A bare
+            // "/maven/…" used to be left alone, so a mirror 404 on the Forge
+            // installer could not be retried against the official host.
+            const string forge = "https://maven.minecraftforge.net/net/minecraftforge/forge/1.20.1-47.4.22/forge-1.20.1-47.4.22-installer.jar";
+            const string neo = "https://maven.neoforged.net/releases/net/neoforged/neoforge/21.1.72/neoforge-21.1.72-installer.jar";
+            const string fabric = "https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.0.1/fabric-installer-1.0.1.jar";
+            const string quilt = "https://maven.quiltmc.org/repository/release/org/quiltmc/quilt-installer/0.9.2/quilt-installer-0.9.2.jar";
+
+            foreach (var official in new[] { forge, neo, fabric, quilt })
+            {
+                var mirrored = LauncherConfig.ToBmclapiUrl(official);
+                Assert(mirrored.Contains("bmclapi"), "mirror form expected for " + official);
+                Assert(LauncherConfig.ToOfficialUrl(mirrored) == official,
+                    $"round-trip failed:\n  official {official}\n  mirror   {mirrored}\n  reverse  {LauncherConfig.ToOfficialUrl(mirrored)}");
+            }
+
+            // And the engine can therefore switch a mirror 404 back to official.
+            var alt = DownloadEngine.AlternateRouteUrl(LauncherConfig.ToBmclapiUrl(forge));
+            Assert(alt == forge, "mirror installer URL must map back to the official host (got " + (alt ?? "null") + ")");
+        });
+
+        Check("Guard: 安装器重试前必须清残留、且不违背强制线路（第 86 轮）", () =>
+        {
+            var src = File.ReadAllText(Path.Combine(FindSourceRoot()!, "src", "AuroraCore",
+                "Services", "ModLoaders", "ModLoaderInstallers.cs"));
+
+            // An installer jar has no expected hash → DownloadEngine would reuse a
+            // stale file forever; it must be deleted (and its .part) before retry.
+            Assert(src.Contains("jarPath + \".part\""), "installation must delete the stale .part too");
+            Assert(src.Contains("File.Delete(stale)"), "stale installer files must be removed before downloading");
+
+            // Forced-official must not silently fall back to the mirror for the
+            // installer (round-85 rule); Auto/Forced-mirror may.
+            Assert(src.Contains("RoutePolicy != DownloadPolicy.Official"),
+                "the installer fallback must respect the forced-official policy");
+            Assert(src.Contains("ForgeMavenVersion"), "the resolver must normalize the forge version");
+            Assert(src.Contains("BuildMavenInstallerUrl"), "path and file name must come from one builder");
+        });
+
+        Check("DownloadIntegrity: 没有校验值不再等于「完整」（第 87 轮）", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "aurora-integrity-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var body = new byte[1024 * 37];
+                Random.Shared.NextBytes(body);
+                var good = Path.Combine(dir, "good.bin");
+                File.WriteAllBytes(good, body);
+                var sha1 = CryptoHelper.Sha1(good);
+
+                // 1) 有哈希：哈希说了算，大小不参与。
+                Assert(DownloadIntegrity.Check(good, sha1, null) == IntegrityVerdict.Match, "sha1 match must be Match");
+                Assert(DownloadIntegrity.Check(good, sha1, body.Length) == IntegrityVerdict.Match, "sha1 match + size match");
+                Assert(DownloadIntegrity.Check(good, sha1, body.Length + 5) == IntegrityVerdict.Match,
+                    "a hash match wins even when the declared size is off (mirror rounds sizes)");
+                Assert(DownloadIntegrity.Check(good, "0000000000000000000000000000000000000000", body.Length) == IntegrityVerdict.Mismatch,
+                    "sha1 mismatch must be Mismatch");
+
+                // 2) 只有大小（OptiFine / 第三方 CDN 那种）：半截文件必须被抓出来。
+                Assert(DownloadIntegrity.Check(good, null, body.Length) == IntegrityVerdict.Match, "size match must be Match");
+                var truncated = Path.Combine(dir, "half.bin");
+                File.WriteAllBytes(truncated, body.Take(body.Length / 2).ToArray());
+                Assert(DownloadIntegrity.Check(truncated, null, body.Length) == IntegrityVerdict.Mismatch,
+                    "a half-written file with a published size must NOT pass");
+
+                // 3) 什么都没有：只能说「无法确认」，绝不能说「完整」。
+                Assert(DownloadIntegrity.Check(good, null, null) == IntegrityVerdict.Unverifiable,
+                    "no hash and no size must be Unverifiable, not Match");
+                Assert(!DownloadIntegrity.IsTrustworthyForSkip(IntegrityVerdict.Unverifiable),
+                    "the cached-file path must NOT skip an unverifiable file");
+                Assert(DownloadIntegrity.IsTrustworthyForSkip(IntegrityVerdict.Match), "only a real match may skip");
+                Assert(!DownloadIntegrity.IsTrustworthyForSkip(IntegrityVerdict.Mismatch), "a mismatch must be downloaded again");
+
+                // 4) 刚写完的正文：只有明确的 mismatch 才算失败（否则会无限重试）。
+                Assert(DownloadIntegrity.IsAcceptableAfterDownload(IntegrityVerdict.Match), "match commits");
+                Assert(DownloadIntegrity.IsAcceptableAfterDownload(IntegrityVerdict.Unverifiable),
+                    "a fresh body with nothing to compare must still commit");
+                Assert(!DownloadIntegrity.IsAcceptableAfterDownload(IntegrityVerdict.Mismatch),
+                    "a fresh body with the wrong size/hash must be retried");
+
+                Assert(DownloadIntegrity.Check(Path.Combine(dir, "nope.bin"), sha1, 10) == IntegrityVerdict.Missing,
+                    "a missing file is Missing, not Unverifiable");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        });
+
+        Check("Guard: 缓存命中必须走 DownloadIntegrity，VerifyHash(null) 已删除（第 87 轮）", () =>
+        {
+            var srcRoot = Path.Combine(FindSourceRoot()!, "src");
+            var engine = File.ReadAllText(Path.Combine(srcRoot, "AuroraCore", "Download", "DownloadEngine.cs"));
+
+            // Round-88 review: scanning only DownloadEngine.cs left every other
+            // download path unguarded — the round-86 installer workaround lives in
+            // ModLoaderInstallers.cs, and a future helper there could reintroduce
+            // the "no hash = complete" hole unnoticed. The rule is about the
+            // IDENTIFIER, so it has to cover the whole src/ tree.
+            var offenders = new List<string>();
+            foreach (var file in Directory.EnumerateFiles(srcRoot, "*.cs", SearchOption.AllDirectories))
+            {
+                if (file.Contains("\\obj\\") || file.Contains("\\bin\\")) continue;
+                var text = File.ReadAllText(file);
+                if (!text.Contains("VerifyHash(")) continue;
+                // The only place allowed to mention it is the class that explains
+                // why it was removed (a doc comment), and even there it must not
+                // define one.
+                if (Path.GetFileName(file) == "DownloadIntegrity.cs")
+                {
+                    Assert(!text.Contains("static bool VerifyHash"),
+                        "DownloadIntegrity 只能提到旧实现，绝不能重新定义它");
+                    continue;
+                }
+                offenders.Add(Path.GetFileName(file));
+            }
+            Assert(offenders.Count == 0,
+                "整个 src 不得再出现旧的 VerifyHash(（只有 DownloadIntegrity 的说明注释例外）: " +
+                string.Join(", ", offenders));
+
+            Assert(engine.Contains("DownloadIntegrity.IsTrustworthyForSkip"),
+                "the cached path must ask DownloadIntegrity before skipping");
+            Assert(engine.Contains("DownloadIntegrity.IsAcceptableAfterDownload"),
+                "the post-download check must accept an unverifiable fresh body instead of retrying forever");
+            Assert(engine.Contains("ActiveDownloads.Register("),
+                "every file operation must announce itself as owned (the residue cleaner relies on it)");
+            Assert(engine.Contains("sizeComparable"),
+                "a gzip/brotli response must not be size-checked (the file holds expanded bytes)");
+        });
+
+        Check("DownloadResidue: 正在下载的保留，其余清理（第 87 轮）", () =>
+        {
+            var root = Path.Combine(Path.GetTempPath(), "aurora-residue-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(root);
+            ActiveDownloads.ResetForTests();
+            try
+            {
+                var cache = Path.Combine(root, "cache");
+                var libs = Path.Combine(root, "libraries", "net", "example");
+                var update = Path.Combine(root, "update");
+                Directory.CreateDirectory(cache);
+                Directory.CreateDirectory(libs);
+                Directory.CreateDirectory(update);
+
+                string MakePart(string directory, string name, int bytes)
+                {
+                    var dest = Path.Combine(directory, name);
+                    File.WriteAllBytes(dest + ".part", new byte[bytes]);
+                    return dest;
+                }
+
+                // A live download: must survive.
+                var liveDest = MakePart(libs, "live.jar", 4096);
+                // Journalled (resumable via the banner), 5 MB so ShouldTrack keeps it.
+                var journalDest = MakePart(libs, "journaled.jar", 5 * 1024 * 1024);
+                // Untracked junk under 4 MB.
+                var smallDest = MakePart(libs, "small.jar", 1024);
+                // Updater staging leftover: never journalled, always junk.
+                var updateDest = MakePart(update, "AuroraLauncher.patch", 2048);
+                // A finished (non-part) file must be invisible to the scan.
+                File.WriteAllBytes(Path.Combine(libs, "done.jar"), new byte[10]);
+
+                // Real journal file so the scanner finds the "journaled" entry.
+                var journalPath = DownloadJournal.PathFor(root);
+                Directory.CreateDirectory(Path.GetDirectoryName(journalPath)!);
+                File.WriteAllText(journalPath,
+                    "+\thttps://example.invalid/journaled.jar\t" + journalDest + "\t" + (5 * 1024 * 1024) + "\t\n");
+
+                using (ActiveDownloads.Register(liveDest))
+                {
+                    var scan = DownloadResidue.Scan(root);
+                    Assert(scan.Count == 4, $"expected 4 .part files, got {scan.Count}");
+                    Assert(scan.ActiveCount == 1, "the live download must be classified ActiveTask");
+                    Assert(scan.JournaledCount == 1, "the journalled file must be classified Journaled");
+                    Assert(scan.UnownedCount == 2, "the <4 MB leftover and the update/ leftover are unowned");
+                    Assert(scan.ReclaimableCount == 3, "everything but the live download is reclaimable");
+                    Assert(!scan.Files.Any(f => f.FileName.EndsWith("done.jar.part")), "finished files are not residue");
+
+                    var result = DownloadResidue.Clean(scan);
+                    Assert(result.DeletedCount == 3, $"expected 3 deletions, got {result.DeletedCount}");
+                    Assert(result.KeptCount == 1, "the live download must be reported as kept");
+                    Assert(File.Exists(liveDest + ".part"), "a live download's .part must never be deleted");
+                    Assert(!File.Exists(journalDest + ".part"), "a journalled leftover is deletable (after the user agrees)");
+                    Assert(!File.Exists(smallDest + ".part"), "an unowned <4 MB leftover must be deleted");
+                    Assert(!File.Exists(updateDest + ".part"), "the update/ leftover must be deleted");
+                    Assert(File.Exists(Path.Combine(libs, "done.jar")), "cleanup must never touch completed files");
+                    Assert(result.FreedBytes >= 5 * 1024 * 1024, "freed bytes must be reported honestly");
+                }
+            }
+            finally
+            {
+                ActiveDownloads.ResetForTests();
+                DownloadJournal.OverridePathForTests(null);
+                try { Directory.Delete(root, true); } catch { }
+            }
+        });
+
+        Check("DownloadResidue.ShouldWarn: 阈值任一超标才提示（第 87 轮）", () =>
+        {
+            static ResidueFile F(long bytes, ResidueOwner owner = ResidueOwner.Unowned)
+                => new() { Bytes = bytes, Owner = owner, Path = "x.part", Destination = "x" };
+
+            var big = new ResidueScan { Files = new[] { F(300L * 1024 * 1024) } };
+            var many = new ResidueScan { Files = Enumerable.Range(0, 60).Select(_ => F(1024)).ToArray() };
+            var quiet = new ResidueScan { Files = new[] { F(1024) } };
+            var liveOnly = new ResidueScan { Files = new[] { F(500L * 1024 * 1024, ResidueOwner.ActiveTask) } };
+            var empty = new ResidueScan();
+
+            Assert(DownloadResidue.ShouldWarnFromConfig(big, 200, 50), "300 MB 单体残留必须提示");
+            Assert(DownloadResidue.ShouldWarnFromConfig(many, 200, 50), "60 个小文件也必须提示");
+            Assert(!DownloadResidue.ShouldWarnFromConfig(quiet, 200, 50), "1 个 1 KB 文件不该打扰用户");
+            Assert(!DownloadResidue.ShouldWarnFromConfig(liveOnly, 200, 50),
+                "只剩正在下载的文件时不该提示（那不是残留）");
+            Assert(!DownloadResidue.ShouldWarnFromConfig(empty, 200, 50), "空扫描不提示");
+            Assert(DownloadResidue.ShouldWarnFromConfig(quiet, 0, 5) == false, "两个阈值都放开时永远不提示");
+            Assert(!DownloadResidue.ShouldWarnFromConfig(big, 0, 5), "只按数量判断时，一个大文件不该触发（0 = 关闭该维度）");
+            Assert(DownloadResidue.ShouldWarnFromConfig(many, 0, 5), "只按数量判断时，60 个文件必须触发");
+            Assert(!DownloadResidue.ShouldWarnFromConfig(big, -1, -1), "负数阈值 = 关闭，绝不能变成「永远提示」");
+            Assert(DownloadResidue.Describe(quiet).Contains("1"), "the banner text must carry the count");
+        });
+
+        Check("UpdateStaging: 只清 24 小时前的、且不是当前待装的包（第 87 轮）", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "aurora-upstage-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var now = new DateTime(2026, 11, 14, 12, 0, 0, DateTimeKind.Utc);
+                var oldPart = Path.Combine(dir, "AuroraLauncher.patch.part");
+                var oldMerged = Path.Combine(dir, "AuroraLauncher.merged.exe");
+                var freshPart = Path.Combine(dir, "AuroraLauncher.exe.part");
+                var staged = Path.Combine(dir, "AuroraLauncher.new.exe");
+                var stagedInfo = Path.Combine(dir, "build-info.txt");
+                foreach (var p in new[] { oldPart, oldMerged, freshPart, staged, stagedInfo })
+                    File.WriteAllBytes(p, new byte[16]);
+                File.SetLastWriteTimeUtc(oldPart, now.AddHours(-30));
+                File.SetLastWriteTimeUtc(oldMerged, now.AddDays(-3));
+                File.SetLastWriteTimeUtc(freshPart, now.AddMinutes(-5));
+                File.SetLastWriteTimeUtc(staged, now.AddDays(-4));      // old but pending: keep
+                File.SetLastWriteTimeUtc(stagedInfo, now.AddDays(-4));
+
+                var keep = new[] { staged, stagedInfo };
+                var stale = UpdateStaging.SelectStale(dir, now, keep);
+                Assert(stale.Count == 2, $"expected exactly the 2 stale files, got {stale.Count}");
+                Assert(stale.Any(p => p.EndsWith("AuroraLauncher.patch.part")), "the interrupted patch must be selected");
+                Assert(stale.Any(p => p.EndsWith("AuroraLauncher.merged.exe")), "the abandoned merged exe must be selected");
+                Assert(!stale.Any(p => p.EndsWith("AuroraLauncher.new.exe")),
+                    "the staged package must be kept no matter how old it is");
+                Assert(!stale.Any(p => p.EndsWith("AuroraLauncher.exe.part")), "a 5-minute-old .part is left alone");
+
+                var removed = UpdateStaging.Clean(dir, now, keep);
+                Assert(removed == 2, $"Clean must delete 2 files, deleted {removed}");
+                Assert(File.Exists(staged) && File.Exists(stagedInfo), "the pending update must survive a cleanup");
+                Assert(!File.Exists(oldPart) && !File.Exists(oldMerged), "stale staging files must be gone");
+                Assert(UpdateStaging.SelectStale(Path.Combine(dir, "nope"), now, keep).Count == 0,
+                    "a missing staging folder is not an error");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        });
+
+        Check("Guard: 清理残留的三处入口都接上了（第 87 轮）", () =>
+        {
+            var root = FindSourceRoot()!;
+            var vm = File.ReadAllText(Path.Combine(root, "src", "AuroraLauncher.Desktop",
+                "ViewModels", "MainViewModel.Round87.cs"));
+            var mainVm = File.ReadAllText(Path.Combine(root, "src", "AuroraLauncher.Desktop",
+                "ViewModels", "MainViewModel.cs"));
+            var settings = File.ReadAllText(Path.Combine(root, "src", "AuroraLauncher.Desktop",
+                "Views", "SettingsView.xaml"));
+            var downloads = File.ReadAllText(Path.Combine(root, "src", "AuroraLauncher.Desktop",
+                "Views", "DownloadsView.xaml"));
+            var update = File.ReadAllText(Path.Combine(root, "src", "AuroraCore", "Services", "UpdateService.cs"));
+
+            Assert(settings.Contains("清理残留下载文件"), "设置页必须有这个按钮");
+            Assert(settings.Contains("CleanResidueCommand"), "the button must be bound to the command");
+            Assert(downloads.Contains("HasResidueNotice"), "下载页必须有那条非阻塞提示");
+            Assert(downloads.Contains("ResidueNoticeText"), "the banner must show the scan text");
+            Assert(vm.Contains("Task.Run(() => DownloadResidue.Clean(scan))"),
+                "deleting must happen off the UI thread");
+            Assert(vm.Contains("Task.Run(() => DownloadResidue.Scan("),
+                "scanning walks the whole data root — never on the UI thread");
+            Assert(vm.Contains("MessageBoxResult.No"), "清理可续传的文件前必须问一句，且默认「否」");
+            Assert(mainVm.Contains("ScanDownloadResidue();"), "启动时要做一次轻量扫描");
+            Assert(mainVm.Contains("InitRound87Commands();"), "commands must be wired in the constructor");
+            Assert(update.Contains("UpdateStaging.Clean("), "每次更新检查要顺手清 update/");
+            Assert(update.Contains("StagedExePath, StagedInfoPath"), "the staged package must be in the keep set");
+        });
+
+        Check("StorageCleanupPolicy: 白名单只放行缓存与临时文件（第 88 轮）", () =>
+        {
+            var root = Path.Combine(Path.GetTempPath(), "aurora-clean-root");
+            string P(params string[] parts) => Path.Combine(new[] { root }.Concat(parts).ToArray());
+
+            // --- allowed ---------------------------------------------------
+            foreach (var ok in new[]
+                     {
+                         P("cache", "icons", "abc.img"),
+                         P("cache", "optifine", "OptiFine_1.20.1.jar"),
+                         P("cache", "installers", "meta-Fabric-1.20.1.json"),
+                         P("cache", "version_manifest_v2.json"),
+                         P("update", "AuroraLauncher.patch"),
+                         P("update", "AuroraLauncher.patch.part"),
+                         P("logs", "aurora-2026-01-01.log"),
+                         P("versions", "1.20.1"),
+                         P("libraries", "net", "example", "lib.jar.part"),
+                         P("assets", "objects", "aa", "bbcc.part"),
+                     })
+                Assert(StorageCleanupPolicy.IsAllowedPath(root, ok), "应当允许清理: " + ok);
+
+            // --- refused: config, user data, payload, staged update ---------
+            foreach (var no in new[]
+                     {
+                         root,
+                         P("config.json"),
+                         P("instances.json"),
+                         P("accounts.json"),
+                         P("cache", "download-journal.log"),
+                         P("cache", "something-else.txt"),
+                         P("logs", "other.txt"),
+                         P("logs", "aurora-2026-01-01.log.bak"),
+                         P("update", "AuroraLauncher.new.exe"),
+                         P("update", "build-info.txt"),
+                         P("versions", "1.20.1", "1.20.1.json"),
+                         P("versions", "1.20.1", "1.20.1.jar"),
+                         P("libraries", "net", "example", "lib.jar"),
+                         P("assets", "objects", "aa", "bbcc"),
+                         P("instances", "abc", "saves", "world.dat"),
+                         P("instances", "abc", "mods", "better.jar.part"),
+                         P("backups", "abc", "saves-2026.zip"),
+                         P("java", "jdk21", "bin", "java.exe"),
+                         Path.Combine(Path.GetTempPath(), "somewhere-else", "x.part"),
+                     })
+                Assert(!StorageCleanupPolicy.IsAllowedPath(root, no), "绝不能允许清理: " + no);
+
+            Assert(!StorageCleanupPolicy.IsAllowedPath(root, null), "null 路径必须拒绝");
+            Assert(!StorageCleanupPolicy.IsAllowedPath(null, P("cache", "icons", "a.img")), "没有数据根必须拒绝");
+        });
+
+        Check("StorageCleanupPolicy: 空壳版本目录的判定（第 88 轮）", () =>
+        {
+            var root = Path.Combine(Path.GetTempPath(), "aurora-shell-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(root);
+            try
+            {
+                string Make(string id, bool json, bool jar)
+                {
+                    var dir = Path.Combine(root, id);
+                    Directory.CreateDirectory(dir);
+                    if (json) File.WriteAllText(Path.Combine(dir, id + ".json"), "{}");
+                    if (jar) File.WriteAllBytes(Path.Combine(dir, id + ".jar"), new byte[8]);
+                    return dir;
+                }
+
+                var onlyJson = Make("only-json", true, false);
+                var onlyJar = Make("only-jar", false, true);
+                var both = Make("both", true, true);
+                var empty = Path.Combine(root, "empty");
+                Directory.CreateDirectory(empty);
+                var hasNestedFile = Path.Combine(root, "nested");
+                Directory.CreateDirectory(Path.Combine(hasNestedFile, "natives"));
+                File.WriteAllBytes(Path.Combine(hasNestedFile, "natives", "x.dll"), new byte[4]);
+
+                Assert(!StorageCleanupPolicy.IsEmptyVersionShell(onlyJson, "only-json"), "只有 JSON 不算空壳（可以启动）");
+                Assert(!StorageCleanupPolicy.IsEmptyVersionShell(onlyJar, "only-jar"), "只有 jar 不算空壳（可能是半装）");
+                Assert(!StorageCleanupPolicy.IsEmptyVersionShell(both, "both"), "完整版本当然不算空壳");
+                Assert(StorageCleanupPolicy.IsEmptyVersionShell(empty, "empty"), "真正的空目录才算空壳");
+                Assert(!StorageCleanupPolicy.IsEmptyVersionShell(hasNestedFile, "nested"),
+                    "子目录里有文件就不算空壳（可能是待补全的安装）");
+                Assert(!StorageCleanupPolicy.IsEmptyVersionShell(Path.Combine(root, "gone"), "gone"), "不存在的目录不是空壳");
+            }
+            finally { try { Directory.Delete(root, true); } catch { } }
+        });
+
+        Check("StorageCleanupPolicy: CostsOffline 一律默认不勾（第 88 轮）", () =>
+        {
+            foreach (var info in StorageCleanupPolicy.All)
+            {
+                if (info.Risk == CleanupRisk.CostsOffline)
+                    Assert(!info.DefaultSelected, info.DisplayName + " 会牺牲离线能力，必须默认不勾");
+                if (info.Risk == CleanupRisk.Safe)
+                    Assert(info.DefaultSelected, info.DisplayName + " 是安全项，应当默认勾选");
+                Assert(info.Risk != CleanupRisk.Never, "没有任何分类可以是 Never");
+                Assert(!string.IsNullOrWhiteSpace(info.Description), "每个分类都要有说明文案");
+            }
+            Assert(StorageCleanupPolicy.All.Select(i => i.Category).Distinct().Count() == StorageCleanupPolicy.All.Length,
+                "分类不能重复");
+            Assert(StorageCleanupPolicy.ProtectedSummary.Contains("存档"), "提示语必须明确说不会删存档");
+
+            // The UI must read the policy, never hardcode a default.
+            var vm = File.ReadAllText(Path.Combine(FindSourceRoot()!, "src", "AuroraLauncher.Desktop",
+                "ViewModels", "MainViewModel.Round88.cs"));
+            Assert(vm.Contains("group.Info.DefaultSelected"), "默认勾选状态必须来自策略");
+        });
+
+        Check("Guard: 清理服务只走白名单，绝不整根删除（第 88 轮）", () =>
+        {
+            var src = File.ReadAllText(Path.Combine(FindSourceRoot()!, "src", "AuroraCore",
+                "Services", "StorageCleanupService.cs"));
+
+            Assert(src.Contains("StorageCleanupPolicy.IsAllowedPath(_root"), "扫描必须过滤白名单");
+            Assert(src.Contains("if (!StorageCleanupPolicy.IsAllowedPath(_root, item.Path))"),
+                "删除前必须再校验一次（扫描结果可能已过期）");
+            Assert(src.Contains("ActiveDownloads.IsActive"), "正在下载的残片必须复核归属");
+            Assert(src.Contains("IsEmptyVersionShell"), "版本目录必须复核是否仍为空壳");
+
+            // No recursive wipe of a tree that is not a verified empty shell.
+            Assert(!src.Contains("Directory.Delete(_root"), "禁止删除整个数据根");
+            Assert(!src.Contains("Directory.Delete(RootDirectory"), "禁止删除整个数据根");
+            Assert(!src.Contains("Delete(_root, true)"), "禁止递归删除数据根");
+            foreach (var forbidden in new[] { "instances", "backups", "java" })
+                Assert(!src.Contains($"Path.Combine(_root, \"{forbidden}\")", StringComparison.OrdinalIgnoreCase),
+                    $"清理服务不该触碰 {forbidden}/");
+            Assert(src.Contains("Directory.Delete(item.Path, recursive: true)"),
+                "唯一的递归删除只允许作用在已验证的空壳目录上");
+        });
+
+        Check("StorageCleanupService: 扫描分类与选择性删除（第 88 轮）", () =>
+        {
+            var root = Path.Combine(Path.GetTempPath(), "aurora-clean-" + Guid.NewGuid().ToString("N")[..8]);
+            ActiveDownloads.ResetForTests();
+            void W(string rel, int bytes)
+            {
+                var path = Path.Combine(root, rel);
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllBytes(path, new byte[bytes]);
+            }
+            try
+            {
+                // A 档：默认勾选
+                W(Path.Combine("cache", "icons", "a.img"), 1000);
+                W(Path.Combine("cache", "icons", "b.img"), 2000);
+                W(Path.Combine("cache", "optifine", "OptiFine.jar"), 3000);
+                W(Path.Combine("cache", "version_manifest_v2.json"), 500);
+                W(Path.Combine("update", "AuroraLauncher.patch"), 4000);
+                W(Path.Combine("logs", "aurora-2020-01-01.log"), 6000);
+                W(Path.Combine("logs", $"aurora-{DateTime.Now:yyyy-MM-dd}.log"), 700);   // today: keep
+                W(Path.Combine("libraries", "net", "example", "lib.jar.part"), 800);
+                // B 档：默认不勾
+                W(Path.Combine("cache", "installers", "meta.json"), 900);
+                // 待安装的更新包：任何情况下都不许删
+                W(Path.Combine("update", "AuroraLauncher.new.exe"), 1000);
+                W(Path.Combine("update", "build-info.txt"), 100);
+                // 绝不能碰的东西
+                W(Path.Combine("instances", "i1", "saves", "world.dat"), 1111);
+                W(Path.Combine("instances", "i1", "mods", "better.jar.part"), 222);
+                W(Path.Combine("backups", "i1", "saves-2026.zip"), 333);
+                W(Path.Combine("libraries", "net", "example", "lib.jar"), 444);
+                // 版本：一个空壳、一个半装
+                Directory.CreateDirectory(Path.Combine(root, "versions", "shell"));
+                W(Path.Combine("versions", "half", "half.json"), 10);
+                // 台账里有、还能续传的残片
+                var journaled = Path.Combine(root, "libraries", "net", "example", "resume.jar");
+                File.WriteAllBytes(journaled + ".part", new byte[1024]);
+                var journalPath = DownloadJournal.PathFor(root);
+                Directory.CreateDirectory(Path.GetDirectoryName(journalPath)!);
+                File.WriteAllText(journalPath, "+\thttps://example.invalid/r.jar\t" + journaled + "\t2048\t\n");
+
+                var service = new StorageCleanupService(root);
+                var report = service.Scan();
+
+                CleanupGroup Group(CleanupCategory c) => report.Groups.FirstOrDefault(g => g.Category == c)!;
+                Assert(Group(CleanupCategory.CacheIcons)?.FileCount == 2, "图标缓存应识别到 2 个文件");
+                Assert(Group(CleanupCategory.CacheOptiFine)?.FileCount == 1, "OptiFine 缓存应识别到 1 个文件");
+                Assert(Group(CleanupCategory.ManifestCache)?.FileCount == 1, "版本清单缓存应识别到");
+                Assert(Group(CleanupCategory.UpdateLeftover)?.FileCount == 1,
+                    "update/ 只应把残留算作垃圾（待安装包必须豁免）");
+                Assert(Group(CleanupCategory.OldLogs)?.FileCount == 1, "只有超过 14 天的日志算垃圾");
+                Assert(Group(CleanupCategory.OrphanParts)?.FileCount == 1, "无主残片只有 lib.jar.part");
+                Assert(Group(CleanupCategory.ResumableParts)?.FileCount == 1, "台账里的残片单独成类");
+                Assert(Group(CleanupCategory.EmptyVersionDirs)?.DirCount == 1, "只有空壳目录被识别");
+                Assert(Group(CleanupCategory.InstallerMetaCache)?.FileCount == 1, "加载器缓存应识别到");
+                Assert(report.Groups.All(g => g.Items.All(i => !i.Path.Contains("\\instances\\")
+                                                              && !i.Path.Contains("\\backups\\"))),
+                    "instances/ 与 backups/ 绝不能出现在清理清单里");
+
+                // 只清 A 档（Safe）——B 档与可续传残片留着
+                var safe = StorageCleanupPolicy.All.Where(i => i.Risk == CleanupRisk.Safe)
+                    .Select(i => i.Category).ToHashSet();
+                var result = service.Execute(report, safe);
+
+                Assert(result.AnythingDeleted, "应当删除了内容");
+                Assert(!File.Exists(Path.Combine(root, "cache", "icons", "a.img")), "图标缓存应被删除");
+                Assert(!File.Exists(Path.Combine(root, "cache", "version_manifest_v2.json")), "清单缓存应被删除");
+                Assert(!File.Exists(Path.Combine(root, "update", "AuroraLauncher.patch")), "更新残留应被删除");
+                Assert(!File.Exists(Path.Combine(root, "logs", "aurora-2020-01-01.log")), "旧日志应被删除");
+                Assert(File.Exists(Path.Combine(root, "logs", $"aurora-{DateTime.Now:yyyy-MM-dd}.log")),
+                    "今天的日志必须保留");
+                Assert(!File.Exists(Path.Combine(root, "libraries", "net", "example", "lib.jar.part")), "无主残片应被删除");
+                Assert(!Directory.Exists(Path.Combine(root, "versions", "shell")), "空壳版本目录应被删除");
+
+                Assert(File.Exists(Path.Combine(root, "update", "AuroraLauncher.new.exe")), "待安装的更新包必须保留！");
+                Assert(File.Exists(Path.Combine(root, "update", "build-info.txt")), "待安装的更新信息必须保留");
+                Assert(File.Exists(Path.Combine(root, "cache", "installers", "meta.json")), "未勾选的 B 档不能被删");
+                Assert(File.Exists(journaled + ".part"), "未勾选的可续传残片不能被删");
+                Assert(File.Exists(Path.Combine(root, "instances", "i1", "saves", "world.dat")), "存档绝不能被碰");
+                Assert(File.Exists(Path.Combine(root, "instances", "i1", "mods", "better.jar.part")), "实例内文件绝不能被碰");
+                Assert(File.Exists(Path.Combine(root, "backups", "i1", "saves-2026.zip")), "备份绝不能被碰");
+                Assert(File.Exists(Path.Combine(root, "libraries", "net", "example", "lib.jar")), "库文件本体绝不能被碰");
+                Assert(File.Exists(Path.Combine(root, "versions", "half", "half.json")), "半装版本目录必须保留");
+                Assert(result.FreedBytes > 0, "释放量要如实统计");
+            }
+            finally
+            {
+                ActiveDownloads.ResetForTests();
+                try { Directory.Delete(root, true); } catch { }
+            }
+        });
+
+        Check("DownloadJournal.Forget: 清理残片后台账不再指向已删除的文件（第 88 轮复核）", () =>
+        {
+            var root = Path.Combine(Path.GetTempPath(), "aurora-forget-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(root);
+            ActiveDownloads.ResetForTests();
+            var journalPath = DownloadJournal.PathFor(root);
+            // The writer thread would otherwise target the REAL data root.
+            DownloadJournal.OverridePathForTests(journalPath);
+            try
+            {
+                var dest = Path.Combine(root, "libraries", "net", "example", "resume.jar");
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                File.WriteAllBytes(dest + ".part", new byte[2048]);
+                Directory.CreateDirectory(Path.GetDirectoryName(journalPath)!);
+                File.WriteAllText(journalPath, "+\thttps://example.invalid/r.jar\t" + dest + "\t4096\t\n");
+                Assert(DownloadJournal.Destinations(root).Contains(dest), "前置条件：台账里应有这条记录");
+
+                var scan = DownloadResidue.Scan(root);
+                Assert(scan.JournaledCount == 1, "这条残片应归类为可续传");
+                DownloadResidue.Clean(scan);
+                DownloadJournal.Flush(1500);
+
+                Assert(!File.Exists(dest + ".part"), "文件应已删除");
+                Assert(!DownloadJournal.Destinations(root).Contains(dest),
+                    "删除残片后必须把台账条目一起移除（否则日志会一直留着指向不存在文件的记录）");
+                Assert(DownloadJournal.Load(root).Count == 0, "重放时也不该再冒出来");
+
+                // Both cleanup entry points must do this, not just one of them.
+                var srcRoot = Path.Combine(FindSourceRoot()!, "src", "AuroraCore");
+                Assert(File.ReadAllText(Path.Combine(srcRoot, "Download", "DownloadResidue.cs"))
+                        .Contains("DownloadJournal.Forget("),
+                    "「清理残留下载文件」必须同步台账");
+                Assert(File.ReadAllText(Path.Combine(srcRoot, "Services", "StorageCleanupService.cs"))
+                        .Contains("DownloadJournal.Forget("),
+                    "「扫描垃圾文件」也必须同步台账");
+            }
+            finally
+            {
+                DownloadJournal.OverridePathForTests(null);
+                ActiveDownloads.ResetForTests();
+                try { Directory.Delete(root, true); } catch { }
+            }
+        });
+
+        Check("Guard: 清理的忙碌态与两个入口的分工都写清了（第 88 轮复核）", () =>
+        {
+            var root = FindSourceRoot()!;
+            var vm = File.ReadAllText(Path.Combine(root, "src", "AuroraLauncher.Desktop",
+                "ViewModels", "MainViewModel.Round88.cs"));
+            var settings = File.ReadAllText(Path.Combine(root, "src", "AuroraLauncher.Desktop",
+                "Views", "SettingsView.xaml"));
+
+            // 忙碌态：按钮文案切换 + 复选框冻结 + 不确定态进度条（上万文件时不能"点了没反应"）
+            Assert(vm.Contains("StorageScanButtonText") && vm.Contains("StorageCleanButtonText"),
+                "扫描/清理进行中时按钮文案必须能变（否则看起来像死按钮）");
+            Assert(vm.Contains("OnPropertyChanged(nameof(StorageScanButtonText))"),
+                "文案属性必须在状态变化时通知（否则永远停在初始文字）");
+            Assert(vm.Contains("CanEditStorageSelection"), "清理中应当冻结复选框，避免误以为改动生效");
+            Assert(settings.Contains("IsIndeterminate=\"True\""), "清理可能耗时几秒，需要不确定态进度条");
+            Assert(settings.Contains("CanEditStorageSelection"), "列表的 IsEnabled 必须绑定冻结开关");
+
+            // 两个入口的分工：必须有一句话解释，否则用户会问"这两个按钮有什么区别"
+            Assert(settings.Contains("只处理下载残渣"), "设置页必须说明「清理残留下载文件」只针对下载残渣");
+            Assert(settings.Contains("扫描整个存储目录"), "设置页必须说明「扫描垃圾文件」是全盘扫描");
+
+            // 清理完成后一次性刷新报告（不是逐项插入），并且台账/横幅一起刷新
+            Assert(vm.Contains("StorageCleanupGroups.Clear()"), "报告应当整体替换");
+            Assert(vm.Contains("RefreshPendingDownloadsAfterResidueAsync()"),
+                "清掉可续传残片后，下载页的「继续下载」横幅必须重新加载");
+        });
+
+        Check("LauncherConfig: legacy mirror domain is healed in old configs", () =>
+        {
+            // Round-71: builds up to round-70 could persist bmclapi.cn into
+            // config.json; the user must never be stuck on a hostname we know is dead.
+            var cfg = new LauncherConfig
+            {
+                ProxyUrl = "https://bmclapi.cn/legacy-proxy",
+                NetworkNote = "BMCLAPI: https://bmclapi.cn/mc/game/version_manifest_v2.json"
+            };
+            Assert(LauncherConfig.HealLegacyMirrorHost(cfg), "a config carrying the dead domain must report a change");
+            Assert(!cfg.ProxyUrl!.Contains("bmclapi.cn"), "legacy domain replaced in ProxyUrl");
+            Assert(cfg.ProxyUrl.Contains("bmclapi2.bangbang93.com"), "replacement uses the working mirror host");
+            Assert(!cfg.NetworkNote!.Contains("bmclapi.cn"), "legacy domain replaced in NetworkNote");
+
+            var clean = new LauncherConfig { NetworkNote = "已使用 BMCLAPI" };
+            Assert(!LauncherConfig.HealLegacyMirrorHost(clean), "a clean config must not be rewritten");
+        });
+
+        Check("ManifestCache: offline copy round-trips and rejects junk", () =>
+        {
+            // Round-71: a dead mirror used to leave the version list EMPTY. The
+            // launcher must still be able to show versions from the last good copy.
+            var root = Path.Combine(Path.GetTempPath(), "aurora-mcache-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(root);
+            try
+            {
+                Assert(AuroraCore.Services.ManifestCache.TryLoad(root) == null, "no cache yet → null");
+
+                var json = AuroraCore.Utils.JsonHelper.Serialize(new AuroraCore.Models.VersionManifest
+                {
+                    Versions = new List<AuroraCore.Models.VersionManifestEntry>
+                    {
+                        new() { Id = "1.21.1", Type = "release", Url = "https://piston-meta.mojang.com/v1/packages/x/1.21.1.json" }
+                    }
+                });
+                AuroraCore.Services.ManifestCache.Save(root, json);
+                Assert(AuroraCore.Services.ManifestCache.Exists(root), "cache file must be written");
+
+                var loaded = AuroraCore.Services.ManifestCache.TryLoad(root);
+                Assert(loaded != null && loaded.Versions.Count == 1 && loaded.Versions[0].Id == "1.21.1",
+                    "the cached manifest must round-trip");
+
+                AuroraCore.Services.ManifestCache.Save(root, "{ not json ");
+                Assert(AuroraCore.Services.ManifestCache.TryLoad(root) == null, "malformed cache must be ignored");
+
+                AuroraCore.Services.ManifestCache.Save(root, "{\"versions\":[]}");
+                Assert(AuroraCore.Services.ManifestCache.TryLoad(root) == null,
+                    "an EMPTY cache is not valid data — report the network error instead");
+            }
+            finally { try { Directory.Delete(root, true); } catch { } }
+        });
+
+        Check("JobProgressPolicy: stage-aware percent, aggregate, throttle", () =>
+        {
+            // Round-72: several downloads at once must not blur into one number.
+            Assert(AuroraCore.Services.JobProgressPolicy.PercentFor(-1, 0, 0.42) == 42,
+                "single-step job = fraction of its own work");
+            Assert(AuroraCore.Services.JobProgressPolicy.PercentFor(0, 4, 0.5) == 13,
+                "stage 1 of 4 at 50% = 12.5% overall");
+            Assert(AuroraCore.Services.JobProgressPolicy.PercentFor(3, 4, 0.5) == 88,
+                "last stage at 50% must be ~88%, not 50%");
+            Assert(AuroraCore.Services.JobProgressPolicy.PercentFor(4, 4, 0) == 100, "past the last stage = 100%");
+            Assert(AuroraCore.Services.JobProgressPolicy.PercentFor(0, 4, 5) == 25, "fraction clamps to 1");
+            Assert(AuroraCore.Services.JobProgressPolicy.PercentFor(0, 4, double.NaN) == 0, "NaN counts as 0");
+
+            var jobs = new[]
+            {
+                new AuroraCore.Services.DownloadJobSnapshot(AuroraCore.Services.JobState.Running, 40, 1000),
+                new AuroraCore.Services.DownloadJobSnapshot(AuroraCore.Services.JobState.Running, 80, 2000),
+                new AuroraCore.Services.DownloadJobSnapshot(AuroraCore.Services.JobState.Queued, 0, 0),
+                new AuroraCore.Services.DownloadJobSnapshot(AuroraCore.Services.JobState.Canceled, 90, 500),
+            };
+            var (percent, speed, active, queued) = AuroraCore.Services.JobProgressPolicy.Aggregate(jobs);
+            Assert(active == 2 && queued == 1, $"counts: active={active} queued={queued}");
+            Assert(speed == 3000, $"aggregate speed sums only running jobs, got {speed}");
+            Assert(percent == 40, $"canceled jobs are excluded from the average, got {percent}");
+
+            Assert(AuroraCore.Services.JobProgressPolicy.FormatSpeed(0) == "0 B/s", "zero speed");
+            Assert(AuroraCore.Services.JobProgressPolicy.FormatSpeed(1024) == "1.0 KB/s", "1 KB/s formatting");
+            Assert(AuroraCore.Services.JobProgressPolicy.FormatSpeed(5.5 * 1024 * 1024).Contains("MB/s"), "MB/s formatting");
+
+            var t0 = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            Assert(!AuroraCore.Services.JobProgressPolicy.ShouldPush(t0, t0.AddMilliseconds(60)),
+                "60 ms is inside the throttle window");
+            Assert(AuroraCore.Services.JobProgressPolicy.ShouldPush(t0, t0.AddMilliseconds(120)),
+                "beyond the window a refresh is allowed");
+        });
+
+        Check("DownloadJobManager: per-task cancel, queue cap, clear finished", () =>
+        {
+            // The manager is the reason "同时下载多个实例/模组" no longer means
+            // "one task hijacks another's token".
+            var manager = new AuroraCore.Services.DownloadJobManager(a => a(), maxConcurrent: 2);
+            var a = manager.Create("实例", "A 安装", "实例 A");
+            var b = manager.Create("模组", "B 模组", "实例 B");
+            var c = manager.Create("整合包", "C 整合包", "");
+            Assert(manager.Jobs.Count == 3 && manager.Jobs[0] == c, "newest job is first in the list");
+
+            manager.StartAsync(a).GetAwaiter().GetResult();
+            manager.StartAsync(b).GetAwaiter().GetResult();
+            Assert(a.State == AuroraCore.Services.JobState.Running && b.State == AuroraCore.Services.JobState.Running,
+                "both started jobs are running");
+            var queuedStart = manager.StartAsync(c);
+            Assert(!queuedStart.IsCompleted && c.State == AuroraCore.Services.JobState.Queued,
+                "the third job waits for a slot (cap = 2)");
+
+            manager.Finish(a, message: "完成");
+            queuedStart.GetAwaiter().GetResult();
+            Assert(a.State == AuroraCore.Services.JobState.Done && a.Percent == 100, "finished job is 100% and Done");
+            Assert(c.State == AuroraCore.Services.JobState.Running, "the queued job starts when a slot frees");
+
+            manager.Cancel(b);
+            Assert(b.State == AuroraCore.Services.JobState.Canceled, "cancelling one job does not touch the others");
+            Assert(c.State == AuroraCore.Services.JobState.Running, "the other job keeps running after a cancel");
+
+            var removed = manager.ClearFinished();
+            Assert(removed == 2, $"only finished rows are cleared, removed={removed}");
+            Assert(manager.Jobs.Count == 1 && manager.Jobs[0] == c, "the running job survives cleanup");
+
+            manager.CancelAll();
+            Assert(c.State == AuroraCore.Services.JobState.Canceled, "cancel-all reaches the running job");
+            manager.Finish(c, canceled: true);
+            Assert(manager.ClearFinished() == 1 && manager.Jobs.Count == 0, "cleanup empties the list");
+        });
+
+        Check("DownloadJob: report throttling + failure message stays human", () =>
+        {
+            var posted = 0;
+            var job = new AuroraCore.Services.DownloadJobManager(a => { posted++; a(); }).Create("模组", "X", "实例");
+            job.SetStages(new[] { ("content", "下载 X") });
+
+            // A burst of engine callbacks must collapse into very few UI pushes.
+            for (var i = 0; i < 200; i++)
+            {
+                job.Report(new AuroraCore.Download.DownloadProgress
+                {
+                    TotalFiles = 200,
+                    CompletedFiles = i,
+                    SpeedBytesPerSec = 1024 * 1024
+                });
+            }
+            Assert(posted < 40, $"200 progress callbacks must not produce 200 UI pushes (got {posted})");
+            Assert(job.Percent >= 0 && job.Percent <= 100, $"percent stays in range, got {job.Percent}");
+            Assert(job.SpeedText.Contains("MB/s"), $"speed text is formatted: {job.SpeedText}");
+        });
+
+        Check("PathWriteGate: one writer per destination, others run in parallel", () =>
+        {
+            // Round-73: two instances of the same MC version share libraries/ and
+            // assets/ — both pipelines download the SAME jar. Without a gate they
+            // could open the same .part (sharing violation) or commit a partial file.
+            var dir = Path.Combine(Path.GetTempPath(), "aurora-gate-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(dir);
+            var target = Path.Combine(dir, "lib.jar");
+
+            try
+            {
+                using var first = AuroraCore.Download.PathWriteGate.Acquire(target);
+                var blocked = Task.Run(() =>
+                {
+                    using var second = AuroraCore.Download.PathWriteGate.AcquireAsync(target).GetAwaiter().GetResult();
+                    return true;
+                });
+                Assert(!blocked.Wait(150), "a second writer must wait for the first to release");
+
+                // Different path must not be blocked by the first.
+                var other = Path.Combine(dir, "other.jar");
+                var parallel = Task.Run(() =>
+                {
+                    using var g = AuroraCore.Download.PathWriteGate.AcquireAsync(other).GetAwaiter().GetResult();
+                    return true;
+                });
+                Assert(parallel.Wait(1000), "different destinations must not serialise");
+                parallel.GetAwaiter().GetResult();
+
+                first.Dispose();
+                Assert(blocked.Wait(2000), "releasing the handle must let the waiter proceed");
+                blocked.GetAwaiter().GetResult();
+
+                // Case-insensitive: Foo.jar and foo.jar are the same file on Windows.
+                using (AuroraCore.Download.PathWriteGate.Acquire(Path.Combine(dir, "Mixed.jar")))
+                {
+                    var caseBlocked = Task.Run(() =>
+                    {
+                        using var g = AuroraCore.Download.PathWriteGate.AcquireAsync(Path.Combine(dir, "mixed.jar").ToUpperInvariant())
+                            .GetAwaiter().GetResult();
+                        return true;
+                    });
+                    Assert(!caseBlocked.Wait(150), "path comparison must be case-insensitive");
+                }
+
+                // Cancelling a waiter must not leak the slot.
+                using (AuroraCore.Download.PathWriteGate.Acquire(target))
+                {
+                    using var cts = new CancellationTokenSource(60);
+                    var cancelled = false;
+                    try
+                    {
+                        var handle = AuroraCore.Download.PathWriteGate.AcquireAsync(target, cts.Token).GetAwaiter().GetResult();
+                        handle.Dispose();
+                    }
+                    catch (OperationCanceledException) { cancelled = true; }
+                    Assert(cancelled, "a cancelled waiter must abort instead of taking the lock");
+                }
+                using var afterCancel = AuroraCore.Download.PathWriteGate.Acquire(target);
+                Assert(afterCancel != null, "the gate is still usable after a cancelled waiter");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        });
+
+        Check("DownloadJobManager: a queued job can be withdrawn before it starts", () =>
+        {
+            // Round-72 promised "排队时点取消可直接撤掉"; this is that contract.
+            var manager = new AuroraCore.Services.DownloadJobManager(a => a(), maxConcurrent: 1);
+            var running = manager.Create("实例", "占用唯一槽位", "");
+            var queued = manager.Create("模组", "排队中的模组", "");
+            manager.StartAsync(running).GetAwaiter().GetResult();
+
+            var queuedStart = manager.StartAsync(queued);
+            Assert(!queuedStart.IsCompleted && queued.State == AuroraCore.Services.JobState.Queued,
+                "the second job waits while the slot is taken");
+
+            manager.Cancel(queued);
+            Assert(queued.State == AuroraCore.Services.JobState.Canceled, "cancel while queued reacts immediately");
+            var threw = false;
+            try { queuedStart.GetAwaiter().GetResult(); }
+            catch (OperationCanceledException) { threw = true; }
+            Assert(threw, "the waiting StartAsync must abort (not silently start later)");
+
+            manager.Finish(running, message: "完成");
+            Assert(queued.State == AuroraCore.Services.JobState.Canceled,
+                "the withdrawn job must never start when a slot frees");
+        });
+
+        Check("CloseGuardPolicy: only ask when work is really in flight", () =>
+        {
+            Assert(!AuroraCore.Services.CloseGuardPolicy.ShouldPrompt(0, 0, false),
+                "closing with no jobs must never prompt");
+            Assert(AuroraCore.Services.CloseGuardPolicy.ShouldPrompt(2, 0, false),
+                "two running jobs must prompt");
+            Assert(AuroraCore.Services.CloseGuardPolicy.ShouldPrompt(0, 3, false),
+                "queued jobs alone also mean unfinished work");
+            Assert(!AuroraCore.Services.CloseGuardPolicy.ShouldPrompt(2, 0, true),
+                "after the user confirmed, a second close must not ask again");
+
+            var text = AuroraCore.Services.CloseGuardPolicy.BuildMessage(2, 1);
+            Assert(text.Contains("3 个") && text.Contains("2 个正在下载") && text.Contains("1 个排队"),
+                $"the message must spell out the counts: {text}");
+            Assert(text.Contains("确定"), "the message must ask a clear question");
+            Assert(AuroraCore.Services.CloseGuardPolicy.BuildMessage(1, 0).Contains("1 个正在下载"),
+                "single running job wording");
+
+            var root = FindSourceRoot()!;
+            var engine = File.ReadAllText(Path.Combine(root, "src", "AuroraCore", "Download", "DownloadEngine.cs"));
+            Assert(engine.Contains("PathWriteGate.AcquireAsync(dest"),
+                "every downloaded file must hold the per-destination gate");
+
+            var window = File.ReadAllText(Path.Combine(root, "src", "AuroraLauncher.Desktop", "MainWindow.xaml.cs"));
+            Assert(window.Contains("override void OnClosing") && window.Contains("CloseBehaviorPolicy.Decide"),
+                "the window must route close requests through CloseBehaviorPolicy (round-74)");
+            Assert(window.Contains("CancelAllDownloads()"),
+                "confirming the exit must cancel jobs so .part cleanup runs");
+        });
+
+        Check("BinaryDelta: patch round-trips and rejects the wrong base", () =>
+        {
+            // Round-74: the update package is 63 MB; a one-line fix must not cost
+            // the user a full download. This is the whole contract.
+            var dir = Path.Combine(Path.GetTempPath(), "aurora-delta-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var oldPath = Path.Combine(dir, "old.bin");
+                var newPath = Path.Combine(dir, "new.bin");
+                var patchPath = Path.Combine(dir, "x.patch");
+                var outPath = Path.Combine(dir, "out.bin");
+
+                var random = new Random(1234);
+                var oldBytes = new byte[300_000];
+                random.NextBytes(oldBytes);
+                // A real rebuild keeps most bytes and shifts a few regions.
+                var newBytes = (byte[])oldBytes.Clone();
+                for (var i = 0; i < 40; i++)
+                {
+                    var at = random.Next(0, newBytes.Length - 500);
+                    for (var k = 0; k < 400; k += 7) newBytes[at + k] = (byte)(newBytes[at + k] + 11);
+                }
+                File.WriteAllBytes(oldPath, oldBytes);
+                File.WriteAllBytes(newPath, newBytes);
+
+                BinaryDelta.Create(oldPath, newPath, patchPath);
+                var patchSize = new FileInfo(patchPath).Length;
+                Assert(patchSize < oldBytes.Length / 4,
+                    $"a mostly-identical file must produce a small patch (got {patchSize} for {oldBytes.Length})");
+                Assert(BinaryDelta.IsWorthPublishing(patchSize, newBytes.Length), "2% patch must count as worth publishing");
+
+                Assert(BinaryDelta.TryReadHeader(patchPath, out var oldSize, out var newSize, out var headerHash),
+                    "header must be readable before downloading anything else");
+                Assert(oldSize == oldBytes.Length && newSize == newBytes.Length, "header sizes must match the inputs");
+                Assert(headerHash == Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(newBytes)),
+                    "header must carry the produced file hash");
+
+                var applied = BinaryDelta.Apply(oldPath, patchPath, outPath);
+                Assert(File.ReadAllBytes(outPath).AsSpan().SequenceEqual(newBytes), "applied output must be byte-identical");
+                Assert(applied == headerHash, "Apply must report the produced hash");
+
+                // Wrong base: same length, different content → must fail, not ship garbage.
+                var otherBytes = (byte[])oldBytes.Clone();
+                otherBytes[1234] ^= 0xFF;
+                File.WriteAllBytes(oldPath, otherBytes);
+                var failed = false;
+                try { BinaryDelta.Apply(oldPath, patchPath, outPath); }
+                catch (InvalidDataException) { failed = true; }
+                Assert(failed, "a mismatched base file must be rejected by the header hash");
+
+                // Wrong size → refused before any work.
+                File.WriteAllBytes(oldPath, new byte[oldBytes.Length - 1]);
+                failed = false;
+                try { BinaryDelta.Apply(oldPath, patchPath, outPath); }
+                catch (InvalidDataException) { failed = true; }
+                Assert(failed, "a base of the wrong size must be rejected");
+
+                // Truncated patch → refused.
+                var truncated = Path.Combine(dir, "trunc.patch");
+                var patchBytes = File.ReadAllBytes(patchPath);
+                File.WriteAllBytes(truncated, patchBytes[..(patchBytes.Length / 2)]);
+                failed = false;
+                try { BinaryDelta.Apply(oldPath, truncated, outPath); }
+                catch (InvalidDataException) { failed = true; }
+                Assert(failed, "a truncated patch must be rejected");
+
+                // A "patch" as big as the package must lose to the package.
+                Assert(!BinaryDelta.ShouldUsePatch(900, 1000), "a 90% patch is not worth the extra failure mode");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        });
+
+        Check("PortableModePolicy: portable.txt / config.json decide the data root", () =>
+        {
+            // Round-74: USB-stick users must not write into %APPDATA% of every PC.
+            var dir = Path.Combine(Path.GetTempPath(), "aurora-portable-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var exe = Path.Combine(dir, "AuroraLauncher.exe");
+                File.WriteAllText(exe, "stub");
+
+                Assert(PortableModePolicy.ResolveRoot(exe) == null, "no marker → standard mode");
+                Assert(!PortableModePolicy.IsPortable(exe), "IsPortable must agree with ResolveRoot");
+
+                var marker = PortableModePolicy.CreateMarker(exe, "test");
+                Assert(File.Exists(marker) && Path.GetFileName(marker) == "portable.txt", "marker must be next to the EXE");
+                Assert(PortableModePolicy.ResolveRoot(exe) == dir, "marker makes the EXE folder the data root");
+
+                File.Delete(marker);
+                Assert(PortableModePolicy.ResolveRoot(exe) == null, "removing the marker restores standard mode");
+
+                // A config.json left beside the EXE also keeps it portable.
+                File.WriteAllText(Path.Combine(dir, "config.json"), "{}");
+                Assert(PortableModePolicy.ResolveRoot(exe) == dir, "an existing config.json implies portable");
+
+                // Nothing to detect → null, never a crash on a weird path.
+                Assert(PortableModePolicy.ResolveRoot(null) == null, "null exe path");
+                Assert(PortableModePolicy.ResolveRoot(Path.Combine(dir, "missing", "a.exe")) == null,
+                    "a non-existent folder is not portable");
+
+                var text = PortableModePolicy.Describe(true, dir, exe);
+                Assert(text.Contains("便携模式") && text.Contains(dir), $"portable description must state the root: {text}");
+                Assert(PortableModePolicy.Describe(false, "C://data", exe).Contains("标准模式"),
+                    "standard description");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        });
+
+        Check("DownloadJournal: resume only what really has a .part", () =>
+        {
+            // Round-74: a killed process leaves .part files; the banner must offer
+            // exactly those, and completion must remove the entry.
+            var root = Path.Combine(Path.GetTempPath(), "aurora-journal-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(Path.Combine(root, "cache"));
+            DownloadJournal.OverridePathForTests(DownloadJournal.PathFor(root));
+            try
+            {
+                Assert(DownloadJournal.Load(root).Count == 0, "empty journal → nothing to resume");
+
+                var dest = Path.Combine(root, "instances", "A", "mods", "big.jar");
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                // 2 MB of a 8 MB file: above the 4 MB journalling floor, 25% done.
+                File.WriteAllBytes(dest + ".part", new byte[2_000_000]);
+
+                DownloadJournal.Record(new DownloadEntry
+                {
+                    Url = "https://example.test/big.jar",
+                    Destination = dest,
+                    ExpectedSize = 8_000_000,
+                    ExpectedSha1 = "abc123"
+                });
+                DownloadJournal.Flush(2000);
+
+                var pending = DownloadJournal.Load(root);
+                Assert(pending.Count == 1, $"one interrupted file expected, got {pending.Count}");
+                Assert(pending[0].Destination == dest, "destination must round-trip");
+                Assert(pending[0].PartialBytes == 2_000_000, $"partial size must be read from the .part, got {pending[0].PartialBytes}");
+                Assert(Math.Abs(pending[0].CompleteRatio - 0.25) < 0.001, "25% complete");
+
+                // Completed afterwards → the entry disappears.
+                DownloadJournal.Complete(dest);
+                DownloadJournal.Flush(2000);
+                Assert(DownloadJournal.Load(root).Count == 0, "a completed file must not be offered again");
+
+                // No .part → not offered (the journal entry alone is not proof).
+                File.Delete(dest + ".part");
+                DownloadJournal.Record(new DownloadEntry { Url = "https://example.test/x", Destination = dest, ExpectedSize = 8_000_000 });
+                DownloadJournal.Flush(2000);
+                Assert(DownloadJournal.Load(root).Count == 0, "an entry without a .part is stale");
+
+                // Small files and updater staging are never journalled.
+                Assert(!DownloadJournal.ShouldTrack(new DownloadEntry { Url = "u", Destination = "x", ExpectedSize = 1024 }),
+                    "tiny files are not worth a journal line");
+                Assert(!DownloadJournal.ShouldTrack(new DownloadEntry
+                {
+                    Url = "u",
+                    Destination = Path.Combine(LauncherConfig.Instance.RootDirectory, "update", "AuroraLauncher.patch"),
+                    ExpectedSize = 8 * 1024 * 1024
+                }), "updater staging must never appear as an unfinished user download");
+
+                // Discard removes both the journal and the leftover bytes.
+                File.WriteAllBytes(dest + ".part", new byte[100]);
+                DownloadJournal.Record(new DownloadEntry { Url = "https://example.test/big.jar", Destination = dest, ExpectedSize = 8_000_000 });
+                DownloadJournal.Flush(2000);
+                var removed = DownloadJournal.Discard(root, deletePartials: true);
+                Assert(removed == 1 && !File.Exists(dest + ".part"), $"discard must delete the .part (removed={removed})");
+                Assert(!File.Exists(DownloadJournal.PathFor(root)), "discard must drop the journal");
+            }
+            finally
+            {
+                DownloadJournal.OverridePathForTests(null);
+                try { Directory.Delete(root, true); } catch { }
+            }
+        });
+
+        Check("CloseBehaviorPolicy: tray decides between ask / exit / hide", () =>
+        {
+            // Round-74 matrix. Round-73 refused to hide at all; the difference now
+            // is a real tray icon, so "no tray" must still fall back.
+            var noTrayIdle = CloseBehaviorPolicy.Decide(CloseAction.Ask, false, 0, 0);
+            Assert(noTrayIdle.Kind == CloseDecisionKind.Exit, "no tray + no work → just close");
+
+            var noTrayBusy = CloseBehaviorPolicy.Decide(CloseAction.Ask, false, 2, 1);
+            Assert(noTrayBusy.Kind == CloseDecisionKind.Prompt && !noTrayBusy.OfferTray,
+                "no tray + downloads → ask, without offering a tray that does not exist");
+
+            Assert(CloseBehaviorPolicy.Decide(CloseAction.MinimizeToTray, false, 0, 0).Kind == CloseDecisionKind.Exit,
+                "minimize requested but no tray → must not trap the window");
+
+            var ask = CloseBehaviorPolicy.Decide(CloseAction.Ask, true, 0, 0);
+            Assert(ask.Kind == CloseDecisionKind.Prompt && ask.OfferTray,
+                "tray + ask → always offer the choice");
+
+            Assert(CloseBehaviorPolicy.Decide(CloseAction.MinimizeToTray, true, 3, 0).Kind == CloseDecisionKind.HideToTray,
+                "tray + minimize → hide immediately, no dialog");
+
+            var exitWithWork = CloseBehaviorPolicy.Decide(CloseAction.Exit, true, 1, 0);
+            Assert(exitWithWork.Kind == CloseDecisionKind.Prompt && exitWithWork.MentionDownloads,
+                "an explicit exit must still warn while a job is running");
+            Assert(CloseBehaviorPolicy.Decide(CloseAction.Exit, true, 0, 0).Kind == CloseDecisionKind.Exit,
+                "explicit exit + idle → close without a dialog");
+
+            var message = CloseBehaviorPolicy.BuildMessage(CloseBehaviorPolicy.Decide(CloseAction.Ask, true, 2, 1));
+            Assert(message.Contains("3 个") && message.Contains("2 个正在下载") && message.Contains("1 个排队"),
+                $"the prompt must spell out the counts: {message}");
+            Assert(message.Contains("最小化到托盘") && message.Contains("退出"),
+                "the prompt must name both options");
+
+            Assert(CloseBehaviorPolicy.BuildTrayHint(2, 1).Contains("3 个"), "tray hint mentions the job count");
+            Assert(CloseBehaviorPolicy.FromDisplayText("最小化到托盘") == CloseAction.MinimizeToTray, "display text round-trip");
+            Assert(CloseBehaviorPolicy.FromDisplayText("直接退出") == CloseAction.Exit, "display text round-trip (exit)");
+            Assert(CloseBehaviorPolicy.FromDisplayText("不认识的值") == CloseAction.Ask, "unknown text falls back to ask");
+
+            // Round-90: the label itself must carry the promise, and the parser
+            // must accept BOTH the new label and the legacy short form.
+            Assert(CloseBehaviorPolicy.DisplayText(CloseAction.Exit).Contains("有下载"),
+                "「直接退出」的文案必须写明有下载时仍会确认");
+            Assert(CloseBehaviorPolicy.FromDisplayText(CloseBehaviorPolicy.DisplayText(CloseAction.Exit)) == CloseAction.Exit,
+                "new label must round-trip");
+            Assert(CloseBehaviorPolicy.FromDisplayText("直接退出（有下载时仍会确认）") == CloseAction.Exit,
+                "explicit new label parses");
+            Assert(CloseBehaviorPolicy.FromDisplayText(null) == CloseAction.Ask, "null text falls back to ask");
+        });
+
+        Check("SettingsDirtyPolicy: 快照对比能发现任何一项修改（第 90 轮）", () =>
+        {
+            static List<KeyValuePair<string, string?>> V(params (string K, string? V)[] pairs)
+                => pairs.Select(p => new KeyValuePair<string, string?>(p.K, p.V)).ToList();
+
+            var a = SettingsDirtyPolicy.Snapshot(V(("memory", "4096"), ("java", @"C:\jdk\bin\javaw.exe")));
+            var b = SettingsDirtyPolicy.Snapshot(V(("java", @"C:\jdk\bin\javaw.exe"), ("memory", "4096")));
+            Assert(a == b, "快照必须与字段顺序无关（否则每次进设置页都像改过）");
+            Assert(!SettingsDirtyPolicy.IsDirty(a, b), "同样的值不算修改");
+
+            var changed = SettingsDirtyPolicy.Snapshot(V(("memory", "8192"), ("java", @"C:\jdk\bin\javaw.exe")));
+            Assert(SettingsDirtyPolicy.IsDirty(a, changed), "改一个字段就算脏");
+            var keys = SettingsDirtyPolicy.ChangedKeys(a, changed);
+            Assert(keys.Count == 1 && keys[0] == "memory", $"应当只报一个字段：{string.Join(",", keys)}");
+
+            Assert(SettingsDirtyPolicy.ChangedKeys(a, a).Count == 0, "没改就是空集");
+            Assert(SettingsDirtyPolicy.IsDirty(null, a), "没有基线时必须当作脏（宁可多问一次）");
+            Assert(!SettingsDirtyPolicy.IsDirty(null, null), "两边都没基线不算脏");
+
+            var prompt = SettingsDirtyPolicy.BuildPrompt(new[] { "内存分配", "Java 路径" });
+            Assert(prompt.Contains("2 项") && prompt.Contains("内存分配") && prompt.Contains("Java 路径"),
+                "提示语要列出改了哪几项：" + prompt);
+            Assert(prompt.Contains("保存") && prompt.Contains("放弃") && prompt.Contains("留在"),
+                "提示语要写清三个选择");
+            Assert(SettingsDirtyPolicy.BuildPrompt(null).Contains("没有保存"), "没有字段名时也要有兜底文案");
+
+            // A value containing the record separator must not corrupt the snapshot.
+            var dirty = SettingsDirtyPolicy.Snapshot(V(("java", "a\nb")));
+            Assert(SettingsDirtyPolicy.ChangedKeys(dirty, dirty).Count == 0, "换行不能把快照切坏");
+        });
+
+        Check("Guard: 离开设置页必须拦截、有任务时关窗必须弹窗（第 90 轮）", () =>
+        {
+            var root = FindSourceRoot()!;
+            var vmMain = File.ReadAllText(Path.Combine(root, "src", "AuroraLauncher.Desktop",
+                "ViewModels", "MainViewModel.cs"));
+            var vmGuard = File.ReadAllText(Path.Combine(root, "src", "AuroraLauncher.Desktop",
+                "ViewModels", "MainViewModel.Round90.cs"));
+            var window = File.ReadAllText(Path.Combine(root, "src", "AuroraLauncher.Desktop",
+                "MainWindow.xaml.cs"));
+
+            // Navigation: the gate must sit BEFORE the page actually changes.
+            var navIdx = vmMain.IndexOf("public void Navigate(string? key)", StringComparison.Ordinal);
+            Assert(navIdx > 0, "找不到 Navigate");
+            var navBody = vmMain.Substring(navIdx, Math.Min(900, vmMain.Length - navIdx));
+            var gateIdx = navBody.IndexOf("ConfirmLeaveSettings(target)", StringComparison.Ordinal);
+            var applyIdx = navBody.IndexOf("CurrentPageKey = target", StringComparison.Ordinal);
+            Assert(gateIdx > 0, "Navigate must call ConfirmLeaveSettings");
+            Assert(applyIdx > gateIdx, "the gate must run BEFORE the page key changes (otherwise it cannot block)");
+
+            Assert(vmGuard.Contains("SettingsDirtyPolicy.IsDirty"), "脏检查必须走策略类");
+            Assert(vmGuard.Contains("ApplySettings();"), "选「保存并离开」必须真的保存");
+            Assert(vmGuard.Contains("DiscardSettingsChanges()"), "选「放弃」必须能回滚");
+            Assert(vmGuard.Contains("LoadSettingsFromConfig();"),
+                "回滚只能重读配置，不能重新 LoadAll（会重复添加账号/实例）");
+
+            // Close paths: window X and tray menu exit must both ask.
+            var closingIdx = window.IndexOf("protected override void OnClosing", StringComparison.Ordinal);
+            Assert(closingIdx > 0, "找不到 OnClosing");
+            var closingBody = window.Substring(closingIdx, Math.Min(1200, window.Length - closingIdx));
+            Assert(closingBody.Contains("ConfirmCloseWithUnsavedSettings()"),
+                "关窗前必须提示未保存的设置");
+
+            var trayIdx = window.IndexOf("private void ExitFromTray()", StringComparison.Ordinal);
+            Assert(trayIdx > 0, "找不到 ExitFromTray");
+            var trayBody = window.Substring(trayIdx, Math.Min(1400, window.Length - trayIdx));
+            var guardCall = trayBody.IndexOf("ConfirmExitWithActiveJobs(", StringComparison.Ordinal);
+            var shutDown = trayBody.IndexOf("_shuttingDown = true", StringComparison.Ordinal);
+            Assert(guardCall > 0, "托盘菜单退出必须先确认有任务的情况");
+            Assert(shutDown > guardCall, "确认必须在设置 _shuttingDown 之前（否则会绕过弹窗）");
+            Assert(trayBody.Contains("ConfirmCloseWithUnsavedSettings()"), "托盘退出也要提示未保存的设置");
+
+            // The policy itself: any close path with jobs must prompt, whatever the setting says.
+            foreach (var action in new[] { CloseAction.Exit, CloseAction.Ask })
+                Assert(CloseBehaviorPolicy.Decide(action, trayAvailable: true, runningJobs: 2, queuedJobs: 0).Kind
+                       == CloseDecisionKind.Prompt,
+                    $"{CloseBehaviorPolicy.DisplayText(action)} + 有任务 → 必须弹窗");
+            Assert(CloseBehaviorPolicy.Decide(CloseAction.Exit, trayAvailable: false, runningJobs: 0, queuedJobs: 3).Kind
+                   == CloseDecisionKind.Prompt, "排队中也是未完成，必须弹窗");
+        });
+
+        Check("SingleInstancePolicy: one launcher per data root, not per exe path", () =>
+        {
+            // Round-74: two copies must not fight over config.json / instances.
+            var a = SingleInstancePolicy.Fingerprint(@"C:/Users/X/AppData/Roaming/AuroraLauncher");
+            var b = SingleInstancePolicy.Fingerprint(@"c:/users/x/appdata/roaming/auroralauncher/");
+            Assert(a == b, "path comparison must ignore case and a trailing separator");
+            Assert(a != SingleInstancePolicy.Fingerprint(@"C:/Users/X/Other"), "different roots must not share a name");
+            Assert(SingleInstancePolicy.MutexName(@"C:/A").StartsWith("AuroraLauncher.Instance."), "mutex name prefix");
+            Assert(SingleInstancePolicy.ActivationEventName(@"C:/A") != SingleInstancePolicy.MutexName(@"C:/A"),
+                "mutex and event must be distinct objects");
+            Assert(SingleInstancePolicy.SecondInstanceNote(@"C:/A").Contains(@"C:/A"), "the note names the root");
+        });
+
+        Check("UpdateService: patch manifest must be signed and round-matched", () =>
+        {
+            // Round-74: the patch route is signed separately so old clients still
+            // accept the manifest, while a tampered patchUrl cannot be injected.
+            using var rsa = System.Security.Cryptography.RSA.Create(2048);
+            var publicXml = rsa.ToXmlString(false);
+
+            string Sign(string payload) => Convert.ToBase64String(rsa.SignData(
+                System.Text.Encoding.UTF8.GetBytes(payload),
+                System.Security.Cryptography.HashAlgorithmName.SHA256,
+                System.Security.Cryptography.RSASignaturePadding.Pkcs1));
+
+            const int round = 74;
+            const string patchUrl = "https://example.test/AuroraLauncher.patch";
+            const long patchSize = 1_000_000;
+            var manifest = new UpdateManifest
+            {
+                Round = round,
+                Version = "0.74.0",
+                Url = "https://example.test/AuroraLauncher.exe",
+                Sha256 = new string('A', 64),
+                Size = 65_000_000,
+                PatchUrl = patchUrl,
+                PatchSha256 = new string('B', 64),
+                PatchSize = patchSize,
+                PatchFromRound = 73,
+                PatchSignature = Sign($"{round}|{patchUrl}|{(new string('B', 64))}|{patchSize}")
+            };
+
+            Assert(UpdateService.VerifyPatchSignature(manifest, publicXml), "a correctly signed patch route verifies");
+            Assert(UpdateService.ShouldUsePatch(manifest, 73, publicXml), "round 73 may use the patch to 74");
+            Assert(!UpdateService.ShouldUsePatch(manifest, 72, publicXml), "a different build must not attempt the patch");
+
+            var tampered = new UpdateManifest
+            {
+                Round = round, Url = manifest.Url, Sha256 = manifest.Sha256, Size = manifest.Size,
+                PatchUrl = "https://evil.test/AuroraLauncher.patch",
+                PatchSha256 = manifest.PatchSha256, PatchSize = patchSize, PatchFromRound = 73,
+                PatchSignature = manifest.PatchSignature
+            };
+            Assert(!UpdateService.VerifyPatchSignature(tampered, publicXml), "a swapped patch URL must fail verification");
+            Assert(!UpdateService.ShouldUsePatch(tampered, 73, publicXml), "a swapped patch URL must not be used");
+
+            var unsigned = new UpdateManifest
+            {
+                Round = round, Url = manifest.Url, Sha256 = manifest.Sha256, Size = manifest.Size,
+                PatchUrl = patchUrl, PatchSha256 = manifest.PatchSha256, PatchSize = patchSize, PatchFromRound = 73
+            };
+            Assert(!UpdateService.ShouldUsePatch(unsigned, 73, publicXml), "an unsigned patch must be refused");
+
+            var huge = new UpdateManifest
+            {
+                Round = round, Url = manifest.Url, Sha256 = manifest.Sha256, Size = 1_000_000,
+                PatchUrl = patchUrl, PatchSha256 = manifest.PatchSha256, PatchSize = 900_000, PatchFromRound = 73,
+                PatchSignature = Sign($"{round}|{patchUrl}|{manifest.PatchSha256}|{900_000L}")
+            };
+            Assert(!UpdateService.ShouldUsePatch(huge, 73, publicXml), "a patch bigger than the package is pointless");
+
+            // Backwards compatibility: the base payload must NOT have changed, or
+            // every installation on an older build would reject the new manifest.
+            Assert(manifest.SignedPayload == $"{round}|{manifest.Version}|{manifest.Url}|{manifest.Sha256}|{manifest.Size}",
+                "SignedPayload must stay byte-identical to previous rounds");
+            Assert(manifest.PatchSignedPayload.EndsWith($"|{patchSize}"), "patch payload covers round/url/hash/size");
+
+            var exe = File.ReadAllText(Path.Combine(FindSourceRoot()!, "src", "AuroraCore", "Services", "UpdateService.cs"));
+            Assert(exe.Contains("BinaryDelta.Apply(currentExe, patchPath, mergedPath)"),
+                "the patch must be merged with the running exe");
+            Assert(exe.Contains("合并结果与清单 SHA-256 不一致"),
+                "a merged result that does not match the signed hash must be rejected");
+        });
+
+        Check("SingleInstanceGuard: only a shown window acknowledges an activation", () =>
+        {
+            // Round-74 shipped "switching to the existing window" while nothing
+            // appeared; round-75 acknowledged even when showing failed, so the
+            // second instance still exited. The contract is now: ack == a window
+            // is on screen.
+            var rootA = Path.Combine(Path.GetTempPath(), "aurora-single-a-" + Guid.NewGuid().ToString("N")[..8]);
+            Assert(AuroraLauncher.Desktop.Services.SingleInstanceGuard.TryAcquire(rootA, () => false),
+                "the first process owns the instance name");
+            var withoutWindow = AuroraLauncher.Desktop.Services.SingleInstanceGuard
+                .SignalExisting(rootA, TimeSpan.FromMilliseconds(600));
+            Assert(!withoutWindow, "a process with no window to show must NOT acknowledge");
+            AuroraLauncher.Desktop.Services.SingleInstanceGuard.Release();
+
+            var rootB = Path.Combine(Path.GetTempPath(), "aurora-single-b-" + Guid.NewGuid().ToString("N")[..8]);
+            Assert(AuroraLauncher.Desktop.Services.SingleInstanceGuard.TryAcquire(rootB, () => true),
+                "second instance acquires its own root");
+            Assert(AuroraLauncher.Desktop.Services.SingleInstanceGuard
+                    .SignalExisting(rootB, TimeSpan.FromSeconds(2)),
+                "a restored window acknowledges, so the caller may exit");
+            AuroraLauncher.Desktop.Services.SingleInstanceGuard.Release();
+
+            // Release must free the name immediately — a lingering process would
+            // otherwise block every later double-click.
+            Assert(AuroraLauncher.Desktop.Services.SingleInstanceGuard.TryAcquire(rootA, () => true),
+                "release must hand the instance name back");
+            AuroraLauncher.Desktop.Services.SingleInstanceGuard.Release();
+
+            var rootSrc = FindSourceRoot()!;
+            var window = File.ReadAllText(Path.Combine(rootSrc, "src", "AuroraLauncher.Desktop", "MainWindow.xaml.cs"));
+            Assert(window.Contains("public bool RestoreFromTray()"),
+                "restore must report whether a window is actually shown");
+            Assert(window.Contains("Environment.Exit(0)") && window.Contains("aurora-exit-watchdog"),
+                "closing the last window must be enforced even if WPF defers shutdown");
+
+            var app = File.ReadAllText(Path.Combine(rootSrc, "src", "AuroraLauncher.Desktop", "App.xaml.cs"));
+            Assert(app.Contains("SingleInstanceGuard.SignalExisting(dataRoot") && app.Contains("TimeSpan.FromSeconds(2)"),
+                "a second launch must wait for the ack before exiting");
+            Assert(app.Contains("private AuroraLauncher.Desktop.MainWindow? _shell"),
+                "the listener must not read Application.MainWindow off the UI thread");
+            Assert(app.Contains("SingleInstanceGuard.Release()"),
+                "the lock must be released explicitly on exit");
+
+            var tray = File.ReadAllText(Path.Combine(rootSrc, "src", "AuroraLauncher.Desktop", "Services", "TrayIconService.cs"));
+            Assert(tray.Contains("DispatcherPriority.Background"),
+                "tray menu actions must leave the menu's nested message loop before closing the window");
+            Assert(tray.Contains("_source.Dispatcher.BeginInvoke"),
+                "tray actions must be dispatched onto the UI thread");
+        });
+
+        Check("GameInstance: playtime reads like a human wrote it", () =>
+        {
+            // Round-77: "42 小时 15 分钟 · 启动 128 次" must not render as "0 分钟"
+            // right after the first session, and must not invent decimals.
+            Assert(GameInstance.FormatPlaytime(0) == "0 分钟", "zero");
+            Assert(GameInstance.FormatPlaytime(30) == "不足 1 分钟", "half a minute is not '0 分钟'");
+            Assert(GameInstance.FormatPlaytime(59) == "不足 1 分钟", "59 s");
+            Assert(GameInstance.FormatPlaytime(60) == "1 分钟", "one minute");
+            Assert(GameInstance.FormatPlaytime(59 * 60) == "59 分钟", "just under an hour");
+            Assert(GameInstance.FormatPlaytime(3600) == "1 小时", "exact hour has no '0 分钟' tail");
+            Assert(GameInstance.FormatPlaytime(42 * 3600 + 15 * 60) == "42 小时 15 分钟", "the example from the request");
+            Assert(GameInstance.FormatPlaytime(-5) == "0 分钟", "negative clamps to zero");
+
+            var fresh = new GameInstance { Name = "x" };
+            Assert(fresh.PlayStatsText == "还没有游玩记录", "a new instance says so instead of '已游玩 0 分钟'");
+            var played = new GameInstance { PlaySeconds = 42 * 3600 + 15 * 60, LaunchCount = 128 };
+            Assert(played.PlayStatsText == "已游玩 42 小时 15 分钟 · 启动 128 次", $"got: {played.PlayStatsText}");
+        });
+
+        Check("PlaytimeTracker: a killed launcher still gets credit for the session", () =>
+        {
+            // Round-77: the launcher and the game usually die together (task
+            // manager / power cut). The last heartbeat is the only honest end time.
+            var root = Path.Combine(Path.GetTempPath(), "aurora-playtime-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(PlaytimeTracker.SessionPathFor(root, "x").Replace("x.session.json", ""));
+            try
+            {
+                var started = DateTime.UtcNow.AddMinutes(-90);
+                var orphan = PlaytimeTracker.SessionPathFor(root, "inst1");
+                File.WriteAllText(orphan, System.Text.Json.JsonSerializer.Serialize(new PlaySession
+                {
+                    InstanceId = "inst1",
+                    StartedUtc = started,
+                    HeartbeatUtc = started.AddMinutes(89), // last proof of life
+                    ProcessId = 0
+                }));
+
+                var tracker = new PlaytimeTracker(root);
+                var recovered = tracker.RecoverOrphans(_ => false);
+                Assert(recovered.Count == 1, $"one orphan expected, got {recovered.Count}");
+                Assert(Math.Abs(recovered[0].Duration.TotalMinutes - 89) < 1.5,
+                    $"must credit up to the heartbeat (89 min), got {recovered[0].Duration.TotalMinutes:F1}");
+                Assert(!File.Exists(orphan), "the session marker must be consumed");
+
+                // A session whose game process is STILL alive must not be settled.
+                var live = PlaytimeTracker.SessionPathFor(root, "inst2");
+                File.WriteAllText(live, System.Text.Json.JsonSerializer.Serialize(new PlaySession
+                {
+                    InstanceId = "inst2",
+                    StartedUtc = DateTime.UtcNow.AddMinutes(-5),
+                    HeartbeatUtc = DateTime.UtcNow,
+                    ProcessId = 4242
+                }));
+                Assert(tracker.RecoverOrphans(pid => pid == 4242).Count == 0, "a live game keeps its session");
+                Assert(File.Exists(live), "the live session file stays");
+
+                // Clamping: clock jumps and sleeps must not invent days.
+                Assert(PlaytimeTracker.Clamp(started, started.AddDays(3)) == TimeSpan.FromHours(24),
+                    "a 3-day 'session' clamps to 24 h");
+                Assert(PlaytimeTracker.Clamp(started, started.AddSeconds(-30)) == TimeSpan.Zero,
+                    "an end before the start is zero, not negative");
+
+                // Begin/End on a fresh tracker leaves no marker behind.
+                var tracker2 = new PlaytimeTracker(root);
+                tracker2.Begin("inst3");
+                var elapsed = tracker2.End();
+                Assert(elapsed >= TimeSpan.Zero, "elapsed is never negative");
+                Assert(!File.Exists(PlaytimeTracker.SessionPathFor(root, "inst3")), "End clears the marker");
+                tracker2.Dispose();
+            }
+            finally { try { Directory.Delete(root, true); } catch { } }
+        });
+
+        Check("ModPreflight: missing prerequisite / conflict / duplicate / wrong loader", () =>
+        {
+            // Round-77: catch the "launch, crash, go read latest.log" loop before
+            // it happens. Synthetic jars keep this offline and deterministic.
+            var root = Path.Combine(Path.GetTempPath(), "aurora-preflight-" + Guid.NewGuid().ToString("N")[..8]);
+            var mods = Path.Combine(root, "mods");
+            Directory.CreateDirectory(mods);
+            try
+            {
+                void Jar(string name, string entry, string content)
+                {
+                    using var zip = System.IO.Compression.ZipFile.Open(
+                        Path.Combine(mods, name), System.IO.Compression.ZipArchiveMode.Create);
+                    var e = zip.CreateEntry(entry);
+                    using var w = new StreamWriter(e.Open());
+                    w.Write(content);
+                }
+
+                Jar("api.jar", "fabric.mod.json",
+                    "{\"schemaVersion\":1,\"id\":\"fabric-api\",\"name\":\"Fabric API\",\"version\":\"0.100.0\"," +
+                    "\"provides\":[\"fabric-api-base\",\"fabric-networking-api-v1\"]}");
+                Jar("mod-a.jar", "fabric.mod.json",
+                    "{\"schemaVersion\":1,\"id\":\"moda\",\"name\":\"Mod A\",\"version\":\"1.0\"," +
+                    "\"depends\":{\"fabric-api\":\"*\",\"fabric-api-base\":\">=1\",\"minecraft\":\"1.21\"}}");
+                Jar("mod-b.jar", "fabric.mod.json",
+                    "{\"schemaVersion\":1,\"id\":\"modb\",\"name\":\"Mod B\",\"version\":\"1.0\"," +
+                    "\"depends\":{\"fabricloader\":\">=0.15\"},\"breaks\":{\"moda\":\"*\"}}");
+                Jar("mod-a-copy.jar", "fabric.mod.json",
+                    "{\"schemaVersion\":1,\"id\":\"moda\",\"name\":\"Mod A copy\",\"version\":\"1.0\"}");
+                Jar("forge.jar", "META-INF/mods.toml",
+                    "modLoader=\"javafml\"\nloaderVersion=\"[47,)\"\n\n[[mods]]\nmodId=\"forgemod\"\n" +
+                    "version=\"1.0\"\ndisplayName=\"Forge Mod\"\n\n" +
+                    "[[dependencies.forgemod]]\n    modId=\"forge\"\n    mandatory=true\n    versionRange=\"[47,)\"\n    side=\"BOTH\"\n\n" +
+                    "[[dependencies.forgemod]]\n    modId=\"missing-lib\"\n    mandatory=true\n    versionRange=\"[1.0,2.0)\"\n    side=\"BOTH\"\n\n" +
+                    "[[dependencies.forgemod]]\n    modId=\"optional-lib\"\n    mandatory=false\n    versionRange=\"*\"\n");
+
+                var report = ModPreflight.Scan(root, ModLoaderType.Fabric, _ => { });
+                Assert(report.ScannedJars == 5, $"5 mods expected, got {report.ScannedJars}");
+                Assert(!report.FabricApiMissing, "Fabric API is installed → no auto-install offer");
+
+                // fabric-api-base is satisfied via provides, minecraft/fabricloader are platform ids.
+                Assert(report.Missing.All(m => m.ModId != "fabric-api-base"),
+                    "a module provided by the Fabric API jar must count as present");
+                Assert(report.Missing.Any(m => m.ModId == "missing-lib" && m.RequiredBy == "Forge Mod"),
+                    $"the Forge mandatory dependency must be reported: {string.Join(", ", report.Missing.Select(m => m.ModId))}");
+                Assert(report.Missing.All(m => m.ModId != "optional-lib"), "mandatory=false is not a problem");
+
+                Assert(report.Conflicts.Count == 1 && report.Conflicts[0].Contains("Mod B") && report.Conflicts[0].Contains("Mod A"),
+                    $"one conflict expected: {string.Join(" | ", report.Conflicts)}");
+                Assert(report.Duplicates.Count == 1 && report.Duplicates[0].Contains("moda"),
+                    $"duplicate moda expected: {string.Join(" | ", report.Duplicates)}");
+                Assert(report.WrongLoader.Count == 1 && report.WrongLoader[0].Contains("forge.jar"),
+                    $"the Forge jar inside a Fabric instance must be flagged: {string.Join(" | ", report.WrongLoader)}");
+                Assert(report.HasIssues && report.Headline.Contains("前置"), $"headline: {report.Headline}");
+
+                // Now remove the Fabric API jar: the same pack must report it and
+                // offer the one-click install.
+                File.Delete(Path.Combine(mods, "api.jar"));
+                var withoutApi = ModPreflight.Scan(root, ModLoaderType.Fabric, _ => { });
+                Assert(withoutApi.FabricApiMissing, "missing fabric-api must set the install flag");
+                Assert(withoutApi.Missing.Any(m => m.ModId == "fabric-api"), "fabric-api reported missing");
+                Assert(withoutApi.Missing.Count(m => m.ModId == "fabric-api") == 1,
+                    "the same missing id from two jars is reported once per dependent mod, not duplicated");
+
+                // Vanilla instance / empty folder must be quiet.
+                Assert(ModPreflight.Scan(Path.Combine(root, "nope"), ModLoaderType.Fabric, _ => { }).ScannedJars == 0,
+                    "missing mods folder is not an error");
+            }
+            finally { try { Directory.Delete(root, true); } catch { } }
+        });
+
+        Check("MrpackExporter: Modrinth-hosted mods become links, the rest are bundled", () =>
+        {
+            // Round-77: the point is a small file the friend can actually install.
+            var root = Path.Combine(Path.GetTempPath(), "aurora-mrpack-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(root);
+            // GameInstance.Directory is derived from the (test) launcher config, so
+            // the instance must live there — that is exactly what production does.
+            var instDir = Path.Combine(LauncherConfig.Instance.InstancesDir, "abc");
+            Directory.CreateDirectory(Path.Combine(instDir, "mods"));
+            Directory.CreateDirectory(Path.Combine(instDir, "config"));
+            try
+            {
+                File.WriteAllText(Path.Combine(instDir, "mods", "known.jar"), "known-mod-bytes");
+                File.WriteAllText(Path.Combine(instDir, "mods", "local.jar"), "local-mod-bytes");
+                File.WriteAllText(Path.Combine(instDir, "mods", "disabled.jar.disabled"), "off");
+                File.WriteAllText(Path.Combine(instDir, "config", "settings.cfg"), "key=value");
+                File.WriteAllText(Path.Combine(instDir, "options.txt"), "fov:0.5");
+                File.WriteAllText(Path.Combine(instDir, "servers.dat"), "private-server-list");
+                File.WriteAllText(Path.Combine(instDir, "mods", "logs.txt"), "not a jar");
+
+                var instance = new GameInstance
+                {
+                    Id = "abc",
+                    Name = "测试整合包",
+                    MinecraftVersion = "1.21.1",
+                    LoaderType = ModLoaderType.Fabric,
+                    LoaderVersion = "0.16.0"
+                };
+                // GameInstance.Directory is derived from LauncherConfig; point the
+                // export at our temp folder by using the instance dir directly.
+                var knownSha1 = MrpackExporter.HashFile(Path.Combine(instDir, "mods", "known.jar")).Sha1;
+
+                var lookup = new AuroraCore.Services.ModrinthHashLookup((hashes, ct) =>
+                {
+                    var map = new Dictionary<string, ModrinthFileMatch>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var h in hashes)
+                        if (h == knownSha1)
+                            map[h] = new ModrinthFileMatch("proj", "ver", "known.jar",
+                                "https://cdn.example/known.jar", 15, h, "sha512-off");
+                    return Task.FromResult<IReadOnlyDictionary<string, ModrinthFileMatch>>(map);
+                });
+
+                var output = Path.Combine(root, "out.mrpack");
+                var result = AuroraCore.Services.MrpackExporter
+                    .ExportAsync(instance, output, "分享包", "说明", lookup, null, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+
+                Assert(File.Exists(output), "the .mrpack must exist");
+                Assert(result.ModsFromModrinth == 1, $"one mod resolved from Modrinth, got {result.ModsFromModrinth}");
+                Assert(result.ModsBundled == 1, $"one mod bundled, got {result.ModsBundled}");
+                Assert(result.OverrideFiles >= 2, $"config + options.txt expected, got {result.OverrideFiles}");
+                Assert(result.SizeBytes > 0 && result.Summary.Contains("Modrinth 直链 1"), $"summary: {result.Summary}");
+
+                using var zip = System.IO.Compression.ZipFile.OpenRead(output);
+                var indexEntry = zip.GetEntry("modrinth.index.json");
+                Assert(indexEntry != null, "modrinth.index.json must be at the archive root");
+                string indexJson;
+                using (var reader = new StreamReader(indexEntry!.Open())) indexJson = reader.ReadToEnd();
+                using var doc = System.Text.Json.JsonDocument.Parse(indexJson);
+                var rootEl = doc.RootElement;
+                Assert(rootEl.GetProperty("game").GetString() == "minecraft", "game = minecraft");
+                Assert(rootEl.GetProperty("formatVersion").GetInt32() == 1, "formatVersion 1");
+                Assert(rootEl.GetProperty("name").GetString() == "分享包", "pack name is honoured");
+                var deps = rootEl.GetProperty("dependencies");
+                Assert(deps.GetProperty("minecraft").GetString() == "1.21.1", "minecraft dependency");
+                Assert(deps.GetProperty("fabric-loader").GetString() == "0.16.0", "fabric-loader dependency");
+                var files = rootEl.GetProperty("files");
+                Assert(files.GetArrayLength() == 1, $"only the Modrinth-hosted mod is a link, got {files.GetArrayLength()}");
+                var file0 = files[0];
+                Assert(file0.GetProperty("path").GetString() == "mods/known.jar", "path keeps the local file name");
+                Assert(file0.GetProperty("downloads")[0].GetString() == "https://cdn.example/known.jar", "download url");
+                Assert(file0.GetProperty("hashes").GetProperty("sha1").GetString() == knownSha1, "sha1 is recorded");
+
+                var names = zip.Entries.Select(e => e.FullName).ToList();
+                Assert(names.Contains("overrides/mods/local.jar"), "unknown mod goes into overrides");
+                Assert(names.Contains("overrides/config/settings.cfg"), "config goes into overrides");
+                Assert(names.Contains("overrides/options.txt"), "options.txt goes into overrides");
+                Assert(!names.Contains("overrides/mods/known.jar"), "a Modrinth-hosted mod must not be duplicated");
+                Assert(!names.Any(n => n.Contains("servers.dat")), "servers.dat is NOT exported (private addresses)");
+                Assert(!names.Any(n => n.Contains("disabled.jar")), "disabled mods are not exported");
+
+                // Response parser (pure): picks the primary file, falls back to first.
+                var parsed = new Dictionary<string, ModrinthFileMatch>(StringComparer.OrdinalIgnoreCase);
+                AuroraCore.Services.MrpackExporter.ParseLookupResponse(
+                    "{\"abc\":{\"project_id\":\"p\",\"id\":\"v\",\"files\":[" +
+                    "{\"url\":\"https://cdn.example/x.jar\",\"filename\":\"x.jar\",\"size\":10,\"primary\":true," +
+                    "\"hashes\":{\"sha1\":\"abc\",\"sha512\":\"zz\"}}]}}", parsed);
+                Assert(parsed.TryGetValue("abc", out var m) && m.Url.EndsWith("x.jar") && m.Sha512 == "zz",
+                    "version_files response must be parsed");
+                Assert(parsed["abc"].ProjectId == "p" && parsed["abc"].VersionId == "v", "project/version ids kept");
+            }
+            finally
+            {
+                try { Directory.Delete(instDir, true); } catch { }
+                try { Directory.Delete(root, true); } catch { }
+            }
+        });
+
+        Check("InstanceManager: launch count and playtime survive a reload", () =>
+        {
+            // Round-77: the numbers a user sees must come back after a restart, and
+            // a clock jump must not be able to invent days of playtime.
+            var manager = new InstanceManager();
+            var instance = manager.Create("时长测试", "1.21.1", ModLoaderType.Vanilla);
+            try
+            {
+                var started = manager.RecordLaunchStart(instance.Id);
+                Assert(started != null && started.LaunchCount == 1, $"launch must be counted, got {started?.LaunchCount}");
+                Assert(started!.LastPlayedAt != null, "last-played timestamp is set");
+
+                var afterTime = manager.AddPlaytime(instance.Id, TimeSpan.FromMinutes(42));
+                Assert(afterTime != null && afterTime.PlaySeconds == 42 * 60,
+                    $"42 minutes expected, got {afterTime?.PlaySeconds}");
+
+                var reloaded = manager.Get(instance.Id)!;
+                Assert(reloaded.PlaySeconds == 42 * 60 && reloaded.LaunchCount == 1,
+                    "values must round-trip through instances.json");
+                Assert(reloaded.PlayStatsText.Contains("42 分钟") && reloaded.PlayStatsText.Contains("启动 1 次"),
+                    $"card text: {reloaded.PlayStatsText}");
+
+                var clamped = manager.AddPlaytime(instance.Id, TimeSpan.FromHours(48));
+                Assert(clamped!.PlaySeconds == 42 * 60 + 24 * 3600,
+                    $"a 48 h session clamps to 24 h, got {clamped.PlaySeconds}");
+
+                var none = manager.AddPlaytime(instance.Id, TimeSpan.Zero);
+                Assert(none!.PlaySeconds == clamped.PlaySeconds, "zero duration changes nothing");
+                Assert(manager.AddPlaytime("missing-id", TimeSpan.FromMinutes(5)) == null,
+                    "unknown instance id is a no-op");
+            }
+            finally { try { manager.Delete(instance.Id); } catch { } }
+        });
+
         Check("Guard: CHANGELOG round numbering is continuous", () =>
         {
             // Round sections were lost/misnumbered twice (5, 16 lost; 44→46
@@ -1288,7 +4550,440 @@ internal static class Program
                     "update the range statement when rotating rounds");
         });
 
-        Console.WriteLine($"\n=== Result: {_passed} passed, {_failed} failed, {_skipped} skipped ===");
-        Environment.Exit(_failed == 0 ? 0 : 1);
+        Check("ModpackIntegrity: 模组数与清单双口径（第 92 轮）", () =>
+        {
+            // GameInstance.Directory is derived from the configured data root,
+            // so the fixtures must live there too (never in a stray temp dir).
+            const string id = "pack92test";
+            var instDir = Path.Combine(LauncherConfig.Instance.InstancesDir, id);
+            Directory.CreateDirectory(Path.Combine(instDir, "mods"));
+            for (var i = 0; i < 12; i++)
+                File.WriteAllBytes(Path.Combine(instDir, "mods", $"m{i}.jar"), new byte[16]);
+
+            GameInstance Inst(int expected) => new()
+            {
+                Id = id, Name = "pack", IsModpack = true,
+                ExpectedModCount = expected, MinecraftVersion = "1.20.1"
+            };
+
+            try
+            {
+                Assert(ModpackIntegrity.Evaluate(Inst(12)).State == ModpackIntegrity.State.Complete,
+                    "12/12 必须算完整");
+                Assert(ModpackIntegrity.Evaluate(Inst(13)).State == ModpackIntegrity.State.Complete,
+                    "只差 1 个（用户自己删的）不该被拦，否则每次启动都要弹窗");
+                Assert(ModpackIntegrity.Evaluate(Inst(40)).State == ModpackIntegrity.State.Partial,
+                    "12/40 必须算大面积缺失");
+                Assert(ModpackIntegrity.Evaluate(Inst(0)).State == ModpackIntegrity.State.Complete,
+                    "没声明模组的包（纯配置包）不能被判成空");
+                var notPack = Inst(12);
+                notPack.IsModpack = false;
+                Assert(ModpackIntegrity.Evaluate(notPack).State == ModpackIntegrity.State.NotModpack,
+                    "普通实例不参与判定");
+
+                // 整包没下到 —— 用户遇到的那种情况
+                foreach (var f in Directory.GetFiles(Path.Combine(instDir, "mods"))) File.Delete(f);
+                var empty = ModpackIntegrity.Evaluate(Inst(12));
+                Assert(empty.State == ModpackIntegrity.State.Empty && empty.Expected == 12 && empty.Actual == 0,
+                    $"删光后必须是 Empty，实际 {empty.State}/{empty.Expected}/{empty.Actual}");
+                Assert(empty.Describe().Contains("一个都没有"), "文案要直说「一个都没有」：" + empty.Describe());
+
+                // 清单：写入 / 读回 / 缺失统计 / 尺寸不符也算缺失
+                var manifest = new ModpackManifest { PackName = "BattleArmory", GameVersion = "1.20.1" };
+                for (var i = 0; i < 12; i++)
+                    manifest.Files.Add(new ModpackManifest.ModpackFile
+                    { Path = $"mods/m{i}.jar", Url = $"https://example.invalid/m{i}.jar", Sha1 = "x", Size = 16 });
+                manifest.Files.Add(new ModpackManifest.ModpackFile { Path = "config/a.toml", Url = "https://example.invalid/a" });
+                manifest.Save(instDir);
+
+                var loaded = ModpackManifest.Load(instDir);
+                Assert(loaded != null && loaded.ModFileCount == 12, "清单必须能读回来，且只把 mods/*.jar 算模组");
+                Assert(loaded!.MissingCount(instDir) == 13, $"全空时 13 个声明都算缺失，实际 {loaded.MissingCount(instDir)}");
+
+                // 写回 5 个，第 6 个是半截文件（尺寸不符也算缺失）
+                for (var i = 0; i < 5; i++) File.WriteAllBytes(Path.Combine(instDir, "mods", $"m{i}.jar"), new byte[16]);
+                File.WriteAllBytes(Path.Combine(instDir, "mods", "m5.jar"), new byte[64]);
+                Assert(loaded.MissingCount(instDir) == 8, $"缺 7 个 + 1 个半截 + config 都应算缺失，实际 {loaded.MissingCount(instDir)}");
+                var partial = ModpackIntegrity.Evaluate(Inst(12));
+                Assert(partial.State == ModpackIntegrity.State.Partial, $"6/12 必须算 Partial，实际 {partial.State}");
+                Assert(partial.Actual == 6 && partial.MissingFiles == 8,
+                    $"实际 {partial.Actual} 个 / 缺失 {partial.MissingFiles}");
+            }
+            finally { try { Directory.Delete(instDir, true); } catch { } }
+        });
+
+        Check("LaunchReadiness: 加载器与整合包状态必须拦住启动（第 92 轮）", () =>
+        {
+            Assert(!LaunchReadiness.IsLoaderVersionId("1.20.1"), "原版 id 不是加载器版本");
+            Assert(LaunchReadiness.IsLoaderVersionId("1.20.1-forge-47.4.22"), "Forge 的 id 带后缀");
+            Assert(LaunchReadiness.IsLoaderVersionId("fabric-loader-0.20.1-1.20.1"), "Fabric 的 id 带前缀");
+            Assert(!LaunchReadiness.IsLoaderVersionId(""), "空 id 不算");
+
+            Assert(!LaunchReadiness.LoaderInstalled(ModLoaderType.Forge, "1.20.1", null, false),
+                "ResolvedVersionId 为空 = 加载器没装 —— 这正是用户那台机器上的状态");
+            Assert(!LaunchReadiness.LoaderInstalled(ModLoaderType.Forge, "1.20.1", "1.20.1", false),
+                "指着原版 id = 没装（旧代码在这里判为「完整」）");
+            Assert(!LaunchReadiness.LoaderInstalled(ModLoaderType.Forge, "1.20.1", "1.20.1-forge-47.4.22", false),
+                "版本 JSON 不在 = 没装");
+            Assert(LaunchReadiness.LoaderInstalled(ModLoaderType.Forge, "1.20.1", "1.20.1-forge-47.4.22", true),
+                "id + JSON 都在才算装好");
+            Assert(LaunchReadiness.LoaderInstalled(ModLoaderType.Vanilla, "1.20.1", "1.20.1", false),
+                "原版实例永远算装好");
+
+            var loaderGap = LaunchReadiness.Decide(new LaunchReadiness.Input
+            {
+                LoaderType = ModLoaderType.Forge,
+                MinecraftVersion = "1.20.1",
+                ResolvedVersionId = null,
+                LoaderProfileExists = false,
+                InstanceName = "BattleArmory TACZ"
+            });
+            Assert(loaderGap.Blocker == LaunchReadiness.Blocker.LoaderNotInstalled,
+                $"Forge 实例没有加载器版本 → LoaderNotInstalled，实际 {loaderGap.Blocker}");
+            Assert(!loaderGap.CanOverride, "加载器没装好不许「仍然启动」——那启动的是另一个游戏");
+            Assert(loaderGap.CanRepair, "必须给出补全出路");
+            Assert(loaderGap.Headline.Contains("Forge"), "标题要点名是哪个加载器");
+            Assert(loaderGap.Detail.Contains("原版"), "必须说清「从这里启动只会进原版」");
+
+            var packEmpty = LaunchReadiness.Decide(new LaunchReadiness.Input
+            {
+                LoaderType = ModLoaderType.Forge,
+                MinecraftVersion = "1.20.1",
+                ResolvedVersionId = "1.20.1-forge-47.4.22",
+                LoaderProfileExists = true,
+                Modpack = new ModpackIntegrity.Scan(ModpackIntegrity.State.Empty, 87, 0, 87),
+                CanRepairModpack = false,
+                InstanceName = "pack"
+            });
+            Assert(packEmpty.Blocker == LaunchReadiness.Blocker.ModpackEmpty, "mods 全空必须拦");
+            Assert(packEmpty.CanOverride, "整合包缺模组允许用户自己承担风险继续");
+            Assert(!packEmpty.CanRepair, "原始包不在时不能假装能补全");
+            Assert(packEmpty.Detail.Contains("87"), "要报出应有数量，用户才知道差多少");
+
+            var ok = LaunchReadiness.Decide(new LaunchReadiness.Input
+            {
+                LoaderType = ModLoaderType.Forge,
+                MinecraftVersion = "1.20.1",
+                ResolvedVersionId = "1.20.1-forge-47.4.22",
+                LoaderProfileExists = true,
+                Modpack = new ModpackIntegrity.Scan(ModpackIntegrity.State.Complete, 87, 87, 0)
+            });
+            Assert(!ok.Blocks, "齐全时不能拦");
+
+            // ---- 真实服务路径：确认真实文件状态也走同一判定 ----
+            var svc = new LauncherService();
+            const string mc = "92.0.1";
+            var vdir = Path.Combine(LauncherConfig.Instance.VersionsDir, mc);
+            GameInstance? inst = null;
+            try
+            {
+                Directory.CreateDirectory(vdir);
+                File.WriteAllText(Path.Combine(vdir, mc + ".json"),
+                    "{\"id\":\"" + mc + "\",\"mainClass\":\"net.minecraft.client.main.Main\",\"libraries\":[]}");
+                File.WriteAllBytes(Path.Combine(vdir, mc + ".jar"), new byte[4096]);
+
+                inst = svc.Instances.Create("闸门测试", mc, ModLoaderType.Forge, "47.4.22");
+                inst.IsModpack = true;
+                inst.ExpectedModCount = 30;
+                svc.Instances.Update(inst);
+
+                Assert(svc.LoaderNeedsInstall(inst), "原版装好但加载器没有 → LoaderNeedsInstall");
+                Assert(svc.NeedsRepair(inst), "NeedsRepair 必须为真：旧实现只看原版文件，返回 false 才让整包当成完整");
+                var real = svc.CheckReadiness(inst);
+                Assert(real.Blocker == LaunchReadiness.Blocker.LoaderNotInstalled,
+                    $"服务层必须报 LoaderNotInstalled，实际 {real.Blocker}（{real.Headline}）");
+            }
+            finally
+            {
+                if (inst != null)
+                {
+                    try
+                    {
+                        var rest = svc.Instances.LoadAll().Where(i => i.Id != inst.Id).ToList();
+                        svc.Instances.SaveAll(rest);
+                        if (Directory.Exists(inst.Directory)) Directory.Delete(inst.Directory, true);
+                    }
+                    catch { }
+                }
+                try { Directory.Delete(vdir, true); } catch { }
+            }
+        });
+
+        Check("PerformanceReport.RunVerdict: 崩溃/闪退/未采集不再谎报「健康」（第 92 轮）", () =>
+        {
+            var none = FpsSummary.None;
+            var crash = PerformanceReport.RunVerdict(1, 60, 0, 4096, none);
+            Assert(crash.Level == "异常退出", $"退出码非 0 必须报异常退出，实际 {crash.Level}");
+            Assert(crash.Text.Contains("退出码 1"), "要把退出码说出来：" + crash.Text);
+
+            var flash = PerformanceReport.RunVerdict(0, 2, 0, 4096, none);
+            Assert(flash.Level == "闪退", $"2 秒的会话不是健康，实际 {flash.Level}");
+            Assert(flash.Text.Contains("补全"), "闪退要给出可操作建议");
+
+            // 用户截图里的那条：跑了 1 分钟、峰值 2 MB
+            var bogus = PerformanceReport.RunVerdict(0, 61, 2, 3072, none);
+            Assert(bogus.Level == "未采集到", $"2 MB 不是 JVM 的读数，应报未采集，实际 {bogus.Level}");
+
+            Assert(PerformanceReport.RunVerdict(0, 1800, 3900, 4096, none).Level == "吃紧", "接近上限仍要报吃紧");
+            Assert(PerformanceReport.RunVerdict(0, 1800, 2500, 4096, none).Level == "健康", "正常值仍是健康");
+            Assert(PerformanceReport.RunVerdict(0, 0, 0, 4096, none).Level == "无数据", "没有记录时仍是「无数据」");
+            // 向后兼容：只有内存数字的老调用点行为不变
+            Assert(PerformanceReport.Verdict(3900, 4096, none).Level == "吃紧", "Verdict 仍按老语义工作");
+
+            // 旧实例（本机真实数据）不能因为 2 MB 就被写成「健康」
+            var legacy = new GameInstance { LastPerfAt = DateTime.Now, LastRunSeconds = 60, LastPeakMemoryMb = 2 };
+            Assert(legacy.PerfSummaryText.Contains("未采集到"), "摘要要写「峰值内存未采集到」而不是 2 MB：" + legacy.PerfSummaryText);
+        });
+
+        Check("Guard: 启动闸门与整合包预期不能被绕过（第 92 轮）", () =>
+        {
+            var srcRoot = FindSourceRoot()!;
+            var service = File.ReadAllText(Path.Combine(srcRoot, "src", "AuroraCore", "Services", "LauncherService.cs"));
+            var vm = File.ReadAllText(Path.Combine(srcRoot, "src", "AuroraLauncher.Desktop", "ViewModels", "MainViewModel.cs"));
+            var launcher = File.ReadAllText(Path.Combine(srcRoot, "src", "AuroraCore", "Services", "GameLauncher.cs"));
+
+            // 1) 构建启动参数时必须拒绝「加载器实例指向原版 id」
+            var buildIdx = service.IndexOf("public async Task<LaunchSpec> BuildLaunchSpecAsync", StringComparison.Ordinal);
+            Assert(buildIdx > 0, "BuildLaunchSpecAsync 不见了");
+            var guardIdx = service.IndexOf("LaunchReadiness.IsLoaderVersionId(id)", StringComparison.Ordinal);
+            Assert(guardIdx > buildIdx, "BuildLaunchSpecAsync 里必须有加载器 id 检查（否则会构建出原版命令行）");
+            Assert(service.IndexOf("_builder.Build(ctx)", StringComparison.Ordinal) > guardIdx,
+                "检查必须在构建之前");
+
+            // 2) NeedsRepair 必须覆盖「加载器没装」和「整合包不完整」
+            Assert(service.Contains("if (LoaderNeedsInstall(instance)) return true;"),
+                "NeedsRepair 漏掉加载器检查 → 启动时会静默进原版");
+            Assert(service.Contains("return instance.IsModpack && ModpackIntegrity.Evaluate(instance).IsBroken;"),
+                "NeedsRepair 漏掉整合包检查 → 模组没下到也判完整");
+
+            // 3) 启动流程必须先过闸门
+            var launchIdx = vm.IndexOf("var gate = _svc.CheckReadiness(instance);", StringComparison.Ordinal);
+            Assert(launchIdx > 0, "启动流程缺少 CheckReadiness 闸门");
+            Assert(launchIdx < vm.IndexOf("RunPreflightAsync(instance, _cts.Token)", StringComparison.Ordinal),
+                "闸门必须在模组预检/启动之前——放在后面等于没拦");
+            Assert(vm.Contains("if (!ConfirmLaunchGate(gate, instance))"),
+                "闸门结论必须交给用户确认，不能只是打日志");
+
+            // 4) 启动失败必须走人话翻译并记录堆栈
+            Assert(vm.Contains("Status = ReportLaunchFailure(ex);"), "启动异常的 catch 必须走 ReportLaunchFailure");
+            var vmRound92 = File.ReadAllText(Path.Combine(srcRoot, "src", "AuroraLauncher.Desktop",
+                "ViewModels", "MainViewModel.Round92.cs"));
+            Assert(vmRound92.Contains("\"启动失败: \" + text"), "状态栏仍要保留「启动失败」前缀");
+            Assert(vmRound92.Contains("+ Environment.NewLine + ex"),
+                "必须把完整异常（含堆栈）写进日志——只记 Message 是这次查不到空引用的原因");
+            Assert(File.ReadAllText(Path.Combine(srcRoot, "src", "AuroraCore", "Services", "LaunchFailureText.cs"))
+                    .Contains("NullReferenceException"),
+                "空引用必须有专门的人话翻译");
+
+            // 5) 运行结果要带退出码落盘，否则面板无法判断崩溃
+            Assert(vm.Contains("exitCode: runOutcome.ExitCode"), "RecordPerformance 必须传退出码");
+
+            // 6) 采样必须是专用线程，不能再退回 Task.Run（会被线程池饿死，只采到首帧 2 MB）
+            Assert(launcher.Contains("new Thread("), "内存采样必须用专用线程");
+            Assert(!launcher.Contains("Task.Run(async"), "不能再用 Task.Run 采样：实测只采到进程 stub 的 2 MB");
+            Assert(launcher.Contains("FirstSampleDelay"), "首采样必须等 JVM 起来（否则读到的是 launcher stub）");
+            Assert(launcher.Contains("sampler.Samples == 0"), "采不到样本时要如实记日志");
+
+            // 7) 整合包预期必须在下载之前落盘（两个导入入口都要）
+            var expectIdx = vm.IndexOf("RecordModpackExpectation(inst, path", StringComparison.Ordinal);
+            Assert(expectIdx > 0, "本地 .mrpack 导入没有记录预期");
+            Assert(expectIdx < vm.IndexOf("await _svc.ModManager.InstallMrpackAsync(path", StringComparison.Ordinal),
+                "预期必须在下载整合包文件之前写入（导入中途失败才认得出来）");
+            Assert(vm.Contains("RecordModpackExpectation(inst, tempFile"),
+                "内容中心安装整合包也必须记录预期");
+            Assert(vm.Contains("_svc.Instances.Update(inst); // Round-92: persist ResolvedVersionId"),
+                "安装完必须保存 ResolvedVersionId，否则重启后又变回「加载器没装」");
+
+            // 8) 策略与模型字段本身
+            var model = File.ReadAllText(Path.Combine(srcRoot, "src", "AuroraCore", "Models", "GameInstance.cs"));
+            foreach (var field in new[] { "IsModpack", "ExpectedModCount", "LastExitCode" })
+                Assert(model.Contains(field), $"GameInstance 缺少 {field}");
+        });
+
+        Check("CommandGate: 一次只放一个进去（第 93 轮）", () =>
+        {
+            var gate = new CommandGate();
+            Assert(gate.TryEnter(), "第一次必须进得去");
+            Assert(gate.IsRunning, "进入后 IsRunning 必须为真");
+            Assert(!gate.TryEnter(), "同一个门第二次必须被挡住");
+            Assert(gate.SuppressedClicks == 1, $"被挡的次数要记账，实际 {gate.SuppressedClicks}");
+            gate.Exit();
+            Assert(!gate.IsRunning, "退出后必须解锁");
+            Assert(gate.TryEnter(), "解锁后必须能再进");
+
+            // 并发狂点：32 个线程同时抢，只能有一个赢
+            var parallel = new CommandGate();
+            var wins = 0;
+            System.Threading.Tasks.Parallel.For(0, 32, _ =>
+            {
+                if (parallel.TryEnter()) Interlocked.Increment(ref wins);
+            });
+            Assert(wins == 1, $"32 次并发点击只能进入一次，实际 {wins}");
+
+            gate.Reset();
+            Assert(!gate.IsRunning && gate.SuppressedClicks == 0, "Reset 要清干净（测试/teardown 用）");
+        });
+
+        Check("RelayCommand: 执行中再点不会重入，异常也会解锁（第 93 轮）", () =>
+        {
+            var entered = 0;
+            var release = new TaskCompletionSource();
+            var cmd = new RelayCommand(async _ => { entered++; await release.Task; });
+            Assert(cmd.CanExecute(null), "空闲时可执行");
+
+            cmd.Execute(null);
+            Assert(entered == 1, $"第一次点击必须执行，实际 {entered}");
+            Assert(cmd.IsRunning, "执行中 IsRunning 必须为真（按钮文案靠它）");
+            Assert(!cmd.CanExecute(null), "执行中 CanExecute 必须为 false，否则 WPF 不会置灰");
+
+            cmd.Execute(null); // 用户狂点
+            Assert(entered == 1, $"执行中再点不得重入，实际进入 {entered} 次");
+            Assert(cmd.SuppressedClicks == 1, "被吞掉的点击要记账（否则「点不动」无法取证）");
+
+            release.SetResult();
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (cmd.IsRunning && sw.ElapsedMilliseconds < 3000) Thread.Sleep(10);
+            Assert(!cmd.IsRunning, "完成后必须解锁");
+            Assert(cmd.CanExecute(null), "解锁后应能再次执行");
+            cmd.Execute(null);
+            Assert(entered == 2, "解锁后的一次点击必须真的执行");
+
+            // 异常路径：finally 必须解锁，且异常不能把进程带走
+            var boom = new RelayCommand(async _ => { await Task.Yield(); throw new InvalidOperationException("boom"); });
+            boom.Execute(null);
+            sw.Restart();
+            while (boom.IsRunning && sw.ElapsedMilliseconds < 3000) Thread.Sleep(10);
+            Assert(!boom.IsRunning, "命令抛异常后必须解锁（否则按钮永远灰着）");
+
+            // 同步命令不开门（UI 线程内不可能重入），行为保持原样
+            var sync = new RelayCommand(_ => { });
+            Assert(sync.CanExecute(null) && !sync.IsRunning, "同步命令不分配门，语义不变");
+        });
+
+        Check("Guard: 异步命令必须自带防重入，且不许「火后不管」（第 93 轮）", () =>
+        {
+            var srcRoot = FindSourceRoot()!;
+            var vmBase = File.ReadAllText(Path.Combine(srcRoot, "src", "AuroraLauncher.Desktop",
+                "ViewModels", "ViewModelBase.cs"));
+            Assert(vmBase.Contains("_gate.TryEnter()"), "RelayCommand 必须真的用门");
+            Assert(vmBase.Contains("guardReentry = true"), "异步命令必须默认开启防重入");
+            Assert(vmBase.Contains("if (_gate?.IsRunning == true) return false;"),
+                "执行中 CanExecute 必须返回 false，否则按钮不会置灰");
+            Assert(vmBase.Contains("nameof(IsRunning)"), "IsRunning 必须发通知（文案联动靠它）");
+            Assert(vmBase.Contains("Logger.Instance.Error(\"Cmd\", \"命令执行失败: \""),
+                "以前异常只进 Debug.WriteLine，等于黑洞");
+
+            // 火后不管（_ = SomeAsync()）会让防重入完全失效：命令本身秒回，
+            // 第二次点击时门已经空了。三个入口都必须改成 async 命令。
+            var vmFiles = Directory.GetFiles(Path.Combine(srcRoot, "src", "AuroraLauncher.Desktop", "ViewModels"),
+                "*.cs", SearchOption.TopDirectoryOnly);
+            var fireAndForget = new List<string>();
+            foreach (var f in vmFiles)
+            {
+                foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(
+                             File.ReadAllText(f), @"new RelayCommand\(_\s*=>\s*_\s*=\s*(\w+Async)\("))
+                    fireAndForget.Add($"{Path.GetFileName(f)}: {m.Groups[1].Value}");
+            }
+            Assert(fireAndForget.Count == 0,
+                "这些命令是「火后不管」，防重入对它无效，请改成 async 命令: " + string.Join("; ", fireAndForget));
+
+            // 文案联动：几个耗时按钮必须绑 IsRunning（写死 Content 就没有“动起来”）
+            foreach (var (file, command) in new[]
+                     {
+                         ("HomeView.xaml", "MicrosoftCompleteCommand"),
+                         ("InstancesView.xaml", "ScanInstancesCommand"),
+                         ("InstancesView.xaml", "RepairInstanceCommand"),
+                         ("SettingsView.xaml", "CheckUpdateCommand"),
+                     })
+            {
+                var xaml = File.ReadAllText(Path.Combine(srcRoot, "src", "AuroraLauncher.Desktop", "Views", file));
+                Assert(xaml.Contains($"{command}.IsRunning"),
+                    $"{file} 的 {command} 没有做「执行中」文案联动");
+            }
+
+            // 转换器要支持「忙碌|空闲」参数，否则上面那些绑定会渲染成 已启用/已禁用
+            var conv = File.ReadAllText(Path.Combine(srcRoot, "src", "AuroraLauncher.Desktop",
+                "Converters", "BoolToTextConverter.cs"));
+            Assert(conv.Contains("Split('|', 2)"), "BoolToText 必须支持 ConverterParameter='忙碌|空闲'");
+
+            // 顺手修的显示 bug：收起的 ComboBox 在拿不到 SelectionBoxItemTemplate
+            // 时退回 ToString()，以前渲染成完整类型名。
+            Assert(new AuroraLauncher.Desktop.ViewModels.JavaChoiceVM("自动选择（按游戏版本）", "").ToString()
+                   == "自动选择（按游戏版本）",
+                "Java 下拉框收起时必须显示标签，不能是类型名");
+        });
+
+        Check("LauncherProfiles: 安装器要的配置文件，缺了补、坏了修、好的不碰（第 94 轮）", () =>
+        {
+            var root = Path.Combine(Path.GetTempPath(), "aurora-profiles-" + Guid.NewGuid().ToString("N")[..6]);
+            try
+            {
+                // 目录都不存在时也要能补（安装器只检查文件）
+                var first = LauncherProfiles.Ensure(root);
+                Assert(first.Created && !first.Repaired, $"缺文件时必须新建，实际 created={first.Created}");
+                Assert(File.Exists(first.Path), "文件必须真的写出来");
+                var json = File.ReadAllText(first.Path);
+                Assert(LauncherProfiles.HasProfiles(json), "写出来的文件必须能被识别（profiles 非空）");
+                using (var doc = System.Text.Json.JsonDocument.Parse(json))
+                {
+                    var rootEl = doc.RootElement;
+                    Assert(rootEl.TryGetProperty("selectedProfile", out _), "必须带 selectedProfile —— 安装器会读它");
+                    Assert(rootEl.TryGetProperty("launcherVersion", out _), "补齐官方字段，别的工具才不会拒收");
+                    Assert(rootEl.GetProperty("profiles").EnumerateObject().Any(), "profiles 不能是空对象");
+                }
+
+                // 再调一次：不该重写（用户可能自己改过）
+                var before = File.ReadAllText(first.Path);
+                var second = LauncherProfiles.Ensure(root);
+                Assert(!second.Created && !second.Repaired, "已经合法的文件不得再动");
+                Assert(File.ReadAllText(first.Path) == before, "内容必须一字不改");
+
+                // 有内容但不可用（空文件 / {}）→ 修，并留一份备份
+                File.WriteAllText(first.Path, "");
+                var repaired = LauncherProfiles.Ensure(root);
+                Assert(repaired.Repaired, "空文件必须判为需要修复");
+                Assert(File.Exists(first.Path + ".bak"), "覆盖前要备份原文件");
+                Assert(LauncherProfiles.HasProfiles(File.ReadAllText(first.Path)), "修复后必须是合法内容");
+
+                File.WriteAllText(first.Path, "{\"profiles\":{}}");
+                Assert(!LauncherProfiles.HasProfiles(File.ReadAllText(first.Path)), "空 profiles 不算合法");
+                Assert(LauncherProfiles.Ensure(root).Repaired, "{} 形态也要修");
+
+                // 判定函数本身
+                Assert(!LauncherProfiles.HasProfiles(""), "空串必须为假");
+                Assert(!LauncherProfiles.HasProfiles("not json"), "坏 JSON 必须为假（不能让安装器逻辑抛异常）");
+                Assert(!LauncherProfiles.HasProfiles("[]"), "数组不是对象");
+                Assert(LauncherProfiles.HasProfiles("{\"profiles\":{\"a\":{}}}"), "有一个 profile 就够");
+
+                // 安装器失败的翻译（本轮 bug 的原文）
+                var realTail = "Host: sessionserver.mojang.com [150.171.110.134] | Target Directory: C:\\x | " +
+                               "There is no Minecraft launcher profile in \"C:\\x\", you need to run the launcher first!";
+                var explained = LauncherProfiles.Explain(realTail);
+                Assert(explained != null && explained.Contains("launcher_profiles.json"),
+                    "必须点名缺的是 launcher_profiles.json：" + explained);
+                Assert(LauncherProfiles.Explain("UnsupportedClassVersionError: class file version 69")!.Contains("Java"),
+                    "Java 版本不符要给 Java 提示");
+                Assert(LauncherProfiles.Explain("Successfully installed client into launcher.") == null,
+                    "认不出的输出不要瞎翻译");
+            }
+            finally { try { Directory.Delete(root, true); } catch { } }
+        });
+
+        Check("Guard: 跑 Forge/NeoForge 安装器前必须先补 launcher_profiles.json（第 94 轮）", () =>
+        {
+            var installers = File.ReadAllText(Path.Combine(FindSourceRoot()!, "src", "AuroraCore",
+                "Services", "ModLoaders", "ModLoaderInstallers.cs"));
+            var ensureIdx = installers.IndexOf("LauncherProfiles.Ensure(gameRoot)", StringComparison.Ordinal);
+            var runIdx = installers.IndexOf("await RunJavaAsync(java.JavaExecutable", StringComparison.Ordinal);
+            Assert(ensureIdx > 0, "安装器调用处没有补 launcher_profiles.json —— Forge 会直接退出码 1");
+            Assert(runIdx > ensureIdx, "必须先把文件补好再启动安装器（顺序反了等于没补）");
+            Assert(installers.Contains("LauncherProfiles.Explain("),
+                "安装器失败时要翻译成人话，而不是把 maven 输出整段丢给用户");
+            // 只允许一处调用：多出来的那份通常意味着有人复制了安装流程却漏了补文件
+            var ensureCalls = System.Text.RegularExpressions.Regex.Matches(installers, @"LauncherProfiles\.Ensure\(").Count;
+            Assert(ensureCalls == 1, $"补文件只应有一处，实际 {ensureCalls} 处");
+        });
+
+        Console.WriteLine($"\n=== Result: {_passed} passed, {_failed} failed, {_skipped} skipped ===");        Environment.Exit(_failed == 0 ? 0 : 1);
     }
 }

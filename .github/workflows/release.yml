@@ -42,8 +42,11 @@ jobs:
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
         with:
+          # Round-74: the delta patch lives on the release, not only in the Pages
+          # artifact — clients fetch it from the same releases/download base URL.
           files: |
             publish/AuroraLauncher.exe
+            publish/AuroraLauncher.patch
             publish/build-info.txt
             publish/latest.json
 

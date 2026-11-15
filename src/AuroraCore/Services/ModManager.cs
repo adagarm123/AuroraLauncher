@@ -18,6 +18,14 @@ public sealed class ModManager
 
     public ModManager(DownloadEngine engine) => _engine = engine;
 
+    /// <summary>Round-92: re-fetch a known list of files (used by the modpack
+    /// repair path, which rebuilds entries from the saved manifest). The engine
+    /// skips files whose hash already matches, so calling it on a healthy pack
+    /// costs a few stat calls.</summary>
+    public Task DownloadFilesAsync(IEnumerable<DownloadEntry> entries,
+        Action<DownloadProgress>? progress, CancellationToken ct)
+        => _engine.DownloadAsync(entries, progress, ct);
+
     public List<ModInfo> Scan(string instanceDir)
     {
         var modsDir = Path.Combine(instanceDir, "mods");
@@ -389,8 +397,70 @@ public sealed class ModManager
                 }
             }
         }
-        int files = root.TryGetProperty("files", out var fl) && fl.ValueKind == JsonValueKind.Array ? fl.GetArrayLength() : 0;
-        return new MrpackInfo(mc, loader, loaderVer, files);
+        var files = 0;
+        var modCount = 0;
+        if (root.TryGetProperty("files", out var fl) && fl.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var f in fl.EnumerateArray())
+            {
+                files++;
+                // Same rule the installer uses: client=unsupported files are
+                // never installed, so they must not be counted as expected.
+                if (f.TryGetProperty("env", out var env) &&
+                    env.TryGetProperty("client", out var c) &&
+                    c.GetString() == "unsupported") continue;
+                var p = f.TryGetProperty("path", out var pp) ? pp.GetString() : null;
+                if (string.IsNullOrEmpty(p)) continue;
+                var norm = p.Replace('\\', '/');
+                if (norm.StartsWith("mods/", StringComparison.OrdinalIgnoreCase) &&
+                    norm.EndsWith(".jar", StringComparison.OrdinalIgnoreCase)) modCount++;
+            }
+        }
+        return new MrpackInfo(mc, loader, loaderVer, files, modCount);
+    }
+
+    /// <summary>Round-92: the pack's declared file list, without downloading
+    /// anything. The import path records this BEFORE the first byte is fetched,
+    /// so an import that dies halfway can still be recognised (and repaired).</summary>
+    public static List<ModpackManifest.ModpackFile> ReadMrpackFiles(string mrpackPath)
+    {
+        var list = new List<ModpackManifest.ModpackFile>();
+        using var zip = ZipFile.OpenRead(mrpackPath);
+        var index = zip.GetEntry("modrinth.index.json");
+        if (index == null) return list;
+        using var sr = new StreamReader(index.Open());
+        using var doc = JsonDocument.Parse(sr.ReadToEnd());
+        if (!doc.RootElement.TryGetProperty("files", out var files) ||
+            files.ValueKind != JsonValueKind.Array) return list;
+
+        foreach (var f in files.EnumerateArray())
+        {
+            // Respect the pack's client environment: skip files that
+            // explicitly declare client=unsupported.
+            if (f.TryGetProperty("env", out var env) &&
+                env.TryGetProperty("client", out var client) &&
+                client.GetString() == "unsupported") continue;
+
+            if (!f.TryGetProperty("path", out var pathProp)) continue;
+            var rel = SafeRelPath(pathProp.GetString());
+            if (rel == null) continue;
+
+            var url = f.TryGetProperty("downloads", out var dl) && dl.ValueKind == JsonValueKind.Array
+                ? dl.EnumerateArray().Select(x => x.GetString()).FirstOrDefault(x => !string.IsNullOrEmpty(x))
+                : null;
+            if (string.IsNullOrEmpty(url)) continue;
+
+            var sha1 = f.TryGetProperty("hashes", out var hs) && hs.TryGetProperty("sha1", out var s1) ? s1.GetString() : null;
+            var size = f.TryGetProperty("fileSize", out var fsz) && fsz.ValueKind == JsonValueKind.Number ? fsz.GetInt64() : 0;
+            list.Add(new ModpackManifest.ModpackFile
+            {
+                Path = rel.Replace('\\', '/'),
+                Url = url,
+                Sha1 = sha1,
+                Size = size
+            });
+        }
+        return list;
     }
 
     /// <summary>Installs a .mrpack into an existing instance: extracts overrides/
@@ -508,7 +578,8 @@ public sealed record ModrinthVersion(
     string FileUrl, string FileName, long FileSize, string? Sha1, DateTime? DatePublished = null);
 
 /// <summary>Metadata parsed from a .mrpack's modrinth.index.json.</summary>
-public sealed record MrpackInfo(string GameVersion, ModLoaderType Loader, string? LoaderVersion, int ClientFiles);
+public sealed record MrpackInfo(string GameVersion, ModLoaderType Loader, string? LoaderVersion,
+    int ClientFiles, int ModCount = 0);
 
 public class ModrinthProject
 {

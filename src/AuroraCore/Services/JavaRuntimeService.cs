@@ -25,9 +25,15 @@ public sealed class JavaRuntimeService
 {
     public const int DefaultMajor = 21;
 
+    /// <summary>Adoptium Temurin GA, Windows x64 JDK zip, latest build of the
+    /// requested major (round-78: the crash repair engine may need 17, not
+    /// just 21 — the URL shape is identical apart from the major).</summary>
+    public static string BuildApiUrl(int major) =>
+        $"https://api.adoptium.net/v3/assets/latest/{Math.Max(8, major)}/hotspot" +
+        "?architecture=x64&image_type=jdk&os=windows&vendor=eclipse";
+
     /// <summary>Adoptium Temurin 21 GA, Windows x64 JDK zip.</summary>
-    public const string ApiUrl =
-        "https://api.adoptium.net/v3/assets/latest/21/hotspot?architecture=x64&image_type=jdk&os=windows&vendor=eclipse";
+    public static string ApiUrl => BuildApiUrl(DefaultMajor);
 
     private readonly DownloadEngine _engine = new();
     private readonly Logger _log = Logger.Instance;
@@ -86,10 +92,15 @@ public sealed class JavaRuntimeService
     /// hedge, 8s per route). No mirror is hard-coded: Adoptium's response
     /// itself carries the authoritative download link.</summary>
     public async Task<JavaPackage?> ResolveAsync(CancellationToken ct = default)
+        => await ResolveAsync(DefaultMajor, ct).ConfigureAwait(false);
+
+    /// <summary>Same as above for an explicit major (crash repair: the log
+    /// told us exactly which Java the game wants).</summary>
+    public async Task<JavaPackage?> ResolveAsync(int major, CancellationToken ct = default)
     {
-        var json = await NetRouting.GetStringAsync(ApiUrl, null, ct,
+        var json = await NetRouting.GetStringAsync(BuildApiUrl(major), null, ct,
             perRouteTimeoutSec: 8, rounds: 1, logTag: "Java").ConfigureAwait(false);
-        var pkg = ParseLatest(json);
+        var pkg = ParseLatest(json, major);
         if (pkg == null) _log.Warn("Java", "Adoptium 响应中没有可用的 Windows x64 JDK zip 包。");
         else _log.Info("Java", $"Adoptium: {pkg.ReleaseName} · {pkg.Name} · {pkg.Size / 1024 / 1024} MB");
         return pkg;

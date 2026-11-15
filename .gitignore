@@ -12,3 +12,6 @@ publish_staging/
 .DS_Store
 Thumbs.db
 scripts/signing/private_key.xml
+
+# 本地发布归档（上一版 EXE，约 65 MB，绝不入库）
+artifacts/

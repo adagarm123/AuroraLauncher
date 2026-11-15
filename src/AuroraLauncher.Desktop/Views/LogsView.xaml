@@ -11,7 +11,7 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <!-- ======== 图形化崩溃报告卡片（round-60）：替代在一堆日志里找原因 ======== -->
+        <!-- ======== 崩溃诊断卡（round-60 建立，round-78 升级为「诊断 + 修复」） ======== -->
         <Border Grid.Row="0" Margin="0,0,0,14" Padding="18" CornerRadius="12"
                 Background="{DynamicResource DangerSoftBrush}"
                 BorderBrush="{DynamicResource DangerBrush}" BorderThickness="1"
@@ -22,41 +22,76 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock Text="{Binding LastCrashReport.Headline}" FontSize="22" FontWeight="Bold"
-                               Foreground="{DynamicResource DangerBrush}" VerticalAlignment="Center"/>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding LastCrashReport.Headline}" FontSize="22" FontWeight="Bold"
+                                   Foreground="{DynamicResource DangerBrush}" VerticalAlignment="Center"/>
+                        <Border Background="{DynamicResource PanelBrush}" CornerRadius="9" Padding="10,3" Margin="12,2,0,0"
+                                VerticalAlignment="Center">
+                            <TextBlock Text="{Binding LastCrashReport.CountText}" FontSize="11.5"
+                                       Foreground="{DynamicResource TextMutedBrush}"/>
+                        </Border>
+                    </StackPanel>
                     <Button Grid.Column="1" Content="关闭" Command="{Binding DismissCrashReportCommand}" Padding="12,5"/>
                 </Grid>
                 <TextBlock Text="{Binding LastCrashReport.Summary}" FontSize="12.5" Margin="0,6,0,12"
                            Foreground="{DynamicResource TextMutedBrush}" TextWrapping="Wrap"/>
-                <TextBlock Text="可能的原因" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,6"/>
-                <ItemsControl ItemsSource="{Binding LastCrashReport.Causes}">
+
+                <TextBlock Text="诊断结果与修复办法" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                <ItemsControl ItemsSource="{Binding LastCrashReport.Solutions}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
-                            <Border Background="{DynamicResource PanelBrush}" CornerRadius="8" Padding="12,8" Margin="0,0,0,6">
+                            <Border Background="{DynamicResource PanelBrush}" CornerRadius="8" Padding="12,10" Margin="0,0,0,8">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
-                                    <Border Width="22" Height="22" CornerRadius="11" Background="{DynamicResource DangerBrush}" Margin="0,0,12,0">
+                                    <Border Width="22" Height="22" CornerRadius="11" Background="{DynamicResource DangerBrush}"
+                                            Margin="0,1,12,0" VerticalAlignment="Top">
                                         <TextBlock Text="{Binding Index}" Foreground="White" FontSize="11" FontWeight="Bold"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
-                                    <StackPanel Grid.Column="1">
-                                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="13"/>
-                                        <TextBlock Text="{Binding Suggestion}" FontSize="12" TextWrapping="Wrap"
+                                    <StackPanel Grid.Column="1" Margin="0,0,12,0">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="13"
+                                                       VerticalAlignment="Center"/>
+                                            <Border Background="{DynamicResource DangerSoftBrush}" CornerRadius="7"
+                                                    Padding="7,1" Margin="8,0,0,0" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding KindLabel}" FontSize="10.5"
+                                                           Foreground="{DynamicResource DangerBrush}"/>
+                                            </Border>
+                                        </StackPanel>
+                                        <TextBlock Text="{Binding Diagnosis}" FontSize="12" TextWrapping="Wrap"
+                                                   Margin="0,3,0,0"
                                                    Foreground="{DynamicResource TextMutedBrush}"/>
+                                        <TextBlock Text="{Binding ResultText}" FontSize="11.5" TextWrapping="Wrap"
+                                                   Margin="0,4,0,0" Foreground="{DynamicResource TextBrush}"
+                                                   Visibility="{Binding HasResult, Converter={StaticResource BoolToVis}}"/>
                                     </StackPanel>
+                                    <Button Grid.Column="2" Content="{Binding ActionText}"
+                                            Command="{Binding DataContext.ApplyCrashFixCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                            CommandParameter="{Binding}"
+                                            IsEnabled="{Binding CanApply}"
+                                            VerticalAlignment="Center" Padding="14,6"
+                                            Visibility="{Binding HasAction, Converter={StaticResource BoolToVis}}"
+                                            Style="{StaticResource PrimaryButton}"/>
                                 </Grid>
                             </Border>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
+
                 <TextBlock Text="{Binding LastCrashReport.Fallback}" FontSize="12.5" TextWrapping="Wrap"
                            Foreground="{DynamicResource TextMutedBrush}" Margin="0,2,0,0"/>
                 <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                    <Button Content="发送给作者" Command="{Binding SendCrashReportCommand}"
+                            Style="{StaticResource PrimaryButton}" Padding="16,7"
+                            ToolTip="自动生成脱敏诊断包，并用你电脑上的邮件客户端写好邮件（需要你手动点发送）"/>
                     <Button Content="一键导出诊断包" Command="{Binding ExportDiagnosticsCommand}"
-                            Style="{StaticResource PrimaryButton}" Padding="16,7"/>
+                            Padding="16,7" Margin="10,0,0,0"/>
+                    <Button Content="打开设置" Command="{Binding NavigateCommand}" CommandParameter="Settings"
+                            Padding="16,7" Margin="10,0,0,0"/>
                     <Button Content="前往求助" Command="{Binding OpenHelpLinkCommand}" Padding="16,7" Margin="10,0,0,0"/>
                     <TextBlock Text="下方仍是完整日志（已自动切到只看错误）" FontSize="11.5"
                                Foreground="{DynamicResource TextMutedBrush}" Margin="12,0,0,0" VerticalAlignment="Center"/>
@@ -74,6 +109,9 @@
                 <TextBlock Text="启动器运行日志（访问令牌已自动脱敏，仅保留最近 600 行）。" Style="{StaticResource PageSubtitle}"/>
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                <!-- Round-70: 一键导出日志（脱敏文本，可直接贴在反馈里） -->
+                <Button Content="导出日志" Command="{Binding ExportLogsCommand}" Padding="14,7" Margin="0,0,10,0"
+                        ToolTip="把当前日志导出为 .txt（令牌与用户目录已自动脱敏），可直接附在问题反馈里"/>
                 <!-- 崩溃排查：一键只看错误/警告 -->
                 <ToggleButton x:Name="ErrorsOnlyToggle" VerticalAlignment="Center" Margin="0,0,10,0"
                               Padding="14,7" Checked="ErrorsOnly_Changed" Unchecked="ErrorsOnly_Changed">
@@ -89,8 +127,7 @@
             </StackPanel>
         </Grid>
         <!-- ListBox 自带滚动（虚拟化在此层生效）；外层不再套 ScrollViewer -->
-        <Border Grid.Row="2" CornerRadius="12" Background="#12131B" BorderBrush="#262A3A" BorderThickness="1" Padding="14"
-                Effect="{StaticResource CardShadow}">
+        <Border Grid.Row="2" CornerRadius="12" Background="#12131B" BorderBrush="#262A3A" BorderThickness="1" Padding="14">
             <ListBox x:Name="LogList" ItemsSource="{Binding LogsView}" Background="Transparent" BorderThickness="0"
                      VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
                      VirtualizingPanel.ScrollUnit="Pixel" Focusable="False"

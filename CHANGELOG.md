@@ -1,6 +1,6 @@
 # 更新日志（CHANGELOG）
 
-> 完整历史变更记录：**第 1–2 轮交付说明 + 第 3 轮至第 60 轮逐轮补充**（末轮始终为当前版本的前一轮）。
+> 完整历史变更记录：**第 1–2 轮交付说明 + 第 3 轮至第 93 轮逐轮补充**（末轮始终为当前版本的前一轮）。
 > 本文件由 `README.md` 的历史章节整体搬迁而来，正文保持原样（未改写、未删减）。
 >
 > - **最新一轮**始终放在 [README](README.md) 的「最新一轮的更新内容」章节。
@@ -857,3 +857,1011 @@ meta.fabricmc.net/v2/versions/loader/1.21/fabric-loader-0.20.1-1.21/profile/json
 **配套**：`BuildInfo.CurrentRound` → 60、应用内更新日志置顶第 60 轮、第 59 轮归档进 CHANGELOG；交互元素 70→83（62 直接绑定 + 17 样式命令 + 4 事件处理器）；ROADMAP 的「崩溃报告查看器 / CurseForge / OptiFine」待办按实际完成度更新。
 
 自测 **Unit 36/36、All 43/43** 全绿；EXE 经 `scripts/publish.ps1` 重新发布。
+
+## 更新补充（第 61 轮：更新安装过程全程可见 + 下载进度增强）
+
+**问题**：此前更新换装由一个完全隐藏的 cmd 脚本完成（等旧进程退出 2 秒 → 复制 63 MB → 最多 10 次重试 × 2 秒 → 重启）。用户点「立即更新」或重启后，主窗口立刻消失、屏幕上十几秒空白，看起来像崩溃；下载阶段的设置页进度条也只有百分比，看不到速度和体积。
+
+**1. 可见的换装窗口（根治黑屏）**：启动器现在以 `--apply-update` 模式**从临时副本启动自身**（`update/updater.exe`）——运行中的 EXE 在 Windows 上被锁定，所以执行换装的进程必须是另一份文件，否则无法覆盖目标。该模式不再创建主窗口，而是显示一个置顶、无边框的小窗口：「正在应用更新并重启…」+ 阶段文字 + 进度条，覆盖「等待旧版本退出 → 校验更新包 → 替换文件（被占用时显示重试次数）→ 写入版本信息 → 重新启动」。任何失败都变成可读错误 + 「重试 / 关闭」按钮，不再静默黑屏。旧的隐藏 cmd 脚本保留为**仅当可见更新器启动失败时**的兜底。
+
+**2. 安全与正确性**：`UpdateApplier` 在换装前按 `build-info.txt` 里的 `exe-sha256` **二次校验**已下载包（防 staged 文件被改动）；复制带 10 次有界重试且每步上报；交接参数 `UpdateApplyArgs` 为单 argv token 的纯逻辑，畸形数据 / 相对路径 / 非法 PID 一律失败关闭（单测 #37：含一次不弹窗的完整换装演练，验证复制、二次校验、重启路径与「篡改后失败且不破坏已装 EXE」）；新实例启动后延迟清理临时副本。
+
+**3. 下载进度更可见**：设置 → 更新 的进度条（第 58 轮已有）现在显示**百分比 + 已下载/总大小 + 实时速度**，并同步到主窗口状态栏；自动下载时轻提示明确告知「设置 → 更新 可查看进度」。下载完成后设置页出现「立即重启并应用更新」按钮，点它即进入可见换装窗口，不用猜什么时候会重启。
+
+**配套**：`BuildInfo.CurrentRound` → 61、应用内更新日志置顶第 61 轮、第 60 轮归档进 CHANGELOG；交互元素 83→86（63 直接绑定 + 17 样式命令 + 6 事件处理器元素）；`docs/auto-update.md` 同步用户/作者流程说明。
+
+自测 **Unit 37/37、All 44/44** 全绿；EXE 经 `scripts/publish.ps1` 重新发布。
+
+## 更新补充（第 62 轮：每个实例单独配 Java + 版本列表一键更新）
+
+**1. 多实例级 Java 配置**：`GameInstance` 新增可选 `JavaPath`，`LauncherService.GetJavaForAsync` 的优先级改为「实例指定 → 启动器全局 → 按合并后版本 JSON 自动选择」——启动游戏与加载器修复共用这一入口，一处设置全覆盖。1.12 老包可固定 Java 8、1.21 新包用 Java 21，互不干扰；留空则完全沿用原来的自动选择。实例管理 → 个性化 新增 Java 下拉（自动选择 + 所有已探测 Java，含一键安装 Java 21 后的新运行时）与推荐提示（`JavaRequirement.RecommendMajor`：≤1.16.5→8、1.17–1.20.4→17、≥1.20.5→21，快照 / 无法解析→21）。旧实例元数据缺字段自动按 null 处理，无需迁移；自定义路径即使当前探测不到也保留在下拉里，不会被悄悄重置为自动。单测 #38 覆盖全部边界版本。
+
+**2. 版本列表「一键更新」**：游戏下载页的版本列表顶部新增常驻卡片，显示当前启动器版本（v0.62.0 · 第 62 轮）与「一键更新」按钮。启动检查发现新版时（即使弹窗被关闭、或模式 1 静默下载），卡片变成明确提示「检测到新版启动器（第 N 轮）」；点击直接进两按钮更新弹窗 → 下载 → 可见换装窗口，不用再去设置页找。没检查过或已是最新版时点击会先检查并明确回报结果，不是死按钮；已下载好待安装的更新包也会在卡片上提示。`UpdateBannerPolicy` 纯逻辑 + 单测 #39（含防降级：轮次不高于当前一律不算更新）。
+
+**配套**：`BuildInfo.CurrentRound` → 62、应用内更新日志置顶第 62 轮、第 61 轮归档进 CHANGELOG；交互元素 86→87（64 直接绑定 + 17 样式命令 + 6 事件处理器元素）；`docs/auto-update.md` 补入口说明。
+
+自测 **Unit 39/39、All 46/46** 全绿；EXE 经 `scripts/publish.ps1` 重新发布。
+
+## 更新补充（第 63 轮：切换页面卡死（未响应）根治）
+
+**问题**：快速在侧栏不同页面间切换时，标题栏出现「(未响应)」。第 55 轮加过页面缓存仍复现——上次只解决了「每次点击重建整棵 XAML 树」，没解决缓存带来的新副作用。
+
+**根因**：缓存的 UserControl 每次重新附加到 `ContentControl` 都会**再次触发 `Loaded`**。三个页面把「首次进入的一次性初始化」挂在 `Loaded` 上，且是 `async void`、无一次性守卫、无去重：游戏下载页拉版本清单并启动 4 路加载器请求、内容中心发 Modrinth 搜索、设置页启动多个 `java -version` 进程探测。快速切换时这些任务并发叠加，回到 UI 线程后各自 `Clear()` + 逐项 `Add` 重建集合（103 个版本 = 103 次集合变更通知 / 布局），UI 线程被占满 → 未响应。截图里加载器卡片停在「版本列表加载中…」正是这批任务在跑。
+
+**修复（分层）**：
+1. **导航层**：`NavigationPolicy` 纯逻辑，重复点击当前页直接早退，不再重新赋值 `Content`；首次导航不受影响。
+2. **页面层**：`DownloadView` / `ModsView` / `SettingsView` 初始化改为 `_initialized` 一次性守卫，并以 `DispatcherPriority.Background` 启动，先把布局让给界面；`LogsView` 重新附加时恢复日志自动滚动订阅（缓存复用导致的附带 bug）；更新器窗口 Loaded 也加一次性守卫，防重复换装。
+3. **VM 层**：`LoadVersionsAsync` / `SearchContentAsync` 单飞（重复调用直接返回）；`LoadJavaListAsync` / `LoadLoaderCardsAsync` 合并式单飞（进行中的新请求合并为一次重跑，不丢最新选择）；`SelectedVersion` 变化 180 ms 去抖，避免版本列表重建时连发加载器请求。
+4. **渲染层**：新增 `BulkObservableCollection.Replace()`，一次 Reset 通知替换整个集合，取代 Clear + N 次 Add。
+
+**机制防线**：新增单测 #40（`BulkObservableCollection` 只发一次 Reset；`NavigationPolicy` 早退与归一规则）与 #41（静态扫描：所有 `Views/*.xaml.cs` 的 `Loaded` 处理器必须有一次守卫或可重入订阅，且禁用 Clear+Add 重建大集合）。负向验证：临时去掉守卫后 Guard 立即报红，恢复后全绿。
+
+**配套**：`BuildInfo.CurrentRound` → 63、应用内更新日志置顶第 63 轮、第 62 轮归档进 CHANGELOG；三份文档基线同步（交互元素仍 87，本轮无新增按钮）。
+
+自测 **Unit 41/41、All 48/48** 全绿；EXE 经 `scripts/publish.ps1` 重新发布。
+
+## 更新补充（第 64 轮：稳定性机制补测与边界收口）
+
+按评审逐条落地；三处经核实确实是上一轮的缺口，不是「确认一下」就能带过。
+
+**1. 合并式单飞变成可测契约**：新增 `CoalescingSingleFlight<TArg>`（AuroraCore 纯逻辑）——进行中只记一个 pending 标志 + **最新参数**，完成后用最新参数**只重跑一次**；既不是排队型（5 次触发重跑 5 次），也不是丢弃型（丢最新选择）。`LoadLoaderCardsAsync` / `LoadJavaListAsync` 改为复用它，不再各自内联 bool。注入式单测 #42：A→B→C→D→E 连续触发，断言 `RunCount == 2` 且第二次参数为 E，空闲期再触发一次正常执行。
+
+**2. 去抖只作用于网络，骨架卡即时渲染**：核实发现上一轮把骨架卡也一起延迟了 180 ms，削弱了第 47 轮「选版本即时出骨架卡」。本轮把骨架卡抽成 `ShowLoaderCardSkeletons()`，在 `SelectedVersion` setter 里**同步立即**执行；去抖只调度网络批次。GenerationGate 代数由骨架卡统一 Begin，Core 复用同一 gen，旧结果仍被丢弃。计时器：切离下载页立即 `Stop()`；回调入口用 `LoaderDebouncePolicy.ShouldFire(当前页, 目标版本, 当前版本)` 判定，页面已切走或版本又变则**不发旧请求**；重新进入下载页时 `EnsureLoaderCardsRefresh()` 补调度（轻量、自身不联网），避免卡片永久停在「加载中…」。单测 #43 覆盖四种判定。
+
+**3. Replace() 的选中语义边界**：核实 `Versions` 的 ListBox / ComboBox **确实绑定了 `SelectedItem`**，Reset 会丢选中项——不是「只记边界说明」就够的情况。`LoadVersionsAsync` 现在用 `SelectionPolicy.RestoreByKey` 按版本 id 恢复（找不到则回退第一项）。`ModSearchResults` / `JavaList` 无选中语义，保持直接 Replace；边界已写入 `BulkObservableCollection` 类注释，未来带选中语义的集合必须同样恢复。单测 #43 覆盖恢复 / 回退 / 空集合。
+
+**4. Guard #41 去掉变量名硬编码**：改为 `LoadedGuardPolicy` 模式匹配——「存在 `private bool _\w+` 字段 且 Loaded 处理器中有 `if (_x) return;` / `if (!_x) return;`」，或可重入 `HookVm(` 订阅。`_isLoaded` / `_firstLoadDone` 等命名同样通过，不再逼迫改名。单测 #44 正 / 反例齐全；源文件级负向验证：删掉 early-return 后 Guard 仍报红。
+
+**5. 导航 key 粒度**：核实内容中心子页由 `SelectContentKindCommand` 直接改 `ContentKind`，**不经过 `Navigate`**，因此不会被同页早退吞掉。`NavigationPolicy.ShouldNavigate` 仍扩展了可选 `currentSubKey / requestedSubKey`，未来新增带参数导航时子参数不同会正常放行。单测 #43 覆盖。
+
+**验证矩阵（评审建议的 6 项实测）**：
+
+| 场景 | 自动化覆盖 | 真机 |
+|---|---|---|
+| 侧栏 10+ 次快速来回 | Guard #41 + 单飞 / 去抖 / 批量通知纯逻辑（#40 / #42 / #43） | 需真机观察标题栏与卡片状态，本环境无法执行 GUI 压测 |
+| 下载页版本快速切换 | #42 最新参数、#43 去抖判定、GenerationGate 既有单测 | 需真机观察骨架卡是否即时、列表是否只在稳定后填充 |
+| 内容中心反复进出 | Loaded 一次性守卫 + SearchContent 单飞（Guard #41） | 需真机观察搜索进度条是否堆积 |
+| 设置页反复进出 | Java 探测合并式单飞（#42 同契约） | 需真机用任务管理器看 `java -version` 进程数 |
+| 日志页切走再回 | LogsView Loaded 重新 HookVm（Guard #41 覆盖订阅模式） | 需游戏运行时真机观察自动滚动 |
+| 更新器窗口重复换装 | `_initialized` 守卫（Guard #41） | 需有可应用更新包时真机触发 |
+
+**配套**：`BuildInfo.CurrentRound` → 64、应用内更新日志置顶第 64 轮、第 63 轮归档进 CHANGELOG；三份文档基线同步，交互元素仍 87。
+
+自测 **Unit 44/44、All 51/51** 全绿；EXE 经 `scripts/publish.ps1` 重新发布。
+
+## 更新补充（第 65 轮：反复切换页面卡死——架构级根治）
+
+**先承认前两次的判断**：这是第三次收到「反复点击左侧选项卡卡死 / 未响应」。第 55 轮做了页面实例缓存（省掉 XAML 解析），第 63/64 轮做了 Loaded 一次性守卫、单飞、去抖、批量集合通知（省掉重复异步初始化）——**都没修到根上**。
+
+**真正的根因**：主窗口一直用 `<ContentControl Content="{Binding CurrentPage}"/>`。缓存的是 UserControl **对象实例**，但每次切换都要把它从可视化树卸载再重新附加；WPF 卸载即销毁该控件的**可视化树**，重新附加必须重新应用模板、Measure/Arrange 整个页面并重新生成每张 `Card` 的 `BitmapCache` + `DropShadowEffect(BlurRadius=22)` 软件渲染纹理。下载页 103 行版本列表、更新日志几十张卡片、帮助页分组列表……每次点击都全量重画一遍。反复点击 → UI 线程被渲染与纹理分配占满、临时视觉对象堆积 → 未响应甚至崩溃。前两轮优化的都不是这条同步路径。
+
+**修复（架构级）**：
+1. `MainWindow.xaml` 的 `ContentControl` 换成常驻 `Grid x:Name="PageHost"`；页面**惰性创建**（第一次访问才建）、之后**永不从可视化树移除**，导航只翻 `Visibility`（`PageHostPolicy`）。切换从「重建整棵树」变成 O(1) 属性变更。
+2. `MainViewModel.Navigate` 只改 `CurrentPageKey`；`MainWindow` 订阅 `PropertyChanged` 完成创建/显隐。删掉 `CurrentPage` 与 `_pageCache`，杜绝有人再把它接回 Content 换装。
+3. `Loaded` 现在每页只触发一次（不再有 Unloaded 风暴），日志页 / 内容中心的订阅也不会丢失；但隐藏页仍会收到集合变更，因此 `LogsView.Logs_CollectionChanged` 与 `ModsView.ScrollToCompatibleGroup` 都加 `!IsVisible` 判定，**不在 Collapsed 页面上强制布局**。
+4. `DpiChanged` 的 BitmapCache 缩放从「遍历整个窗口」收窄为「只遍历当前可见页」，避免页面常驻后放大开销。
+5. 因页面不再重复 Loaded，下载页去抖的补调度从 `DownloadView.Loaded` 移到 `Navigate(target == "Download")`，卡片不会永久停在「加载中…」。
+
+**机制防线**：单测 #45（`PageHostPolicy`：首次创建、二次不重建、同时只有一个可见；模拟 40 次快速切换只创建 4 个页面）与 #46（静态 Guard：禁止 `Content="{Binding CurrentPage}"`、要求 `PageHost.Children.Add` 与显隐切换、要求隐藏页 `!IsVisible` 判定）。负向验证：往 MainWindow.xaml 注入 Content 换装写法后 Guard 立即报红，恢复后全绿。
+
+**验证矩阵（6 项实测，如实标注）**：
+
+| 场景 | 自动化覆盖 | 真机 |
+|---|---|---|
+| 侧栏 10+ 次快速来回 | #45（40 次切换只创建 4 页）+ #46（禁止重建树）+ 既有单飞/去抖防线 | 需真机观察标题栏与加载器卡片，本环境无法执行 GUI 压测 |
+| 下载页版本快速切换 | #42 最新参数、#43 去抖判定、GenerationGate 既有单测 | 需真机观察骨架卡即时、列表只稳定后填充 |
+| 内容中心反复进出 | Loaded 一次性守卫 + 搜索单飞 + 隐藏页不布局 | 需真机观察搜索进度条是否堆积 |
+| 设置页反复进出 | Java 探测合并单飞（#42 同契约） | 需真机观察 `java -version` 进程数 |
+| 日志页切走再回 | `!IsVisible` 判定 + 订阅常驻不再丢失 | 需游戏运行时真机观察自动滚动 |
+| 更新器窗口重复换装 | `_initialized` 守卫（Guard #41） | 需有可应用更新包时真机触发 |
+
+**配套**：`BuildInfo.CurrentRound` → 65、应用内更新日志置顶第 65 轮、第 64 轮归档进 CHANGELOG；三份文档基线同步，交互元素仍 87（本轮无新增按钮）。
+
+自测 **Unit 46/46、All 53/53** 全绿；EXE 经 `scripts/publish.ps1` 重新发布。
+
+## 更新补充（第 66 轮：隐藏页「幽灵动画」与渲染资源累积）
+
+**症状变化**：第 65 轮后「连点 5 次没问题，再多点几次又崩」——典型的**累积型**症状，说明有东西随切换次数增长而不释放。按用户给的四个嫌疑犯逐条取证，不照单抓药。
+
+**嫌疑一（坐实，主因）：不确定进度条的 Forever 动画从不停止**。`Styles/AuroraControls.xaml` 的 ProgressBar 模板中 `Trigger(IsIndeterminate=True)` 有 `BeginStoryboard` 启动 `RepeatBehavior="Forever"` 的 `DoubleAnimation`，**却没有配对的 `StopStoryboard`**。第 65 轮让页面常驻后，4 个不确定进度条（内容中心 3 个、设置页 1 个）的动画再也不会随 Unloaded 释放；设置页的 `IsIndeterminate` 还绑定检查状态，每次 True→False→True 再叠一个永不停止的动画。点得越多，UI 线程每帧要处理的时间线越多 → 累积到崩溃。
+修复：动画改为 `MultiDataTrigger`（`IsIndeterminate=True` **且** `IsVisible=True`）才 `BeginStoryboard`，并补 `ExitActions` 的 `StopStoryboard`。`IsVisible` 是**只读依赖属性**，必须走绑定式 DataTrigger，不能写进普通 Trigger 的 Property（否则运行时抛异常）。效果等价于用户建议的 `IPausable` 暂停/恢复，但由 WPF 声明式自动完成，隐藏页零动画。
+
+**嫌疑二（成立，已降级而非粗暴移除）**：`Card` 样式的 `DropShadowEffect` + `BitmapCache` 在页面常驻后，9 个页面的所有卡片纹理都留在内存里。修复：隐藏页（`IsVisible=False`）经 `DataTrigger` 把 `Effect` 与 `CacheMode` 置空，切回可见再自动恢复；同时 `CardShadow` 模糊半径 22→12、`HeroShadow` 30→14，降低单张纹理成本。保留阴影观感，但不再为隐藏页付费——没有采用「完全去掉阴影」的临时验证方案，避免牺牲成品视觉。
+
+**嫌疑三（部分成立）**：全局 ListBox 样式此前没有显式虚拟化设置。补齐 `VirtualizingPanel.IsVirtualizing=True`、`VirtualizationMode=Recycling`、`ScrollViewer.CanContentScroll=True`，所有列表（103 行版本、数百行日志、搜索结果）统一回收容器。核查各页面 ListBox 均未被外层 ScrollViewer 包裹（第 17 轮的坑未复发）；更新日志用的是条目数很少的 ItemsControl，记为边界不动。
+
+**嫌疑四（基本排除，顺手收口）**：主链路 `Dispatch()` 早已是 `BeginInvoke`，`_logFlushTimer` 只创建一次且空队列立即返回，不是累积源；全项目唯一一处同步 `Dispatcher.Invoke` 在更新器窗口，已改为 `BeginInvoke`。另外 `PageActiveConverter` 每次导航为 8 个非活动按钮各 `new SolidColorBrush`，改用冻结的 `Brushes.Transparent` 复用，消除每次切换的对象分配。
+
+**机制防线**：单测 #47（静态 Guard）——Forever 动画必须有配对 `StopStoryboard` 且受 `IsVisible` 门控；隐藏 Card 必须释放 Effect/CacheMode；全局 ListBox 必须回收容器；产品代码禁止同步 `Dispatcher.Invoke`；导航转换器必须复用冻结画刷；并模拟 40 次显隐切换断言活动 Storyboard 始终 ≤1。负向验证：删掉 `StopStoryboard` 后 Guard 立即报红，恢复后全绿。
+
+**验证矩阵**：沿用第 65 轮六项，本轮新增「连续 20+ 次侧栏来回」与「反复进出设置页触发多次更新检查」两个真机观察点；自动化部分由 #47 与既有 #45/#46 覆盖。**当前环境无法执行 GUI 压测**，XAML 样式在真实窗口中的加载与显隐仍需用户实测确认。
+
+**配套**：`BuildInfo.CurrentRound` → 66、应用内更新日志置顶第 66 轮、第 65 轮归档进 CHANGELOG；三份文档基线同步，交互元素仍 87（本轮无新增按钮）。
+
+自测 **Unit 47/47、All 54/54** 全绿；EXE 经 `scripts/publish.ps1` 重新发布。
+
+## 更新补充（第 67 轮：回退第 66 轮引入的「切一次即卡死」）
+
+**这是回归，不是新问题**：第 66 轮后用户「点一次切换页面就立刻卡死崩溃」。先加了一个能真正加载 XAML 的运行时诊断（见下），确认**不是**样式触发器抛异常，而是规模效应。
+
+**根因**：第 66 轮为省内存，让隐藏页的 `Card` 通过 `DataTrigger(IsVisible=False)` 释放 `Effect` 与 `CacheMode`。但第 65 轮起页面常驻，这个「隐藏释放、可见恢复」等于把**每次切换**都变成「为进入页的几十张卡片重新生成软件渲染 `DropShadowEffect` + `BitmapCache` 位图」。第 65 轮之前纹理常驻、单次切换成本为 0；第 66 轮把它变成 O(整页卡片数 × 纹理生成)，一次点击就能打满 UI 线程甚至撑爆内存。我上一轮把「常驻」误判成「泄漏」，优化方向反了。
+
+**修复（彻底移除这一整类，不再做显隐开关）**：
+1. `Card` 样式删除 `Effect`、`CacheMode` 和整个 `Style.Triggers`；卡片层次改由圆角 + 边框 + 背景对比表达，渲染成本为零。
+2. 删除所有显式阴影引用：`HomeView` 的 HeroShadow、`LogsView` / `ModsView` 的 CardShadow、按钮焦点光晕、ComboBox 弹出层阴影，以及对应的 `DropShadowEffect` 资源定义。
+3. 不确定进度条删除全部 `BeginStoryboard` / `Storyboard` / `RepeatBehavior`：模板里的重复渐变条静态显示，配合「正在搜索…」等文字同样表达忙碌，**零动画时钟**，也就不存在第 66 轮修的累积问题。
+4. `MainWindow` 的 `DpiChanged` 缓存缩放遍历随之删除（已无 BitmapCache 可缩放）。
+5. 保留第 65 轮页面常驻、全局列表容器回收、冻结核画刷、`BeginInvoke` 等低风险优化。
+
+**新增运行时冒烟诊断** `dotnet run --project tests/AuroraSelfTest -- --nav-smoke`（显式参数，不进 CI）：在 STA 线程加载真实样式字典、构造元素、强制布局并跑 12 轮显隐 / IsIndeterminate 循环，专门抓「XAML 编译通过但运行时炸」这一类问题。本轮实测 `SMOKE OK`。
+
+**机制防线**：Guard #47 改写为**禁止性**规则——样式中不得出现 `<BeginStoryboard` / `<Storyboard` / `RepeatBehavior`、`<DropShadowEffect` / `<BitmapCache` / `Effect` / `CacheMode` Setter，所有 XAML 不得应用 `Effect="{StaticResource ...}`；同时保留列表回收、禁止同步 `Dispatcher.Invoke`、转换器复用冻结画刷、冒烟文件存在等检查。负向验证：注入一个阴影标签后 Guard 立即报红。
+
+**验证**：编译、冒烟、`--unit` 47/47、`--all` 54/54 全绿（本轮未新增测试编号，Guard #47 为改写）。**真机连点仍需用户实测**——冒烟只加载样式字典与少量元素，无法复现完整窗口规模。
+
+**配套**：`BuildInfo.CurrentRound` → 67、应用内更新日志置顶第 67 轮、第 66 轮归档进 CHANGELOG；三份文档基线同步，交互元素仍 87。
+
+自测 **Unit 47/47、All 54/54** 全绿；EXE 经 `scripts/publish.ps1` 重新发布。
+
+## 更新补充（第 68 轮：先量化再动手——首次点页不再顿，切页有据可查）
+
+第 67 轮解决了「点一次就卡死」，但用户仍反馈「不崩溃了，还是有卡顿」。这一轮**没有再凭感觉改**：先补了一个能复现真实窗口规模的切页基准，再看真机日志。
+
+**量出来的事实**（`dotnet run --project tests/AuroraSelfTest -- --nav-bench`，1160×720 真实样式 + 真实 VM，103 个版本 / 600 行日志 / 12 个实例）：
+
+| 场景 | 耗时 |
+| --- | --- |
+| 已缓存页面 Collapsed→Visible（稳态） | **0.1–0.3 ms** |
+| 页面首次构建（BAML + 模板 + 动态资源解析） | 3–19 ms |
+| 页面首次显示（构建完再显示） | 2–**57** ms（日志页最贵） |
+| 预热后首次显示 | 0.0–0.1 ms |
+
+真机日志实测（已发布版本）：单页空闲预热 24–222 ms，九页合计约 0.9 s，分摊在启动后 2–3 秒内。
+
+**结论**：切页本身早已不贵，贵的是「每一页的第一次」——首次构建 + 首次布局（含模板实例化、`DynamicResource` 解析、103 行版本列表 / 600 行日志的容器初次生成）。所以这轮只做一件事：**把「第一次」挪到用户看不见的时候**。
+
+**改动**：
+1. **空闲预热** `PageWarmupPolicy` + `MainWindow`：启动后每 240 ms 构建一个尚未创建的页面，`Visibility.Hidden` 走完一次真实布局（Hidden 会参与测量，Collapsed 不会）后再收起。用户第一次点过去就是「切换」而不是「现造」。下载/安装进行中不预热（不与进度上报抢 UI 线程），连续点标签会把空闲窗口重置，九页建完自动停表。
+2. **首次显示才初始化** `PageLifecycle.OnFirstShown`：第 63 轮把联网/扫 Java 挂在 `Loaded` 上做单次保护，但预热会在用户没打开页面时就触发 `Loaded`——于是改成「第一次真正可见」才跑。`DownloadView` / `ModsView` / `SettingsView` 三处迁移，预热不会替你偷偷联网或起 `java -version`。
+3. **真实计时** `UiLatencyTrace`：从点击到「布局/渲染之后的第一轮 Dispatcher」计时，超过 50 ms（约 3 帧）才写 `Warn` 日志，否则只进文件 `Trace`。以后反馈「卡」可以直接给一行：`切换页面 Mods 用时 128ms（首次构建）`。
+4. **虚拟化审计 Guard** `NestedScrollPolicy`：扫描全部页面 XAML，`ScrollViewer` 内嵌套的 `ListBox` 必须自带 `MaxHeight`/`Height`（否则测量高度为无穷，容器全量生成，第 17 轮教训）。`SettingsView` 的 Java 列表是合法的有界例外。
+5. **明确不采用整页 `BitmapCache`**（评审建议第 4 条）：切换本身 0.3 ms，加缓存反而要在每次显示时渲染一张整页位图；下载进度、日志这类每帧变化的内容会让缓存不停失效，等于把第 66 轮的坑请回来。
+
+**验证**：`--unit` **51/51**、`--all` **58/58**；真机冒烟（真实启动器运行 12 s）日志确认九页预热完成、无异常；新增 2 条 Guard（列表嵌套边界、首次显示才初始化）与 2 条纯逻辑测试（`UiLatencyTrace`、`PageWarmupPolicy`），负向样例覆盖。
+
+**配套**：`BuildInfo.CurrentRound` → 68、应用内更新日志置顶第 68 轮、第 67 轮归档进 CHANGELOG；三份文档基线同步，交互元素仍 87。
+
+自测 **Unit 51/51、All 58/58** 全绿；EXE 经 `scripts/publish.ps1` 重新发布。
+
+## 更新补充（第 69 轮：先纠正计量口径——真正的元凶是日志写盘）
+
+**用户实测反馈**：第 68 轮后「切换页面仍有些许卡顿」，并附日志截图，其中一行是 `[Warn] 切换页面 Download 用时 62ms（已缓存）`。
+
+**先纠正上一轮的计量口径**：同一页稳态切换实测只要 0.3 ms，却报 62 ms —— 因为第 68 轮那个数字量的是「点击 → dispatcher 空闲」，把**其他任务的排队时间**算到了页面头上。截图里同屏的 `Fetching version manifest` 与四条线路竞速，正好说明那 62 ms 是排队，不是页面排版。
+
+顺着「谁在拦 UI 线程」查下去，找到真正在拖时间的东西：
+
+1. **日志写盘发生在调用线程上**（主因）：`Logger.Log` 每写一行就 `File.AppendAllText` 同步落盘，而调用者多数是 UI 线程（VM 动作、网络回调）。下载/安装时一秒几十行，四线路竞速失败还会成串；真实机器上单次打开/追加/关闭遇到杀毒扫描就是几毫秒 —— 用户点页面的那一下只能排在这些写盘后面。改为**后台线程批量写**：`Log()` 只入队即返回，写入线程按 15 ms 合并一批；`Flush()` 保证导出诊断包与退出时一行不漏。文件名、格式、行序完全不变。
+2. **隐藏的日志页仍在被喂数据**：日志页没打开时也每 120 ms 往绑定集合加行。改为隐藏期只入队（上限 2000 行、丢最旧），进入页面时用一次 `Replace`（单个 Reset）一次性发布 —— 隐藏期 UI 零更新。
+3. **计时分三段**：新增 `NavigationLatencyPolicy`，把切页拆成「切换动作 / 页面排版 / 等待 UI 线程」；日志直接写「本页排版偏慢」或「等待 UI 线程 XX ms（其他任务占用，非本页慢）」，不再冤枉页面。
+4. **顺手修**：日志页「只看错误」在重复赋同一个值时会把筛选条件清掉（`SetProperty` 返回 false 的分支写反）。
+
+**验证**：`--unit` **54/54**、`--all` **61/61**。新增 #52（批量写 + `Flush` 不丢行且保序、二次 Flush 仍追加）、#53（三段计时分类，含 `PageRender` / `UiThreadBusy` 与负值/时钟回拨防护）、#54（静态防线：`Log()` 内禁止碰磁盘、`Flush` 契约、日志页隐藏期冻结、筛选不得被冗余赋值清空）。真机冒烟日志示例：`首次进入 Home 用时 527ms，页面 首次构建 · 本页 444ms（切换 39.4 + 布局 405）`。
+
+**配套**：`BuildInfo.CurrentRound` → 69、应用内更新日志置顶第 69 轮、第 68 轮归档进 CHANGELOG；三份文档基线同步，交互元素仍 87。
+
+自测 **Unit 54/54、All 61/61** 全绿；EXE 经 `scripts/publish.ps1` 重新发布。
+
+## 更新补充（第 70 轮：导出日志 + 竞速输家取消 + 界面停顿归因）
+
+**两个诉求一起做**：① 日志页需要一键导出；② 第 69 轮后「仍有卡顿」，而第 69 轮的日志已经指出方向——`等待 UI 线程 48–218ms（其他任务占用，非本页慢）`，页面本身只要 5ms。
+
+**导出日志（功能）**：日志页右上角新增「`导出日志`」，经 `SaveFileDialog` 存为 `.txt`。内容 = 短头（版本 / 轮次 / 导出时间 / 来源文件）+ 当前日志尾部（2 MB 上限）；**与诊断包共用同一套脱敏器**（令牌字段、Bearer、设备码、代理凭据、电脑用户名、启动器根路径）。导出前先 `Logger.Flush()`，异步写日志不会漏掉最新几行。
+
+**卡顿的两个真问题（都在多线路竞速里）**：
+
+1. **赢家出现后，另外三条线路没有被取消**：`NetRouting` 用 4 条线路竞速「先到先得」，但以前只有赢家返回，输家继续把同一份文件下载完、解析完再丢弃 —— 每次刷新加载器卡片都是 4 份 1MB 的 maven-metadata 在后台跑。用户在此时点页面，点中的是**同一颗 CPU 与同一个 GC**。现在整组共享一个 `CancellationTokenSource`，赢家确认即 `Cancel()` 其余线路。
+2. **404 也在重试**：日志里成片的 `Route '镜像(直连)' failed ... 404` 后面必然跟着 `All 4 routes failed on round 1; retrying once...`。镜像本来就不提供 Forge/NeoForge maven 这类路径，重试一轮只是白等 800 ms 再白跑一遍。新增 `RouteFailurePolicy`：400/401/403/404/410 判定为**永久失败**，全为永久失败时不再消耗重试预算；取消（用户切走）同样不重试；这类失败也从 `Warn` 降为 `Info`，日志不再被刷屏。
+
+**新增停机归因（`UiStallTrace`）**：250 ms 看门狗，若某一拍迟到超过 150 ms 就记一条 `界面停顿约 N ms（其中 GC 暂停 M ms / 界面线程被占用）`——`GC.GetTotalPauseDuration()` 的差值把「垃圾回收」与「我们的代码在算」分开。启动后 4 秒内不判定（首帧布局本来就不是点击）。修正了上一版把每个 tick 的间隔都算成停顿的问题（那次本地试跑每 2 秒刷一条 1–8 ms 的假警报，现已消失）。
+
+**验证**：`--unit` **57/57**、`--all` **64/64**；新增 #55（`RouteFailurePolicy`：404/403 永久、超时/5xx 瞬时、取消不重试、重试预算、日志级别）、#56（`UiStallTrace`：GC 主导 / 工作主导 / 混合三态与阈值语义）、#57（`ExportLogTextAsync`：头信息齐全、令牌与根路径必须被脱敏、缺日志时给出可读错误）。真机观察 25 s：看门狗零误报，九页空闲预热 23–120 ms。
+
+**配套**：`BuildInfo.CurrentRound` → 70、应用内更新日志置顶第 70 轮、第 69 轮归档进 CHANGELOG；三份文档基线同步；交互元素 **87 → 88**（新增「导出日志」按钮，直接绑定 +1）。
+
+自测 **Unit 57/57、All 64/64** 全绿；EXE 经 `scripts/publish.ps1` 重新发布。
+
+## 更新补充（第 71 轮：游戏下载页空白——废弃镜像域名 + 线路集合塌缩）
+
+**症状**：游戏下载页版本列表整页空白，页面顶部红字 `加载版本失败: 所有 2 条线路均失败（已重试）：官方(直连): 不知道这样的主机。(bmclapi.cn:443)…`，四个加载器卡片全部「暂无可用版本」。
+
+**两个缺陷叠在一起**：
+
+1. **废弃域名又回来了**：`LauncherConfig.VersionManifestUrl` 在下载源被网络探测自动切到 BMCLAPI 后，返回的是 `https://bmclapi.cn/...` —— 这个域名第 5 轮已修过一次，却作为「源代码里的分支」复活了（`config.json` 里也能看到它被持久化）。而 `bmclapi.cn` 现在 DNS 解析不到。
+2. **线路集合会塌缩**：`NetRouting` 拿到的 URL 已经是镜像地址，`ToBmclapiUrl(url)` 原样返回，去重后只剩「两条一模一样的镜像线路」，**官方 Mojang 主机从未被尝试** —— 一个域名倒下就让整页没有数据。
+
+**修复**：
+
+- `VersionManifestUrl` 恒为官方地址（`piston-meta.mojang.com`），并标 `[JsonIgnore]` 不再写进配置文件；镜像只由 `NetRouting` 负责。
+- `NetRouting.BuildHosts()`：先把输入 URL 归一到官方，再派生镜像，**两个主机永远都在集合里**，下载源只决定**顺序**。第三方 API（如 Modrinth）不会凭空多出一条镜像。
+- 旧配置自愈：`LauncherConfig.Load()` 用反射扫描所有可写字符串字段，把 `bmclapi.cn` 替换为 `bmclapi2.bangbang93.com`；只要文件里还残留该域名（哪怕在已废弃的字段里）就重写一次配置文件，并记一条 `[Config] 已自动修正旧配置里的废弃镜像域名`。
+- DNS 解析失败纳入**永久失败**：`RouteFailurePolicy` 识别 `不知道这样的主机` / `No such host is known` / `getaddrinfo` 等，不再消耗重试轮（原来白等 800 ms 再失败一次）。
+- 新增离线兜底 `ManifestCache`：每次成功拉取都存一份清单，网络全断时用它显示版本，状态栏明确标注「网络不可用，已加载本地缓存的 N 个版本（安装/启动仍需联网）」，不再是一片空白。
+
+**验证**：`--unit` **60/60**、`--all` **67/67**（联网可用时）。新增 #58（`BuildHosts`：官方/镜像顺序、**已镜像输入仍保留官方主机**、第三方 API 不增线路、`VersionManifestUrl` 永不含 bmclapi）、#59（旧配置自愈：ProxyUrl / NetworkNote 均被替换，干净配置不重写）、#60（`ManifestCache`：往返、坏 JSON 与空清单都判为无缓存）。真机端到端：清单从官方线路成功获取，**103 个版本正常显示**，同时写入 `cache/version_manifest_v2.json`（922 个版本）。
+
+**配套**：`BuildInfo.CurrentRound` → 71、应用内更新日志置顶第 71 轮、第 70 轮归档进 CHANGELOG；三份文档基线同步；交互元素仍 88（本轮无新增按钮）。
+
+自测 **Unit 60/60、All 67/67** 全绿；EXE 经 `scripts/publish.ps1` 重新发布。
+
+## 更新补充（第 72 轮：多任务下载中心）
+
+**改之前的结构性问题**：所有安装流程共用**一个** `CancellationTokenSource`、**一个** `Download` 状态对象和**一份** `InstallStages`。后启动的任务会覆盖前一个的取消令牌（取消按钮只能取消"最后启动的那个"），下载页也永远只能描述一个任务——"同时下载"在代码层面根本不成立。
+
+**本轮改造**：
+
+1. **一任务一对象**：新增 `DownloadJob`（类型 / 标题 / 所属实例 / 独立 token / 自己的阶段流程图 / 自己的进度与速度）与 `DownloadJobManager`（列表、并发上限、排队、取消、清理、聚合）。最多同时跑 3 个，其余排队并显示「排队中」，排队时点取消可直接撤掉。
+2. **不卡顿的关键在刷新频率**：引擎按读块回调（每秒几十次）。任务只在内部更新字段，最多每 100 ms 请求一次 UI 刷新，且同一时刻只允许一个刷新在飞——N 个并行任务 ≈ 10N 次/秒通知，而不是每秒上千次 `Dispatcher` 投递；汇总数字由**单个 250 ms 定时器**从管理器取快照，不跟着回调走。
+3. **下载管理页重做**：左侧总进度 / 合计速度 / 任务计数 + 「全部取消」「清理已完成」；右侧任务表（类型标签、标题、实例、状态、当前阶段、进度条、速度、单行「取消」）；选中某行，下方显示该任务自己的阶段流程图（原先唯一的流程图不再被单个任务独占）。
+4. **改造的流程**：首次启动安装、游戏下载页安装、内容中心安装（模组 / 光影 / 资源包 / 数据包）、指定版本安装、整合包导入安装、实例文件补全。启动前的自动补全与导出脚本属于短流程，保留原令牌（不在下载中心排队）。
+5. `IsBusy` 语义改为「是否有任务在跑」，由汇总定时器维护；「启动游戏」仍要求没有进行中的下载（避免边下边启动把文件写坏）。
+
+**验证**：`--unit` **63/63**、`--all` **70/70**。新增 #61（`JobProgressPolicy`：阶段感知百分比、聚合只统计未取消任务、速度只加运行中、节流判定）、#62（`DownloadJobManager`：并发上限与排队、单任务取消不影响其他、清理只删已结束、全部取消）、#63（`DownloadJob`：200 次引擎回调产生的 UI 推送 < 40、百分比区间与速度文本）。真机冒烟：新的下载管理页在空闲预热中加载 28 ms，无异常。
+
+**配套**：`BuildInfo.CurrentRound` → 72、应用内更新日志置顶第 72 轮、第 71 轮归档进 CHANGELOG；三份文档基线同步；交互元素 88 → **89**（下载页取消 2 个旧按钮 → 全部取消 / 清理已完成 / 行内取消）。
+
+自测 **Unit 63/63、All 70/70** 全绿；EXE 经 `scripts/publish.ps1` 重新发布。
+
+## 更新补充（第 73 轮：并发下载的写冲突锁 + 退出确认）
+
+上一轮把"同时下载"做通了，这一轮收三个尾巴：写冲突、排队撤销的验证、关窗口的语义。
+
+**1. 同一文件被两个任务同时写（真实风险）**
+两个实例若是同一个 MC 版本，`libraries/` 与 `assets/` 是**同一批文件**——两条安装流水线会下载同一个 jar。`DownloadEngine` 只在**实例内部**去重，跨任务没有约束，于是可能出现：两边同时打开 `<file>.part`（共享冲突），或一方提交了另一方刚写了一半的内容。
+→ 新增 `PathWriteGate`：**以最终目标路径为键的进程级异步写锁**，`DownloadFileAsync` 进入即取锁（`using`），拿到锁后**重新校验**文件是否已被别的任务下好；不同目标路径互不阻塞，大小写按 Windows 规则归一。实例 `mods/` 场景本身安全（文件名不同、无共享索引），但同路径写入同样被这把锁保护。
+
+**2. 排队撤销（已验证，不再只是"想到了"）**
+`DownloadJobManager.StartAsync` 在排队时等待信号量；`Cancel` 立刻把任务标为已取消并释放引用，正在等待的 `StartAsync` 抛 `OperationCanceledException`，**空出槽位后也不会偷偷开始**。新增测试 #65 锁死这条契约。
+
+**3. 关窗口的语义（新增确认）**
+`CloseGuardPolicy`：**只在真的有任务时**问一次——「还有 N 个下载任务未完成（X 个正在下载，Y 个排队中），确定退出吗？」。选「否」继续下载；选「是」先 `CancelAllDownloads()`（让引擎清掉 `.part`）再退出，已下好的文件不受影响；确认过一次后不再重复询问，无任务时照旧立即关闭。
+**没有做托盘**：本项目没有托盘基础设施（图标、生命周期、再次唤出），一个"看不见又一直在下载"的进程只会变成支持负担——这一条是刻意不做，不是遗漏。
+
+**验证**：`--unit` **66/66**、`--all` **73/73**。新增 #64（`PathWriteGate`：同路径串行、不同路径并行、大小写归一、取消不泄漏槽位、静态检查引擎确实取锁）、#65（排队中取消 → 等待方中止且槽位释放后不启动）、#66（`CloseGuardPolicy`：无任务不问、跑/排队都问、确认后不重复问、文案含数量）。
+
+**配套**：`BuildInfo.CurrentRound` → 73、应用内更新日志置顶第 73 轮、第 72 轮归档进 CHANGELOG；三份文档基线同步；交互元素仍 89（本轮无新增按钮）。
+
+自测 **Unit 66/66、All 73/73** 全绿；EXE 经 `scripts/publish.ps1` 重新发布。
+
+## 更新补充（第 74 轮：增量更新、便携模式、断点恢复、单实例与托盘）
+
+这一轮解决的是"分发与生命周期"：更新要省流量、数据要能跟着 U 盘走、被杀进程后不能从头下、双击两次不该开出两个窗口、关窗口要有得选。
+
+**1. 增量更新（补丁只有完整包的百分之几）**
+新增 `BinaryDelta`：自研的块哈希差分（xdelta/rsync 思路，不是 bsdiff —— 不需要后缀数组和 bzip2，约 300 行、可控可测）。补丁格式带魔数、原始尺寸、目标尺寸和**目标文件 SHA-256**；应用时先校验旧文件尺寸，写完再核对哈希，任何不符直接抛错。
+链路：`publish.ps1` 把上一版 EXE 归档到 `artifacts/prev/` → 生成 `publish/AuroraLauncher.patch`（超过完整包 70% 就自动放弃发布）→ `sign-release.ps1` 写入 `patchUrl / patchSha256 / patchSize / patchFromRound` 并对**这组字段单独签名**（`SignedPayload` 保持字节不变，否则老版本客户端会拒收新清单）。客户端只在 `patchFromRound == 当前轮次` 且签名通过时才用补丁；合并结果必须等于清单里的 SHA-256，否则**自动回退完整包**。
+实测（本轮真实发布，上一版 EXE 在 `artifacts/prev/`）：**73 轮 65,245,055 B → 74 轮 65,264,949 B，补丁仅 393,286 B（0.6%）**，生成 0.2 s、合并约 1 s；把补丁应用到 73 轮 EXE 得到的文件与发布 EXE **SHA-256 完全一致**（`0E7460A7…`）。用户升级一次从 65 MB 变成 384 KB。
+
+顺带一个被自己否掉的方案：托盘最初用 `System.Windows.Forms.NotifyIcon`，发布后发现 EXE 从 65.2 MB 涨到 **75.8 MB**（+10.6 MB 的 WinForms 运行时）——在一个主打"少下载"的版本里不可接受，于是改为直接用 `Shell_NotifyIcon` + WPF 消息窗口，包体回到 65.26 MB。
+
+**2. 便携模式**
+`PortableModePolicy`：EXE 旁有 `portable.txt`（或已存在 `config.json`）就用程序目录作为数据根。`LauncherConfig.Load` 每次启动都强制覆盖，而不是"迁移一次" —— 否则整个文件夹拷到别的机器/盘符后仍会写旧绝对路径。设置页显示当前模式，并提供一键创建标记文件；**数据不自动搬移**（跨盘移动几十 GB 是丢数据的经典方式），文案里写明。
+实测：在程序目录放 `portable.txt` 后启动，`config.json / instances / libraries / assets / versions / logs` 全部生成在程序目录，`%APPDATA%` 不再被写。
+
+**3. 断点恢复（被杀进程 / 断电之后）**
+新增 `DownloadJournal`：引擎在开写每个 ≥4 MB 的文件前记一行（URL、目标路径、期望大小、SHA-1），完成后记一行删除标记；后台线程批量落盘（复用第 69 轮的教训），启动时重放并**只保留 `.part` 仍然存在的条目**，随后压缩日志。下载管理页顶部出现「检测到上次未完成的下载：N 个文件，已下载 X / Y」，两个按钮：「继续下载」（走 HTTP Range 续传）与「忽略并清理」（删 `.part` 腾空间）。更新目录的暂存文件不进日志，避免把"更新包"误报成用户下载。
+
+**4. 单实例互斥**
+`SingleInstancePolicy` + `SingleInstanceGuard`：以**数据根**（不是 EXE 路径）派生命名 Mutex 与唤醒事件，便携版与标准版可以并存，同一份数据只能有一个窗口。第二个进程发唤醒信号后立即退出；第一个进程 `ShowWindow + SetForegroundWindow`（失败则短暂置顶再撤销）。实测第二实例 **1 秒内以 0 退出**，第一个窗口被唤起。
+
+**5. 托盘常驻 + 关闭询问（可记住）**
+`CloseBehaviorPolicy` 取代第 73 轮"永远只问一次"的硬规则：
+- 无托盘 → 完全退回第 73 轮行为（无任务直接关，有任务才问）；
+- 有托盘 + 询问 → 弹窗「退出 / 最小化到托盘 / 取消」，带**记住我的选择**（写回 `closeAction`）；
+- 有托盘 + 最小化 → 点 × 直接收起；
+- 有托盘 + 直接退出 → 有任务时仍先提醒一次（偏好不该静默毁掉一次安装）。
+托盘直接用 `Shell_NotifyIcon`：WPF 消息窗口（`HwndSource` + `HWND_MESSAGE`）接收回调，`NOTIFYICONDATAW` 传图标/提示/气泡，右键弹 WPF 菜单「显示主窗口 / 退出启动器」，双击唤回；并监听 `TaskbarCreated`，资源管理器重启后自动把图标放回去。
+
+**6. 后台更省**
+窗口收进托盘或最小化时：空闲页面预热停止、下载汇总刷新从 4 次/秒降到 1 次/秒，下载与安装本身不受影响；`StateChanged` 恢复时立刻重新同步一次。另把日志与下载日志的文件共享方式改为 `FileShare.ReadWrite`，更新换装期间新旧进程同时写日志不再互相拒绝。
+
+**验证**：`--unit` **72/72**、`--all` **79/79**。新增 #67（`BinaryDelta`：往返字节一致、头部可预读、错误基文件/尺寸不符/截断补丁全部拒绝、90% 补丁判为不值得）、#68（`PortableModePolicy`：标记与 config.json 两条路径、删除即恢复、`Describe` 文案）、#69（`DownloadJournal`：记录→重放→完成移除、无 `.part` 不算、小文件与更新目录不记录、Discard 清文件）、#70（`CloseBehaviorPolicy`：6 种组合矩阵 + 文案含数量与两个选项）、#71（`SingleInstancePolicy`：大小写/尾分隔符归一、不同根不同名）、#72（补丁清单：签名通过、换 URL 失败、未签名拒绝、轮次不符拒绝、`SignedPayload` 保持原样）。
+
+**配套**：`BuildInfo.CurrentRound` → 74、应用内更新日志置顶第 74 轮、第 73 轮归档进 CHANGELOG；三份文档基线同步；交互元素 89 → **92**（下载页「继续下载 / 忽略并清理」+ 设置页「创建 portable.txt」）。
+
+自测 **Unit 72/72、All 79/79** 全绿；EXE 经 `scripts/publish.ps1` 重新发布（本轮起同时产出 `publish/AuroraLauncher.patch`）。
+
+## 更新补充（第 75 轮：修复双击打不开——单实例唤醒的回归）
+
+**用户反馈**：把第 74 轮放进文件夹后，双击 `AuroraLauncher.exe` 什么也不发生。日志里能看到每一次双击都记了一句「已有启动器在使用同一数据目录…已发送唤醒信号」，然后进程以 0 退出——也就是说，它认为"已经有窗口了"。
+
+**根因（第 74 轮的单实例逻辑）**：某个进程的**窗口已经关掉，但进程还活着**，它仍然持有 Mutex 与唤醒事件。于是后续每一次双击：拿到"已被占用"→ 发唤醒信号 → 那个进程去 `Show()` 一个**已经关闭**的 WPF 窗口 → 抛 `InvalidOperationException` → 被后台监听线程的 `catch` 静默吞掉 → 新进程照旧退出。用户的观感就是"双击没反应"，且重启启动器也没用（只要那个残留进程还在）。
+
+**修三层，任何一层都能独立挡住这个症状**：
+1. **不变式：进程不得比窗口活得久**。`Closed` 里显式 `Application.Current?.Shutdown()`。窗口是唯一入口，它关了这个进程就该结束——第 74 轮在"托盘"语义下漏掉了这条兜底。
+2. **唤起握手（关键）**：新增 `ActivationAckEventName`。被唤起的实例无论显示成功与否都回一个应答；新启动的实例等 **2 秒**：有应答才退出，无应答就判定"对方已卡死或窗口已关"，**照常打开自己的窗口**（并在日志里记一条 Warn）。宁可偶尔出现两个窗口，也不能让用户完全打不开。
+3. **不再静默失败**：`RestoreFromTray` 在窗口已关闭时记日志并 `Shutdown()`（立即释放锁，而不是等进程被回收）；托盘"退出"在窗口已关闭时也走显式 `Shutdown`。
+
+**验证**：`--unit` **73/73**、`--all` **80/80**；新增 #73（握手：有监听者 → 应答为真；监听者停止应答 → 判为 stale；并静态检查 `Closed` 里的 `Shutdown` 与 `App` 里的 2 秒等待）。真机双开实测：第二个进程 **1 秒内以 0 退出**，日志为「已发送唤醒信号**并收到应答**」；把监听者停掉后，同一路径返回 stale 并继续启动。
+
+**配套**：`BuildInfo.CurrentRound` → 75、应用内更新日志置顶第 75 轮、第 74 轮归档进 CHANGELOG；三份文档基线同步；交互元素仍 92（无新增按钮）。
+
+自测 **Unit 73/73、All 80/80** 全绿；EXE 经 `scripts/publish.ps1` 重新发布（含 74→75 增量补丁）。
+
+## 更新补充（第 76 轮：再修托盘退出后双击打不开——跨线程 + 应答语义）
+
+**用户复现**：最小化到托盘 → 托盘菜单「退出启动器」→ 再双击 EXE，无反应。日志给出了直接证据：
+
+```
+[06:42:12] [Warn] [App] 唤起窗口失败: 调用线程无法访问此对象，因为另一个线程拥有该对象。
+```
+
+**两个独立缺陷，正好互相掩盖**：
+
+1. **唤醒回调在后台线程碰了界面对象**。`App.ActivateExistingWindow()` 读的是 `Application.MainWindow`——它带线程亲和性校验，在监听线程上读就抛 `InvalidOperationException`。所以窗口**一次都没被唤起来**，这个 bug 从第 74 轮就存在。
+2. **应答语义错了**。第 75 轮为了避免"静默失败"，改成"即使显示失败也回应答"，本意是证明"进程还活着"，结果新进程收到应答就直接退出——用户看到的还是"双击没反应"。**应答必须表示"窗口已经在屏幕上了"**，而不是"有个进程在"。
+
+**还有一条更隐蔽的路径**（分析日志时间线发现的）：从托盘菜单点「退出」时，`Close()` 是在菜单自己的嵌套消息循环里调用的，WPF 的关闭/退出会被推迟，进程就停在"没有窗口但还活着"的状态——继续持有单实例锁。
+
+**修复（四层）**：
+1. `App` 用字段 `_shell` 持有窗口，监听线程**绝不**读 `Application.MainWindow`；窗口恢复统一在界面线程上调度。
+2. 应答语义改为"窗口真的显示了"：`RestoreFromTray()` 返回 `bool`，失败（已关闭 / 显示异常 / 无法调度）返回 false，此时**不回应答**，调用方 2 秒后判定 stale 并**打开自己的窗口**。
+3. 托盘菜单的「显示 / 退出」改为先收起菜单、再用 `DispatcherPriority.Background` 回到界面线程执行，不在菜单循环里关窗口。
+4. 双保险：`Closed` 里 4 秒**退出看门狗**（到点强制 `Environment.Exit`，先刷日志）+ `App.OnExit` 显式 `SingleInstanceGuard.Release()` 交还 Mutex。即使某个 WPF 关闭路径再出意外，也不会留下占锁的进程。
+
+**验证**：`--unit` **73/73**、`--all` **80/80**（#73 重写为真实契约测试：`TryAcquire(() => false)` → 唤醒**无应答** → 调用方被判 stale；`TryAcquire(() => true)` → 有应答；`Release()` 后同名可再次获取）。真机三项：① 正常关闭窗口 → 进程 **232 ms** 内退出；② 双开 → 第二实例 1 秒内以 0 退出且日志"已发送唤醒信号**并收到应答**"、无失败告警；③ 窗口确实被唤到前台。
+
+**配套**：`BuildInfo.CurrentRound` → 76、应用内更新日志置顶第 76 轮、第 75 轮归档进 CHANGELOG；三份文档基线同步；交互元素仍 92。
+
+自测 **Unit 73/73、All 80/80** 全绿；EXE 经 `scripts/publish.ps1` 重新发布（含 75→76 增量补丁）。
+
+## 更新补充（第 77 轮：游玩时长统计、启动前模组体检、一键导出/导入整合包）
+
+三项都是"玩家每天会用到、但启动器普遍缺失"的能力。
+
+**1. 游玩时长（Playtime）**
+`PlaytimeTracker` 在游戏进程启动时落一个会话文件，并**每 60 秒心跳**；退出时结算差值写入实例元数据（`InstanceManager` 是唯一写入方，第 31 轮的回归锁仍然有效）。
+崩溃/强杀怎么办：会话文件还在就说明没正常结算，下次启动**按最后一次心跳**补记（最多损失 1 分钟），并把文件消费掉。如果那个 PID 还活着（另一个数据根的启动器在玩），会话保留。
+防御：单次会话上限 24 小时、结束早于开始按 0 处理——时钟跳变和睡眠唤醒不该变成"玩了 3 天"。
+展示：实例管理页新增「游玩统计」卡片，`已游玩 42 小时 15 分钟 · 启动 128 次` + 上次游玩时间；启动次数在**开始启动时**就计数，所以崩溃也算一次。
+
+**2. 启动前模组体检（ModPreflight）**
+点「启动游戏」前扫描 `mods/*.jar`：Fabric/Quilt 读 `fabric.mod.json`（`depends` / `breaks` / `provides`），Forge/NeoForge 读 `META-INF/mods.toml` 的 `[[dependencies.*]]` 块（含 `mandatory` / `type="incompatible"`）。
+能发现四类问题并按实例加载器给出结论：**缺前置**、**互斥冲突**、**重复安装**、**加载器装错**（Forge jar 丢进 Fabric 实例）。
+误报控制是重点：平台 id（minecraft/java/fabricloader/forge/neoforge…）不算缺失；Fabric API 的模块（`fabric-api-base` 等）通过 `provides` 认定已满足——否则每个依赖模块的模组都会误报。命中时弹 `PreflightWindow`，列出问题来源文件，缺 Fabric API 时可点「安装 Fabric API 并继续」。设置页可关闭（`checkModsBeforeLaunch`）。
+
+**3. 导出 / 导入 .mrpack**
+`MrpackExporter`：对每个启用的模组算 SHA-1/SHA-512 → `POST /v2/version_files` 问 Modrinth 是否已收录 → 收录的写 `files[]`（CDN 直链 + 哈希，**包体很小**），未收录的连同 `config/ defaultconfigs/ kubejs/ scripts/ options.txt` 放进 `overrides/`；`dependencies` 按加载器写 `fabric-loader / quilt-loader / forge / neoforge`。查不到 Modrinth（离线/镜像挂了）时**整体回退**为全部打包，导出不会因此失败。
+刻意不导出：`saves/`（你的存档）、`logs/`、`servers.dat`（含私服地址）；单个 >16 MB 的覆盖文件跳过，避免整合包莫名巨大。
+配套导入：把 `.mrpack` **拖进窗口**即可——读出包内声明的 MC 版本与加载器，自动建实例、装加载器、按 index 下载模组（带 SHA-1 校验），复用第 72 轮的多任务下载中心。
+
+**验证**：`--unit` **78/78**、`--all` **85/85**。新增 #74（时长文案：不足 1 分钟、整小时无尾巴、负数夹 0、卡片文案）、#75（会话恢复：按心跳结算 89 分钟、活进程不结算、24h 夹取、End 清理标记）、#76（预检：`provides` 满足模块依赖、Forge 强制依赖、`mandatory=false` 忽略、冲突/重复/加载器不符各 1 条、删掉 API 后置位一键安装、空目录静默）、#77（导出：1 个走 CDN + 1 个进 overrides、index 的 path/hashes/dependencies、不含 servers.dat 与 disabled、响应解析）、#78（`InstanceManager` 计数与时长经 `instances.json` 往返、48h 夹到 24h、未知 id 无副作用）。真机冒烟：实例页加载 301 ms、零 Error。
+
+**配套**：`BuildInfo.CurrentRound` → 77、应用内更新日志置顶第 77 轮、第 76 轮归档进 CHANGELOG；三份文档基线同步；交互元素 92 → **95**（实例页「导出整合包 / 导入整合包」、设置页「启动前检查」）。
+
+自测 **Unit 78/78、All 85/85** 全绿；EXE 经 `scripts/publish.ps1` 重新发布（含 76→77 增量补丁）。
+
+## 更新补充（第 78 轮：崩溃本地诊断与修复引擎）
+
+目标不是"再列几条可能原因"，而是让崩溃卡片**能动手的就动手，不能动手的把人送到该去的地方**，实在罕见就帮你把求助邮件写好。
+
+**1. 规则从"一句话"升级为"一个动作"**
+`CrashResolutionEngine` 取代原来的翻译表：27 条规则，每条产出 `CrashSolution(RuleId / Title / Diagnosis / Kind / Action / ActionText / Payload)`。`Kind` 只有三态：**可一键修复**（启动器自己动手）、**需要你确认**（只打开文件夹/网页）、**仅供了解**。
+`CrashAnalyzer` 不再自带规则表，改成投影同一张表——旧日志行与新卡片**不可能互相矛盾**，历史标题逐字保留（`Java 版本过低` / `检测到重复 Mod` / `Mod 前置缺失或不兼容` 等）。
+
+**2. 自动修复带参数，不是空口号**
+- **内存**：`SuggestHigherMemory` 按"物理内存 × 55%、上限 16 GB、不降级"给阶梯（装了加载器的实例从 3 GB 起跳）；`SuggestLowerMemory` 处理"分配超过 JVM 上限 / JVM 无法创建"这种反向错误。**物理内存不够时不会硬涨**——降级为「去设置调整内存」并说明原因，因为把 -Xmx 顶到物理内存只会把崩溃搬到系统层。
+- **Java**：从日志解析 `class file version 65` → Java 21（52→8 / 61→17 / 65→21），先在本机已探测的 Java 里找 ≥ 要求的版本**直接切过去**，没有再按该大版本走 Adoptium（`JavaRuntimeService.BuildApiUrl(major)`，原来是硬编码 21）。若实例设了独立 Java 覆盖，切换时**同步改实例覆盖**——否则改了默认值游戏还是用旧的。
+- **模组**：缺 Fabric API → 下载到 `mods/`；缺前置/`NoClassDefFoundError` → 后台跑一次 `ModPreflight`，把缺的、重的、冲突的列在卡片上。**重复/冲突/加载器不符只打开 mods 文件夹**，删什么由用户决定。
+- **文件**：`UnsatisfiedLinkError` / `ZipException` / `FileNotFoundException` / 找不到主类 → 复用第 77 轮的补全管线校验并按需重下。
+
+**3. 罕见崩溃 → 求助邮件（不由程序发送）**
+没命中任何规则时给出**崩溃指纹**（第一条异常行的 FNV-1a，同一崩溃稳定归组）。「发送给作者」会先生成脱敏诊断包（默认落到 `文档\AuroraLauncher\`），再用 `mailto:` 唤起**用户自己的**邮件客户端：正文含环境、逐条诊断、已尝试的修复、诊断包路径，收件人 `adagarm0216@outlook.com`。程序不持有任何邮箱凭据，也不自动发送——用户看一眼、把 zip 拖进附件、自己点发送。
+
+**4. 三条机制防线（都是测试，不是注释）**
+- **爆炸半径**：`CrashFixSafety` 里自动修复的白名单只有 7 个动作，且 `AffectedConfigKeys` 只能是 `MaxMemoryMb / MinMemoryMb / JavaPath`；Guard 遍历**整个枚举**，还扫枚举名里有没有 `Delete / Remove / Kill / Env / Format / Overwrite / Admin`——想加一个"顺手删掉冲突模组"的动作，测试先红。
+- **不动界面线程**：诊断（600 行 × 27 条正则）在 `Task.Run` 里跑，Guard 直接检查 `ShowCrashCardAsync` 的源码里有没有这行；所有修复都是 `await`，装 Java、补文件都不会冻住崩溃卡片。
+- **源码级禁令**：Guard 截取 `ApplyCrashFixAsync` 的方法体，出现 `File.Delete / Directory.Delete / File.Move / Directory.Move / SetEnvironmentVariable / .Kill(` 即失败。
+
+**验证**：`--unit` **82/82**、`--all` **89/89**。新增 #79（规则→动作：OOM 涨价与"没余量就降级"、class 65→Java 21、已装 17 就复用、fabric-api 一键下载、重复模组只开文件夹、堆预留反向降档、未知崩溃指纹稳定、class-file 映射、内存天花板/地板）、#80（`CrashFixSafety` 全枚举配置键与命名扫描）、#81（mailto 可回读：收件人、轮次、诊断正文、附件路径、无裸换行、长度上限）、#82（源码 Guard：修复不删文件、诊断在后台线程）。
+另加了一个**真实渲染冒烟**（`--crash-smoke`，不进 CI）：STA 线程用真实样式字典 + 真实 `MainViewModel` 打开日志页，灌入一次「OOM + 重复模组」崩溃 → **渲染文本 26 条 / 按钮 8 个 / WPF 绑定错误 0 条**，然后直接用命令点「把内存提到 X MB」→ 配置真的被改写、结果回显在卡片上、按钮随即置灰。这条补齐了"绑定写错是静默失败"的盲区。
+**仍未真机验证（如实说明）**：`mailto:` 在 Outlook / QQ 邮箱客户端里的实际表现（是否被长度截断）、真实 OOM/Java 版本崩溃走完整流程、打开 mods/shaderpacks 资源管理器与「补全游戏文件」的端到端体验。
+
+**配套**：`BuildInfo.CurrentRound` → 78、应用内更新日志置顶第 78 轮、第 77 轮归档进 CHANGELOG；三份文档基线同步；交互元素 95 → **98**（崩溃卡「发送给作者 / 打开设置」+ 每条诊断的修复按钮）。
+
+自测 **Unit 82/82、All 89/89** 全绿；EXE 经 `scripts/publish.ps1` 重新发布（含 77→78 增量补丁）。
+
+## 更新补充（第 79 轮：存档自动备份、性能仪表盘、Ctrl+K 全局搜索）
+
+三个都是"日常用得上、但一旦缺失就很疼"的能力。共同原则：**只读用户数据、只做加法**。
+
+**1. 存档自动备份（SaveBackupPolicy / SaveBackupService）**
+- 三种时机：`启动前` / `退出后` / `两者都做`，另有「立即备份」手动按钮。**默认「退出后」**——不拖慢启动，同时能救"玩着玩着崩了/蓝屏"的世界；想要极致保险就选「启动前 + 退出后」。
+- 落到 `<数据根>/backups/<实例id>/saves-<实例名>-<时间>-<触发>.zip`（先写 `.tmp` 再改名，进程被杀不会留下半截 zip 冒充好备份）。
+- 保留最近 N 份（默认 5，范围 1–20），只清理**自己创建的** `saves-*.zip`——用户自己丢进这个目录的 zip 永远不会被删。
+- 自动备份有 3 GB 体积上限（10 GB 的世界每次启动都打包是 bug 不是功能），手动备份不限；存档为空/不存在时给出明确提示而不是报错。
+- 安全边界写死在实现里：**只读 `saves/`、从不移动或删除任何存档文件**；单测直接断言备份后原 `level.dat` 仍在原处。退出后备份发生在游戏进程已结束之后，不存在文件占用问题。
+
+**2. 性能仪表盘（PerformanceReport / SystemLoadProbe）**
+- `GameLauncher` 在游戏运行时**每 5 秒采样一次 JVM 工作集**，峰值写入实例元数据（`LastPeakMemoryMb / LastAverageFps / LastFpsSamples / LastRunSeconds / LastPerfAt`，仍由 `InstanceManager` 单点写入）。
+- 日志里若有 FPS 行（`fps: 60` / `144 fps`）就解析平均与峰值，`0` 和 `>1000` 视为噪声丢弃。**原版客户端根本不打印 FPS**，所以卡片常常诚实地显示"没有 FPS 数据"，绝不编一个数字。
+- 一键结论：峰值 ≥ `-Xmx` 的 92% → **吃紧**（明确提示"大场景容易 OutOfMemoryError"）；平均 FPS < 30 → **偏低**；否则 **健康**；没有运行记录 → **无数据**。
+- 整机状态：`GetSystemTimes`（CPU 增量）+ `GlobalMemoryStatusEx`（物理内存），**零 NuGet**——`PerformanceCounter` 会破坏"无外部依赖"的底线。3 秒一次、`DispatcherPriority.Background`、读取在后台线程，切页不受影响。
+- CPU 计算踩过的坑单独测了：`GetSystemTimes` 的 kernel time **包含 idle**，busy = (kernel + user − idle) / (kernel + user)；计数器回绕/复位时夹到 0，绝不出现负数。
+
+**3. Ctrl+K 全局搜索（CommandPalette）**
+- 索引 = 10 个操作 + 9 个页面 + 7 个设置项（静态）+ 当前实例 + 已装模组（动态）+ 输入 ≥2 字时自动追加「在 Modrinth 搜索『关键词』」。
+- 打分可预测：**所有词必须命中（AND）**，标题前缀 120 > 标题包含 70 > 副标题包含 25，完全相等再 +200；空查询按"操作 → 页面 → 实例 → 设置 → 模组"给一个有用的开头。
+- 键盘：Ctrl+K 在**任何页面**（包括输入框里）都能开；↑↓ 选择、Enter 打开、Esc / 点背景关闭、双击行也能打开。
+- 跳转语义是"真的到那儿"：页面直接导航；设置项到设置页并提示具体项；实例**选中它**再跳实例页；模组切到「本地管理」；Modrinth 行填好关键词并触发搜索。
+- 状态栏加了「搜索 Ctrl K」按钮——纯键盘入口没人会发现。
+
+**4. 两条新的结构守卫**
+- **索引不能有死行**：每个 `CommandPalette.Action*` 常量必须在 `RunPalette` 里被处理；每个页面 payload 必须在 `CreatePage` 有分支（`Home` 是默认分支，特判）。加了条目忘了接逻辑，测试先红。
+- **备份不碰存档**：单测在真实临时目录里跑完整流程（3 次备份 → 保留 2 份 → 原 `level.dat` 仍在 → zip 内路径正确 → 空目录给出可读原因）。
+
+**验证**：`--unit` **85/85**、`--all` **92/92**。新增 #83（触发矩阵 / 保留策略 / 只清自己的 zip / 体积与空目录提示 / 服务往返且不动原存档）、#84（FPS 解析噪声过滤、三个结论阈值、CPU 包含 idle 的算法与回绕）、#85（空查询排序、多词 AND、大小写、limit、页面 payload ↔ CreatePage、动作 id ↔ RunPalette）。
+另加 `--round79-smoke` 真实渲染冒烟（不进 CI）：真实样式 + 真实 VM 渲染首页与实例页 → **首页文本 27 条 / 实例页文本 48 条 / 按钮 17 个 / WPF 绑定错误 0 条**；点「立即备份」真的生成 zip 且原存档未动；Ctrl+K 打开 → 搜「备份」→ 执行设置项 → 落在设置页。
+**仍未真机验证（如实说明）**：真实启动游戏后的峰值内存与 FPS 数据（需要真跑一次游戏）、Ctrl+K 在真实键盘布局下的手感、用资源管理器打开备份目录。
+
+**配套**：`BuildInfo.CurrentRound` → 79、应用内更新日志置顶第 79 轮、第 78 轮归档进 CHANGELOG；三份文档基线同步；交互元素 98 → **105**（首页「调整内存」、实例页「立即备份 / 打开备份文件夹」、状态栏「搜索」、面板「✕」+ 面板双击/窗口快捷键两个手感入口）。
+
+自测 **Unit 85/85、All 92/92** 全绿；EXE 经 `scripts/publish.ps1` 重新发布（含 78→79 增量补丁）。
+
+## 更新补充（第 80 轮：液态玻璃——默认关闭、四种方案、红色警告）
+
+**0. 默认仍然是原主题**
+`GlassMode.Off` 是默认值——不写配置也等于关闭。任何非「关闭」选项都必须先过一次**红色性能警告**，点取消就完全不动（下拉框回滚、配置不写、界面不变）。
+
+**1. 三个方案都做了，第四个是"只在小范围用"**
+- **系统玻璃**：`DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE = DWMSBT_MAINWINDOW)` → Win11 build ≥ 22621 用 Mica；更低版本退到 Acrylic（`SetWindowCompositionAttribute` + `ACCENT_ENABLE_ACRYLICBLURBEHIND`，Win10 19041+ 尽力而为）。全由 DWM 用 GPU 合成，WPF 每帧成本 ≈ 0。调用失败（远程桌面 / 虚拟机 / 旧驱动 / 系统不支持）时**不硬撑半透明窗口**，而是自动落到伪玻璃并把原因写进设置页与日志。
+- **液态玻璃（伪玻璃）**：窗口对角渐变 + 64×64 程序生成噪点（`WriteableBitmap`，固定种子，约 16 KB）+ 半透明表面刷 + 1px 白色高光边。**零 Effect、零动画、零 BitmapCache**；噪点与渐变都 `Freeze()`，成本等于多刷一个矩形，任何系统表现一致。
+- **仅浮层**：表面刷同样半透明，但窗口底色保持原样；只有 Ctrl+K 面板打开时对 `PageHost` 挂一次**冻结的** `BlurEffect`（radius 14 / Performance bias），关闭即摘除。常驻页面完全不变。
+- **为什么没有"全屏实时模糊"**：WPF 的 `BlurEffect` 模糊的是元素**自己的子树**——加在卡片上会把文字一起糊掉；真正"透出后面的窗口"需要 `VisualBrush` 快照，而这正是第 66/67 轮让切页卡死的成因。取舍写进了 `docs/adr/ADR-0007-glass-and-performance.md`。
+
+**2. 开关与警告**
+设置 → 外观 → 「界面材质」四选一。选中非关闭项 → `GlassWarningWindow`（红框、红字、红灯图标，**取消是默认按钮**，Enter 不会误开）→ 拒绝则回滚；同意才 `config.Save()` 并即时应用，无需重启。想反悔随时改回「关闭」。
+
+**3. Guard 改造（这次改动的核心）**
+原来第 67 轮的守卫是"全禁"，直接放行就等于把旧坑挖回来。现在改成**白名单 + 纯策略**（`GlassGuardPolicy`，可单测）：
+- **XAML**：`<BlurEffect>` 只允许出现在 `MainWindow.xaml`，且必须挂在 `x:Name="Glass*"` 的元素上；出现在**任何 `DataTemplate` 内一律违规**（列表行正是会卡死的那一类）。
+- **C#**：`BlurEffect` 只能在 `MainWindow.xaml.cs` 出现，且所在行必须含 `GlassBlur` 标记（`new BlurEffect` 的那一行也带上了这个变量名，否则连实现自己都过不了）。
+- `DropShadowEffect` / `BitmapCache` / 样式里的 `Effect` / `Effect="{StaticResource ...}"` **仍然全禁**；守卫遍历所有 XAML 与 `.cs`，违规即红。
+
+**4. 可逆性（避免"关不掉"）**
+表面刷不是写进 `Application.Resources`（那会把旧主题颜色钉死、切主题就失效），而是塞进**最后一个 merged dictionary**，关闭时整本移除。`--glass-smoke` 直接断言：应用后 `PanelBrush` 变成半透明、恢复后颜色与原来完全一致、覆盖字典已摘除。
+
+**验证**：`--unit` **87/87**、`--all` **94/94**。新增 #86（模式矩阵：默认关闭、显示名往返、四模式都要警告、build 19045 把 System 降级为 Faux、只有 Local 允许瞬时模糊）、#87（守卫策略正反例：合法 Glass* 通过；换文件 / 换元素名 / 放进 DataTemplate / 换到别的 .cs 全部违规；`BlurEffect` 标记只对 MainWindow 生效）。
+另加 `--glass-smoke`（不进 CI）：真实 `Application` + 真实样式字典 → 表面重着色**可逆**、噪点/渐变已冻结、红色警告窗口渲染出标题与两个按钮（含「取消」）、设置页「界面材质」下拉框确实绑定到 4 个选项且默认「关闭」→ **绑定错误 0 条**。
+**仍未真机验证（如实说明）**：真实 Win11 22H2 上的 Mica 观感、Win10 Acrylic 的降级效果、远程桌面 / 虚拟机下的自动回落、开启后长列表滚动的实际帧率（这三项需要你在自己的机器上试）。
+
+**配套**：`BuildInfo.CurrentRound` → 80、应用内更新日志置顶第 80 轮、第 79 轮归档进 CHANGELOG；三份文档基线同步；交互元素 105 → **107**（红色警告的「取消 / 仍然开启」两个按钮）。
+
+自测 **Unit 87/87、All 94/94** 全绿；EXE 经 `scripts/publish.ps1` 重新发布（含 79→80 增量补丁）。
+
+
+
+## 更新补充（第 81 轮：界面重做为光影壁纸 + 玻璃卡片，无边框窗口）
+
+上一轮把玻璃做成了「半透明度微调」，用户指出成果（浅色卡片 + 深灰字）和图 1 的观感差得远。这轮是**视觉重构**，不是加特效：全程没有一处 `BlurEffect`，GuardPolicy 一行没放宽。
+
+**1. 无边框窗口（自绘标题栏）**
+`WindowStyle="None"` + `WindowChrome`（`CaptionHeight=0` / `ResizeBorderThickness=6`），保留贴边缩放与 Aero Snap。标题条（状态栏）和侧栏顶部都可拖动（`DragMove`），双击最大化；右上角自绘最小化 / 最大化 / 关闭三个按钮，最大化时图标切换。根 Grid 用 `RectangleGeometry` 裁出 12px 圆角，最大化时自动变直角——否则圆角会切进屏幕边缘。
+
+**2. 光影壁纸（矢量，不是图片）**
+`GlassVisuals.BuildWallpaperBrush()` 用 `DrawingGroup` 画：深色底渐变 + 四处极光（左上紫、右上蓝、右下绿、左下品红）+ 一处极弱暖光，再叠 64×64 程序噪点。全部 `Freeze()`，成本等于刷一个矩形——比 JPEG 位图还便宜，也不用往仓库塞图。
+
+**3. 玻璃卡片（图 1 的灵魂）**
+- 圆角 12 → **16**；背景 `#66000000`（半透明黑）；
+- 边框换成 `CardEdgeBrush`——**上亮下暗的 1px 渐变**（`#40FFFFFF → #14FFFFFF`），模拟玻璃厚度，比均匀描边更像玻璃；成本仍是一次填充；
+- 首页去掉大紫色块，标题 32px 直接站在壁纸上，副标题灰白 13.5px；
+- 主按钮改为 24px 圆角**胶囊**（`PillButton` + 品牌渐变），次要按钮改透明底 + 1px 高光描边（`OutlineButton`）；
+- 侧栏背景 `#33000000` + 1px 分隔线，选中项 `#33FFFFFF` 淡白胶囊。
+
+**4. 文字层级（上次最丑的地方）**
+上一轮只把面板改成半透明，文字还是主题里的深灰——浅色主题下就是"白卡片 + 看不清的字"。现在玻璃模式的配色表把 **14 个画刷**一起换：`TextBrush` 纯白、`TextMutedBrush` 70% 白、`Chip/NavActive/ListHover/Hairline` 全部半透明白，浅色主题则用白玻璃 + 深字（壁纸也切成浅色版）。
+
+**5. 砍掉「系统玻璃（Mica）」**
+壁纸铺满窗口之后，DWM 的 Mica 根本没有可见表面——留着只会让用户选了却没变化。所以选项收敛为三项：**关闭 / 液态玻璃 / 仅浮层**；旧配置里的 `System` 自动映射到液态玻璃（`Resolve(System) → Faux`），删除 `DwmGlass.cs`（不再需要任何 DWM P/Invoke）。
+
+**6. 真机视觉回归有了工具**
+新增 `scripts/screenshot-preview.ps1`：复制一份构建到临时目录 + `portable.txt` 隔离数据根 → 用 `AURORA_GLASS` 环境变量预览某个材质 → DPI 感知截屏（不先调 `SetProcessDpiAwareness` 会截到左上角四分之一）。本轮实测三张：深色玻璃、浅色玻璃、关闭模式，均无裁剪、无透明字、无错位。
+
+**验证**：`--unit` **87/87**、`--all` **94/94**（#86 改为三方案 + `System` 折叠断言；#87 模糊白名单不变）；`--glass-smoke`、`--nav-smoke` 全绿。新增的窗口按钮由既有守卫核对（三个 Click 处理器均已接线，交互元素 107 → **110**）。
+**仍未真机验证（如实说明）**：`AllowsTransparency` 分层窗口在低端集显 / 远程桌面下的滚动帧率（本机截图正常，但没有低配机器可测）；多显示器不同 DPI 之间拖动时的圆角裁剪。
+
+**配套**：`BuildInfo.CurrentRound` → 81、应用内更新日志置顶第 81 轮、第 80 轮归档进 CHANGELOG；三份文档基线同步；ADR-0007 追加第 81 轮修订说明。
+
+自测 **Unit 87/87、All 94/94** 全绿；EXE 经 `scripts/publish.ps1` 重新发布（含 80→81 增量补丁）。
+
+
+## 更新补充（第 82 轮：无实例时启动作引导 + 玻璃抛光）
+
+**1. 死按钮修复（这轮的主线）**
+新用户第一次打开、或者把实例删光之后，点「启动游戏」原本毫无反应——最糟的一类 UX 缺失：用户以为程序坏了。
+- 新增 `LaunchGuardPolicy`（Core，纯逻辑）：`Decide(instanceCount, hasSelection, hasAccount)` 返回 `None / NoInstances / NoSelection / NoAccount`，并配一张 `Describe` 表同时给出**文案 + 目标页**。判断顺序固定：实例数优先，其次选中，最后账户。
+- `LaunchAsync` 第一件事就是问这张表：没有实例 → 状态栏说明 + `Navigate("Download")` + toast；有实例没选中 → 去「实例管理」；缺账户 → 只提示，不把人跳走（账户就在首页）。
+- 按钮文案不再写死：`LaunchButtonText` 也来自同一张表（`启动游戏` / `去下载游戏`），XAML 只做绑定。**标签和点击行为共用一份判断**，以后再加拦截条件也不会各说各话。
+- 实例卡片提示同样跟随状态；`Instances.CollectionChanged` 一次性通知 `HasInstances / LaunchButtonText / InstanceCardHint`，所以加/删实例时按钮**当场改字**，不用重启。
+- 首页顶部不再留白：`SelectedInstanceNameText` / `SelectedAccountNameText` 输出「未选择实例」「未登录」。
+
+**2. 玻璃抛光（按反馈逐条）**
+- **卡片更透**：`#66000000`（40% 黑）→ `#4D0F172A`（30% 深蓝），能透出壁纸的光，不再是黑铁片；侧栏从 20% 黑降到 15%。
+- **边缘高光**：`CardEdgeBrush` 从"上亮下暗"改成**斜向三段**（`#33FFFFFF` → `#0AFFFFFF` → `#1AFFFFFF`），一角亮、中间极淡、另一角微亮，更像光在玻璃棱边的折射。
+- **文字**：次要文字 `#B3`（70%）→ `#D9`（85%）白。
+- **留白**：`Card` 内边距 18 → 22。
+- **氛围光**：壁纸底色从 `#06070C` 抬到 `#0A0D18`，加了一团底部环境光；主按钮后面加**径向渐变光晕**（`Rectangle` + `RadialGradientBrush`，`IsHitTestVisible=False`）——**没有用 `DropShadowEffect`**：那是第 66/67 轮卡死的元凶，守卫明令禁止，而且纯渐变就能达到同样观感，零特效开销。
+
+**3. 顺手修好的工具问题**
+`screenshot-preview.ps1` 之前会截到"上一版"窗口：新进程被单实例互斥体挡住直接退出，脚本抓到的却是残留进程。现在开跑前先结束所有 `AuroraLauncher`，并用 `SW_RESTORE` 而不是 `SW_SHOW`（最小化窗口的 rect 只有 353×56，会截出一条任务栏）。
+
+**验证**：`--unit` **88/88**、`--all` **95/95**。新增 #88：`Decide` 五种组合（实例数优先）、`Describe` 的跳转目标（无实例 → Download、未选中 → Instances、缺账户 → 不跳转）、按钮文案与卡片提示同源，外加静态守卫断言 `LaunchAsync` 必须走 `LaunchGuardPolicy`。`--round79-smoke` 增加两条真实渲染断言：全新 VM 点启动 → 落在「游戏下载」页；清空实例后首页按钮**实时**变成「去下载游戏」，加回后恢复。三张真机截图复核（深色玻璃 / 浅色玻璃 / 关闭）无裁剪、无错位。
+**仍未真机验证（如实说明）**：真实点击「去下载游戏」从下载页装完一个版本、再回来点启动的完整闭环（需要一次完整安装流程）。
+
+**配套**：`BuildInfo.CurrentRound` → 82、应用内更新日志置顶第 82 轮、第 81 轮归档进 CHANGELOG；三份文档基线同步；交互元素数量不变（110，改动都在既有按钮的文案与行为上）。
+
+自测 **Unit 88/88、All 95/95** 全绿；EXE 经 `scripts/publish.ps1` 重新发布（含 81→82 增量补丁）。
+
+---
+
+## 更新补充（第 83 轮：内存自动分配 + 只碰自己的释放内存）
+
+玩家最常见的问题不是"怎么装模组"，而是"我该分配多少内存"。给少了 OOM，给多了整台电脑卡死——而这台机器有多少内存，启动器早就知道（第 79 轮的 `GlobalMemoryStatusEx`）。这轮把它变成默认建议。
+
+**1. `MemoryAllocationPolicy`（Core，纯逻辑）**
+按"工作负载基础值 → 光影加成 → 物理内存上限"三步算，输入只有四个数字/布尔：物理内存、mods 里 jar 数量、是否有光影包、是否装了加载器。
+- **基础值**：原版 2048；模组 <30 → 3072；<80 → 4096；<160 → 5120；更多 → 6144。
+- **光影**：至少 4096（大包 + 光影 7168）——光影要多一份帧缓冲的工作集，低于 4 GB 时区块重建会明显顿。
+- **上限**：物理内存 × 55%，向下对齐到 512 MB，硬顶 16 GB。**上限永远赢过基础值**：`CappedByPhysical` 为真时，说明这台机器撑不起表中那个数字。
+- **兜底**：不低于 1024，除非机器连 1 GB 都给不出（那就给它能给的最大值，并标记"内存偏小"）。
+- `Describe` 输出一句话解释为什么是这个数（"物理内存 31.4 GB · 12 个模组 · 有光影 → 推荐 4096 MB"），被上限限制时说明"按内容想给 5120，但上限是 2252"。UI 不自己拼文案。
+
+**2. 接到启动链路的哪一层**
+在 `LauncherService.BuildLaunchSpecAsync` 里算，不是 UI 里：按钮、首启引导、加载器修复、脚本导出走的是同一个数。同时 `-Xms` 被压到不超过 `-Xmx`（否则 JVM 直接拒绝启动，报的错还完全看不出是这个原因）。
+`AutoMemory` 是配置里的**开关**，`MaxMemoryMb` 继续保存手动值——所以关掉自动，回来的是你原来那个数字，不是自动算出来的。**老配置默认关闭**（升级不改动已经能用的设置）；**新装用户默认开启**，在首次引导结束那一刻写入。
+
+**3. 手动值不静默改写，但会当场警告**
+手填的数字原样使用（玩家可能比表更懂自己的整合包）。超过 55% 时，输入框下面立刻变红：可能启动失败，或者游戏起来了但整台电脑卡死——后一种最难归因。这条警告随输入实时更新（`MemoryMb` 改成带 setter 的属性，每次按键重算）。
+
+**4. 「自动清理内存」没有做，做的是另一件事**
+给运行中的 JVM 强行 trim 工作集，会触发一次 stop-the-world：游戏卡 1–2 秒，帧率瞬间归零。**这种"加速"是负优化，所以不做。** 实际落地的是：
+- **`MemoryHygiene`**：只清启动器自己的图标缓存 + 用 `SetProcessWorkingSetSize(GetCurrentProcess(), -1, -1)` 把自己的工作集还给系统。不枚举进程、不 `OpenProcess`、不碰游戏进程。
+- **手动按钮**（设置 →「释放启动器占用内存」）：`Task.Run` 里跑，含一次完整 GC（这是唯一允许 `GC.Collect` 的地方，且不在 UI 线程）。结果如实报告：真释放了就写"约 23 MB"，没释放就写"系统可能暂时保留这些页，任务管理器里的数字不一定马上变小"。
+- **闲置释放**：最小化到托盘 5 分钟后清一次缓存（不含强制 GC，避免回到窗口时等垃圾回收）。可在设置里关。
+- `IconCache.ClearMemory()` 只清内存里的解码结果，磁盘缓存保留，重新打开列表不会重新下载。
+
+**5. 三条防线（都是测试）**
+- **60% 天花板**：遍历 1024–131072 MB（步长 512）× 5 档模组数 × 光影 on/off × 原版/模组，断言自动模式的每一个结果都 ≤ 物理内存的 60%，且 ≤ 16 GB、≥ 地板、都是 512 的整数倍；`SafeCeiling` 本身也要满足。顺带把第 78 轮 `MemoryCeiling` 的下限从 1536 改成 512——旧下限在 2 GB 机器上等于 75%，那是"修复建议把系统推进交换"。
+- **不碰别人的内存**：`MemoryHygiene.cs` 里出现 `Process.GetProcesses` / `GetProcessesByName` / `OpenProcess(` / `"javaw"` / `"java"` 即失败；trim 必须写成 `SetProcessWorkingSetSize(GetCurrentProcess())`。
+- **`GC.Collect` 只在一处，且只在后台**：扫描整个 Desktop 项目，`GC.Collect` 除 `MemoryHygiene.cs` 外出现即失败；并断言 VM 用 `Task.Run(() => MemoryHygiene.Trim(...))` 调用（手动与闲置两条路径都要），不允许 UI 线程内联执行。
+
+**验证**：`--unit` **90/90**、`--all` **97/97**（新增 #89 推荐阶梯与 60% 扫描、#90 三条源码守卫）。另加真实渲染冒烟 `--memory-smoke`（不进 CI）：真实样式 + 真实 `MainViewModel` 渲染设置页 → 文本 62 条 / 按钮 12 个 / **绑定错误 0 条**，点「自动（推荐）」后输入框数字变成推荐值并**变灰**（`IsEnabled` 绑定生效），手填 99999 立刻红字警告，再点「释放启动器占用内存」→ 真实释放并回显。这个冒烟还暴露了一个测试自身的坑：`RelayCommand` 的产出要等 `IsCleaningMemory` 翻回，只看文案会误判成"没反应"。
+**仍未真机验证（如实说明）**：真实跑一次游戏看自动算出的 -Xmx 是否够用、托盘闲置 5 分钟后任务管理器里的工作集变化、低内存（4 GB）真机上的表现。
+
+**配套**：`BuildInfo.CurrentRound` → 83、应用内更新日志置顶第 83 轮、第 82 轮归档进 CHANGELOG；三份文档基线同步；交互元素 110 → **111**（设置页「释放启动器占用内存」）；新增 ADR-0008（内存策略：自动有上限、清理只碰自己）。
+
+自测 **Unit 90/90、All 97/97** 全绿；EXE 经 `scripts/publish.ps1` 重新发布（本轮为完整包：修正保存逻辑后重出，增量补丁未保留）。
+
+## 更新补充（第 84 轮：新建与删除实例修复 + 列表与硬盘对账）
+
+这一轮来自两条真实反馈：点“新建实例”冒出一个启动不了的空版本；删了实例，硬盘上的文件夹还在。追下去还挖到第三个更严重的问题——**上一版的自测程序把临时测试目录写进了你的配置文件**，启动器于是去 `%TEMP%` 里找游戏，实例列表只剩一个空壳，怎么点都启动不了。
+
+**1. 配置被污染（真正的元凶，先修它）**
+第 78 轮的崩溃卡片冒烟需要“不碰用户数据”，于是把 `RootDirectory` 指到临时目录——但那个冒烟会执行一次真实的修复动作，修复会调 `cfg.Save()`，而 `Save()` 写的是**真实**的 `config.json`。结果 `rootDirectory` 被永久改成 `%TEMP%\aurora-crash-smoke-xxxx`，你的实例、版本、库全都在，启动器却去读一个空文件夹。
+三层修复：
+- **测试彻底隔离**：新增 `LauncherConfig.UseTestRoot(root)`，把**配置文件本身**也指到临时目录；四个冒烟 + 单测入口全部改用它。
+- **`Save()` 拒绝写脏**：数据根若在 `%TEMP%` 且名字是 `aurora-*`（`DataRootPolicy.IsEphemeral`），保存时直接回退到默认根并记一条 Warn——即使将来某个测试又忘了隔离，也污染不到你的配置。
+- **`Load()` 自愈**：已经写坏的配置在下次启动时自动恢复成 `%APPDATA%\AuroraLauncher`（或便携目录），并在日志里说明，不需要你手动删 config.json。
+
+**2. 「新建实例」只导航，不再造空壳**
+`CreateInstance()` 原来直接 `Instances.Create(SelectedVersion?.Id ?? "1.21.1")`——版本压根没装，于是有了一个 `1.21.1 (Vanilla)`、没有 jar/libraries、点了必然失败的实例。现在它只做一件事：`Navigate("Download")` + 提示“选一个版本安装，装完就是新实例”。实例只在**安装完成**或**导入**时诞生，那时文件是真的。
+
+**3. 「删除实例」= 先删文件夹，再删记录**
+- **确认框**：明确写出“会删除整个文件夹（约 12.4 GB，含存档、模组、配置）”并说明不可恢复，默认按钮是「否」。
+- **顺序不可颠倒**：`InstanceManager.DeleteChecked` 先删文件夹（3 次重试、每次 400 ms、重试前清掉只读属性，覆盖“游戏刚退出 / 资源管理器占着 / 杀软在扫”），**确认目录真的不存在了**才删 `instances.json` 里的记录。
+- **失败绝不静默**：删不掉就抛回 `FilesLocked` + 原因，UI 弹窗说明“记录已保留”，列表里那一行**不会消失**。这正是幽灵实例的成因——旧代码删了记录却没删掉文件夹，用户既看不到也删不掉。
+- 两个按钮名字统一：底部「删除实例」、高级区「删除实例（含文件）」（原来叫「删除版本」，很容易被理解成删版本文件）。
+
+**4. 新增「扫描未注册实例」（对账）**
+每个实例目录里现在有一份 `.aurora-instance.json`（`instances.json` 仍是唯一真源，这份只是“身份证”）。所以：
+- 文件夹有身份证、列表里没有 → 问你要不要加回来，**Id 原样保留**（重新生成 GUID 会让存档/模组关联全断）；
+- 列表里有、文件夹没了 → 问你要不要清掉这条死链（只删记录）；
+- **没有身份证的陌生文件夹 → 只报告，绝不改动**（可能是你手动复制进来的、备份、或者根本不是实例）；
+- 顺手给老实例补写身份证，下次就算 `instances.json` 丢了也能找回来。
+
+**验证**：`--unit` **94/94**、`--all` **101/101**（新增 #91 数据根策略与自愈、#92 删除顺序/锁占用/扫描三类结果、#93「新建实例只跳转」源码守卫、#94「冒烟必须隔离配置文件」源码守卫）。四个冒烟（crash / r79 / memory / glass）全绿，并新渲染实例页截图人工核对按钮行不折行、文案不截断。
+**仍未真机验证（如实说明）**：真正点确认框删除一个 20 GB 实例的耗时、文件夹被占用时 Windows 上的具体重试表现、扫描按钮在你有多个老实例时的恢复结果。
+
+**配套**：`BuildInfo.CurrentRound` → 84、应用内更新日志置顶第 84 轮、第 83 轮归档进 CHANGELOG；三份文档基线同步；交互元素 111 → **112**（实例页「扫描未注册实例」）；新增 ADR-0009（实例删除与对账：先删文件、再删记录，扫描只加不删）。
+
+自测 **Unit 94/94、All 101/101** 全绿；EXE 经 `scripts/publish.ps1` 重新发布。
+
+
+## 更新补充（第 85 轮：下载线路三态，自动测速择优）
+
+以前只有「官方 / BMCLAPI」两个值，本质是"指定一条线路"，另一条只在竞速里侥幸出现；而你截图里那个 BMCLAPI 选项，很多时候还不是你选的——是旧的启动探测帮你写进去的。这轮把它改成真正有语义的三态。
+
+**1. 配置与迁移**
+`DownloadSource`（0=官方 / 1=BMCLAPI）换成 `DownloadPolicy { Auto, Official, Mirror }`，配置键 `routePolicy`。
+迁移规则：**老的 0 和 1 都迁成 Auto**。理由写进代码注释了——那个值常常是第 42 轮探测自动写入的（不是用户点的），如果按"1=BMCLAPI"直接迁成"强制镜像"，等于把"只能走一条线路"的问题固化下来。真需要强制镜像的人在设置里选一次即可（迁移后设置页就能看到三个选项）。
+
+**2. 一条判定规则（`DownloadRoutePolicy`）**
+- 谁快选谁，但**留 40 ms 裕度**：240 vs 250 ms 算平手，不来回跳。
+- 超过 3000 ms 视为不可达：以前 4 s 的响应会被当成"官方也行"，实际只会让用户等。
+- 两条都不通 → 保持上次的选择，不瞎猜。
+- 核心/非核心的区分也在这里（`IsCoreAsset`）：client.jar、库、版本 JSON、资源索引算核心；声音、材质、图标不算。
+
+**3. 测速（`NetworkProbe`）**
+- **HEAD 优先**：只读响应头；对方 405/501 时才退化成"取 1 个字节"的 Range GET。以前用的是 GET（虽然只读头，但语义上是"下载一个文件"）。
+- **缓存 5 分钟 + 单飞**：五个页面同时问也只发一轮测速；下载路径**完全不碰测速**（只读一个静态字段 `Preference`），所以不可能出现"每次下载先测速 10 秒"。
+- 结果实时写进设置页那行灰字：`当前网络：官方 246ms / BMCLAPI 670ms · 策略：自动 —— 当前优先官方，官方失败自动回退镜像`。以前只有一句"线路保持不变"，看不出为什么。
+
+**4. 线路集合与失败换线**
+- `NetRouting.BuildHosts` 现在接受策略：强制官方 = 只有官方（核心文件）；强制镜像 = 只有镜像；自动 = 两条都在，按测速结果排前。
+- **非核心文件允许静默降级**：哪怕你选了"强制官方"，一个材质包失败时也会悄悄走镜像并记日志——不能因为一张贴图让整个安装失败。核心文件相反：失败就报错，绝不偷偷换线路。
+- `DownloadEngine` 补上了**跨线路重试**：`entry.Url` 失败一次就换另一个主机继续（只换一次，避免两条线路来回弹）。没有这一步，"自动优先官方"在官方被墙时等于 5 次重试全打空。
+
+**5. 顺手发现的一个测试环境问题**
+`LauncherConfig.UseTestRoot()` 里 `Instance` 会先读**真实**配置，于是"强制镜像"这个设置会漏进测试进程——今天镜像被限流（429）时，6 个网络用例全部跳过。现在 `UseTestRoot` 会把线路策略重置成 Auto，测试不再受用户配置影响（重跑后 102/102 全绿、0 跳过）。
+
+**验证**：`--unit` **95/95**、`--all` **102/102**（新增「DownloadRoutePolicy: 测速择优 / 强制单线路 / 回退集合」以及「Guard: 测速只用 HEAD / 有缓存 / 下载路径不等测速」）。`--memory-smoke` 真实渲染设置页：下拉框确实 3 项（自动 / 仅官方 / 仅镜像）、「下载线路」标签与「策略：」说明都渲染出来、**绑定错误 0 条**。
+**仍未真机验证（如实说明）**：官方被墙的真实网络下"自动 → 回退镜像"的端到端耗时、429 限流时的用户提示是否够清楚、强制官方安装 1.21 的完整流程。
+
+**配套**：`BuildInfo.CurrentRound` → 85、应用内更新日志置顶第 85 轮、第 84 轮归档进 CHANGELOG；三份文档基线同步；交互元素数量不变（112，下拉框与提示行不属于扫描的七类交互属性）；新增 ADR-0010（线路策略：Auto 有裕度、强制模式只对非核心文件静默回退）。
+
+## 更新补充（第 86 轮：Forge 整合包 404 修复）
+### 第 86 轮：修好 Forge 整合包装不上（安装器地址少了一段版本号）（2026-11-14）
+
+你截图里那条 `forge-47.4.22-installer.jar: HTTP 404 Not Found`，根因只有一个：**Forge 官方路径必须是「MC版本-Forge版本」**，而整合包只给了 Forge 版本。
+
+我实测了三种地址，证据很清楚：
+
+```
+404  https://maven.minecraftforge.net/.../forge/47.4.22/forge-47.4.22-installer.jar
+200  https://maven.minecraftforge.net/.../forge/1.20.1-47.4.22/forge-1.20.1-47.4.22-installer.jar
+302  https://bmclapi2.bangbang93.com/maven/.../forge/1.20.1-47.4.22/...
+```
+
+**1. 版本号拼接（真正的修复）**
+`ResolveMavenLoaderAsync` 原来把 `loaderVersion` 原样塞进路径和文件名。现在 Forge 走 `ForgeMavenVersion(mc, version)`：`47.4.22` → `1.20.1-47.4.22`，已经带前缀的保持不变，旧的完整 id（`forge-1.20.1-47.4.22`）会先剥掉 `forge-`。**NeoForge 不做这个改写**——它的版本号本来就带 MC 系列号（`21.1.72`），再拼一次就是另一类 404。路径与文件名由同一个 `BuildMavenInstallerUrl` 生成，避免"路径写一个版本、文件名写另一个版本"。
+
+**2. 镜像 404 能回退官方了**
+第 85 轮的跨线路重试需要 URL 可反解，而 `bmclapi2…/maven/…` 之前被当成"歧义路径"原样返回，所以 404 时无路可退。现在按 **group id** 反解（这不是猜测，`net/minecraftforge`、`net/neoforged`、`net/fabricmc`、`org/quiltmc` 各自只有一个上游），并保留 `releases/`、`repository/release/` 这些仓库前缀。四条 maven 地址都做了镜像→官方的往返断言。
+
+**3. 重试前先清残留**
+安装器 jar 没有校验值，而 `DownloadEngine` 的"已完整就跳过"用的是 `VerifyHash(null) == true` —— 也就是说**上次失败留下的半截文件会被当成已下好**，重试永远失败。现在下载前显式删除 `jar` 与 `.part`，并记一条日志。
+
+**4. 报错说人话 + 尊重强制线路**
+两条线路都失败时，错误里同时列出官方与镜像地址，并直接点明最常见原因（Forge 需要 `MC版本-Forge版本`）。另外，若用户在设置里选了「仅使用官方线路」，安装器失败**不再偷偷改走镜像**（第 85 轮定的规矩，这里之前漏了）。
+
+**验证**
+- `--unit` **98/98**、`--all` **105/105**（新增 #97 Forge 版本拼接与 URL 形状、#98 四条 maven 地址的镜像往返、#99 安装器清残留 + 强制线路守卫）
+- 新增 **`--forge-url-check`**（联网、约 8.4 MB、不进 CI）：用我们自己的 `DownloadEngine` 真的去下两条线路的安装器——
+  `官方: OK 8628 KB, 101558 ms, ZIP=True` / `镜像: OK 8628 KB, 1130 ms, ZIP=True`
+  （官方在这台机器上 101 秒，也解释了为什么自动模式会选镜像。）
+- 断言"报告里那个 404 地址再也不会被生成"。
+
+**仍未真机验证（如实说明）**：把 `BattleArmory TACZ 26.0.5.mrpack` 完整装一遍（Forge 安装器执行 + 上千个库文件）；只验证了失败的那个环节（安装器下载）已经通。
+
+**配套**：`BuildInfo.CurrentRound` → 86、应用内更新日志置顶第 86 轮、第 85 轮归档进 CHANGELOG；三份文档基线同步；交互元素数量不变（112）；无新增 ADR（这是缺陷修复 + 既有策略的补全，决策记录已在 ADR-0010）。
+
+
+## 更新补充（第 87 轮：下载残渣清理 + 完整性判定收紧）
+### 第 87 轮：下载残渣可收可查，半截文件不再冒充成品（2026-11-14）
+
+**这一轮解决的是"硬盘越用越少、却找不到是谁占的"**——下载被打断（关启动器、断网、强杀进程）留下的 `.part` 半截文件，以前只能一直躺着。顺带收紧了"什么才算下好了"的判断。
+
+**1. 设置 → 存储 →「清理残留下载文件」**
+- 扫一遍数据目录下所有 `.part`（含 `cache/`、`libraries/`、`assets/`、各实例、`update/`），逐个问"这个归谁"：
+  - **正在下载的**（`ActiveDownloads` 登记了这个目标路径）→ 绝不删，原样保留并报告"保留 N 个仍在下载的文件"；
+  - **台账里有、但现在没有任务在跑**（就是「下载管理」里还能续传的那些）→ 可删，但**先弹确认框**，默认按钮是"否"；
+  - **没人认领**（<4 MB 没入台账的、`update/` 里的）→ 直接删。
+- 结果如实回报："已清理 2 个残留文件，释放 68.3 MB"，并写一条日志；删不掉（被占用）的也会单独计数，不会假装成功。
+- 全程在后台线程跑（目录里有上万个资源文件），UI 不卡。
+
+**2. 下载管理页顶部的一条非阻塞提示**
+- 只在攒多了才出现：默认 **> 200 MB** 或 **> 50 个文件**（任一维度超标）。阈值可配：配置文件里的 `residueWarnBytesMb` / `residueWarnCount`，填 0 关闭该维度、两个都 0 = 彻底不提示。
+- 文案带数字（"检测到 N 个未完成的下载残留（约 X MB），可在设置中清理"），右边两个按钮：「去设置清理」「知道了」（后者只对本次运行生效，不删任何东西）。
+- 启动时扫一次（后台线程），进入下载页时再刷一次；正在扫描时不重复扫描。
+- **这台机器的真实数据**：119 个 `.part`、合计 68.3 MB——体积没到 200 MB，但数量过了 50，所以提示会正常出现。这正是"两个维度都要看"的理由。
+
+**3. `VerifyHash(null)` 的语义收紧（真 bug 修复）**
+- 旧行为：没有校验值 → 直接 `true`（"没问题"）。于是**半截文件被当成"已经下好了"**，直到启动才失败，而且报错完全看不出原因。OptiFine 与第三方 CDN 这类"只给大小、不给校验值"的条目正好踩这个坑。
+- 新行为（`DownloadIntegrity`）：有校验值比校验值；没有校验值但有声明大小比大小；**两者都没有 → `Unverifiable`（"无法确认"），由调用方决定**：
+  - 缓存命中判断：只有 `Match` 才跳过，`Unverifiable` 一律重新下载（多花点流量，比留下一个坏文件强）；
+  - 刚下载完的判断：只有明确的 `Mismatch` 才算失败并重试（否则"无可比对"会变成无限重试）。
+- 还有一个容易翻车的细节：HTTP 自动解压开启时，磁盘上的字节数 ≠ 声明大小（声明大小算的是压缩后的线上字节）。所以只有响应**没有** `Content-Encoding` 时才做大小比对，否则交给校验值。安装器那条"下载前显式删残留"的路径不受影响。
+
+**4. `update/` 每次检查更新时顺手清**
+- `CheckAsync` 一开始就删掉 `update/` 里**超过 24 小时、且不是当前待安装的包**（`AuroraLauncher.new.exe` + `build-info.txt` 永远豁免，与年龄无关——否则放着两天不动，待安装的更新会凭空消失）。被占用（正在跑的 updater）就跳过，不报错。
+
+**机制防线（4 条新测试，其中 2 条是防复发守卫）**
+- `DownloadIntegrity` 判定矩阵：哈希命中/不命中、只有大小时的截断文件必须被抓、两者都没有必须是 `Unverifiable`、缓存路径不得信任 `Unverifiable`、新下载的"无可比对"必须放行。
+- **守卫**：`DownloadEngine` 里不得再出现 `VerifyHash(`；缓存命中必须走 `DownloadIntegrity.IsTrustworthyForSkip`；每个文件操作必须 `ActiveDownloads.Register`；必须保留 `sizeComparable` 判断。
+- 残留扫描/清理：正在下载的必须留、台账里的必须可删、无主必须删、非 `.part` 的已完成文件绝不能被碰；`ShouldWarn` 的阈值语义（0 = 关闭、负数不得变成"永远提示"）。
+- `UpdateStaging`：只清 24 小时前的、待安装包永远保留、5 分钟前的 `.part` 不动。
+- **守卫**：设置页按钮/下载页提示/后台线程/确认框默认"否"/启动扫描/更新检查清理，六处接线缺一即红。
+
+**验证**
+- `--unit` **104/104**（离线）、`--all` **111/111**（含网络集成），全部通过
+- 新增 `--residue-smoke`：真实样式 + 真实 VM 渲染下载页与设置页 → 提示确实出现（"检测到 2 个未完成的下载残留（约 2.0 MB）"）、「去设置清理」真的跳到设置页、点按钮后**磁盘上的文件真的没了**（`update/` 与 `libraries/` 各一个）、相邻的已完成文件没被动、绑定错误 0 条。截图见本轮预览
+- `--memory-smoke`（设置页整体不回归）、`--crash-smoke`、`--round79-smoke`、`--glass-smoke` 全绿
+- 顺手修掉了守卫自身的一个缺陷：`uiVmCommands` 只读 `MainViewModel.cs`，从第 79 轮起 VM 拆成多个 partial 后，partial 里声明的命令一律被判"不存在于 VM"。现在扫全部 `MainViewModel*.cs`
+
+**仍未真机验证（如实说明）**：真实点一次清理 119 个文件（68 MB）的耗时；被游戏/杀软占用时的重试表现；20 GB 级整合包的 `.part` 被删除后重新下载的体验。
+
+**配套**：`BuildInfo.CurrentRound` → 87、应用内更新日志置顶第 87 轮 + 新增帮助主题「磁盘被占满了 / 清理下载残留」、第 86 轮归档进 CHANGELOG；三份文档基线同步（Unit 104 / All 111、防线 22 条）；交互元素 112 → **115**；新增 **ADR-0011**（残留归属与完整性判定）。
+
+---
+
+## 更新补充（第 88 轮：存储垃圾扫描 + 选择性清理）
+### 第 88 轮：扫描整个存储目录，按分类勾选清理垃圾（2026-11-14）
+
+**这一轮把"清理"从下载残渣扩大到整个数据目录，但只碰"删了也不心疼"的东西。**
+
+**1. 扫描 → 勾选 → 清理（设置 → 存储）**
+
+| 分类 | 默认 | 代价 |
+|---|---|---|
+| 项目图标缓存 `cache/icons` | 勾 | 下次浏览重新下载 |
+| OptiFine 安装器缓存 `cache/optifine` | 勾 | 下次安装重新下载 |
+| 版本清单离线缓存 | 勾 | 下次启动重新拉（弱网时短暂空白） |
+| 更新包残留 `update/`（不含待安装的包） | 勾 | 无 |
+| 超过 14 天的日志（今天的永远保留） | 勾 | 旧问题少一份证据 |
+| 无主残片 `.part`/`.tmp` | 勾 | 无 |
+| 空壳版本目录 | 勾 | 无（本来就启动不了） |
+| 加载器元数据缓存 `cache/installers` | **不勾** | 断网时加载器列表可能不可用 |
+| 可续传的下载残片 | **不勾** | 进度归零，需重新下载 |
+
+报告按分类给「名称 · 文件数 · 大小」，确认框写明总项数与总体积并默认「否」，结果如实回报「已释放 X（N 个文件 + M 个空目录）」，被占用删不掉的单独计数。每类都写一条 `[Cleanup]` 日志。
+
+**2. 空壳版本目录的判定很窄**
+
+只有 **既没有 `<id>.json` 也没有 `<id>.jar`，且递归下来一个文件都没有** 才清。有任何一个文件（哪怕只是 `natives/` 里的 dll）就跳过——半装状态可能是用户正准备「补全文件」。删除前会**再判一次**（扫描结果是快照，用户可能看了几分钟才点）。
+
+**3. 顺手把图标缓存搬进了数据根**
+
+原来 `IconCache` 把图片存在 `%TEMP%\AuroraLauncher\icons`：存储清理看不到它，多个数据根共用一份，还会被 Windows「存储感知」当临时文件清掉。这一轮改到 `cache/icons`，所以"清理图标缓存"才真的有个东西可清。旧目录不主动删（那是系统临时目录，不归启动器管）。
+
+**4. 白名单是唯一闸门，而且复核两次**
+
+`StorageCleanupPolicy.IsAllowedPath` 只放行：`cache/icons|optifine|installers`、`cache/version_manifest_v2.json`、`update/`（排除 `AuroraLauncher.new.exe` 与 `build-info.txt`）、`logs/aurora-*.log`、`versions/<id>`（目录本身）、以及 `libraries/`、`assets/` 里的 `.part`/`.tmp`。`instances/`、`backups/`、`java/` 与 `config.json`/`instances.json`/`accounts.json`/台账文件一律拒绝。扫描时过滤一次，**删除前再过滤一次**，并且 `.part` 还要复查 `ActiveDownloads`（有任务在写就跳过）。
+
+**与已有机制的衔接**：残片归属复用第 87 轮的 `DownloadResidue`（台账里能续传的单独成类、默认不勾），不另写一套判定；台账文件本身在白名单外，永远不会被当垃圾删掉。
+
+**机制防线（2 条新守卫 + 3 个功能性测试）**
+- 白名单矩阵：允许 10 类、拒绝 19 类（含 `instances/*/saves`、`backups/*`、`java/*`、`libraries` 里的**实际文件**、待安装更新包、台账、根目录自身、根目录之外的路径）。
+- **守卫**：清理服务必须两次调用 `IsAllowedPath`；必须复查 `ActiveDownloads` 与 `IsEmptyVersionShell`；不得出现 `Directory.Delete(_root`、不得出现 `instances`/`backups`/`java` 的路径拼接；唯一的 `Directory.Delete(..., recursive: true)` 只允许作用在已验证的空壳上。
+- **守卫**：所有 `CostsOffline` 分类必须 `DefaultSelected = false`，且 UI 的默认勾选必须来自 `group.Info.DefaultSelected`（不许硬编码）。
+- 空壳判定五态：只有 JSON、只有 jar、两者都有、真空目录、子目录里有文件 → 只有真空目录算空壳。
+- 端到端：临时根里铺 15 个样本（含存档、备份、库本体、待安装包、可续传残片），只清 Safe 档后逐项断言"该没的没了、该在的一个不少"。
+
+**验证**
+- `--unit` **109/109**（离线）、`--all` **116/116**（含网络集成）
+- 新增 `--cleanup-smoke`：真实设置页 → 点「扫描垃圾文件」→ 4 类报告渲染成 4 个复选框 → 离线档确实未勾、安全档确实勾上 → 点「清理选中项」→ 磁盘上图标缓存/旧日志/空壳目录真的消失、`instances/` 存档与待安装更新包一个没动、绑定错误 0 条（截图见预览）
+- 其余五个冒烟（crash / round79 / glass / memory / residue）全绿
+- **真机实测（本机数据根，只读扫描）**：**117 ms**，识别到 4 类 / 175 个文件 / **97.7 MB** —— 版本清单 272 KB、历史日志 2 个 5.5 MB、无主残片 119 个 68.3 MB、加载器缓存 53 个 23.7 MB（默认不勾）。没有任何空壳目录（与人工核对一致）
+- 发布：EXE + 87→88 补丁 + 签名清单（见文末）
+
+**仍未真机验证（如实说明）**：杀软锁定 `cache/icons` 时的表现、真实点一次「清理选中项」的耗时与被占用计数、以及用户对"空壳目录被清掉"的接受度（本机没有空壳目录可验证）。
+
+**配套**：`BuildInfo.CurrentRound` → 88、应用内更新日志置顶第 88 轮、帮助主题「磁盘被占满了 / 清理垃圾与残留」扩写、第 87 轮归档进 CHANGELOG；三份文档基线同步（Unit 109 / All 116、防线 24 条）；交互元素 115 → **117**；新增 **ADR-0012**（清理白名单与空壳判定）。
+
+
+## 更新补充（第 89 轮：第 88 轮复核的五处加固）
+### 第 89 轮：清理功能的五处加固（针对第 88 轮的复核）（2026-11-14）
+
+**没有新按钮。这一轮全在补第 88 轮"能清但可能清错/说不清"的地方。**
+
+**1. 守卫的扫描范围从"一个文件"扩到"整个 src/"**
+
+原来只断言 `DownloadEngine.cs` 里没有 `VerifyHash(`。但第 86 轮的安装器清残留逻辑在 `ModLoaderInstallers.cs`——那里如果哪天又加一个 `VerifyHash(`，"没有校验值 = 完整"的老洞就会悄悄回来，守卫一声不响。现在遍历 `src/**/*.cs`，唯一豁免是 `DownloadIntegrity.cs`（它的文档注释提到了旧实现），并且额外断言那个文件里**不得重新定义** `static bool VerifyHash`。
+
+**2. 删残片时同步断点续传台账**
+
+第 88 轮的可续传残片默认不勾，但勾了并清理之后，台账里会留下指向已删除文件的记录。第 74 轮的重放规则（"`.part` 不存在就忽略"）让这**不至于出错**，但那行字会一直躺在日志里，只有当用户重启启动器、触发重放压缩时才会消失。现在两个入口（第 87 轮的「清理残留下载文件」与第 88 轮的「扫描垃圾文件」）删掉一个台账内的残片时，都会写一条与引擎完成时相同的 `-` 记录（`DownloadJournal.Forget`）。清完还会重新加载下载页的「继续下载」横幅——否则它举着已经不存在的文件。
+
+**3. 两个入口的分工写在按钮下面**
+
+「清理残留下载文件」= 只处理下载残渣（未完成的 `.part` 与更新包残片），快、只扫这一类；「扫描垃圾文件」= 扫整个存储目录的 9 类，适合定期体检。设置页那行灰字直接写出来，帮助主题里也写明"两者删同一批残片时判定一致，都先问再删，都会同步台账"。
+
+**4. 清理时的忙碌态**
+
+- 按钮文案随状态切换：`扫描垃圾文件` ↔ `扫描中…`、`清理选中项` ↔ `清理中…`（文案属性的 `PropertyChanged` 也补上了，否则会永远停在初始文字）
+- 两个按钮在运行期禁用（`CanExecute` + `RaiseCanExecuteChanged`），防重复点击
+- 新增不确定态进度条（复用已有的 `IsIndeterminate` 样式，扫描或清理时可见）
+- 复选框在清理期间冻结（`CanEditStorageSelection`）——选中项在执行瞬间已快照，允许再点只会让人以为改动生效了
+- 报告是**整体替换**（`Clear()` + 一次填充 ≤9 行），不是逐项插入
+
+**5. 空壳目录"清不掉"的解释写进帮助**
+
+存储清理只删"既无 `<id>.json`、也无 `<id>.jar`、且一个文件都没有"的目录。若某个版本目录里还留着文件（例如只剩 `natives/`）却启动不了，它不是空壳——请在实例管理用「删除实例（含文件）」，或点「补全文件」修好。帮助主题里补了这段，避免用户以为功能漏了。
+
+**验证**
+- `--unit` **111/111**（离线）、`--all` **118/118**（含网络集成）
+- 新增测试：`DownloadJournal.Forget` 的功能验证（删残片 → `Flush` → 台账里不再有该条目、重放也不冒出来）+ 两个入口的源码断言；忙碌态与分工文案的守卫（含"文案属性必须发通知"这条容易漏的）
+- 守卫扩围后立刻自查：全 `src/` 只剩 `DownloadIntegrity.cs` 文档注释里那一处，无新增违规
+- `--cleanup-smoke` 重跑通过（按钮文案改为绑定后仍能按文字找到、进度条默认隐藏、截图人工目检无重叠）；其余五个冒烟全绿
+- 发布：EXE + 88→89 补丁 + 签名清单（见文末）
+
+**为什么轮次 +1 而不是就地重发**：第 88 轮的 EXE 已经签进清单（round 88）。若沿用同一个轮次号重发，已经装了 88 的用户永远收不到这些修正——防降级判定要求严格更大的轮次。
+
+**仍未真机验证**：杀软占用时的失败计数、真实点一次「清理选中项」在 175 个文件上的耗时、空壳目录清理的实际体验（本机没有空壳可测）。
+
+**配套**：`BuildInfo.CurrentRound` → 89、应用内更新日志置顶第 89 轮、第 88 轮归档进 CHANGELOG；三份文档基线同步（Unit 111 / All 118、防线 25 条）；交互元素数量不变（117，本轮只改文案与绑定，没有新增控件）；ADR-0012 补记"守卫扫描范围"的决定。
+
+---
+
+## 更新补充（第 90 轮：设置未保存拦截 + 关闭闸门）
+
+### 第 90 轮：设置改完忘了保存会提醒；「直接退出」遇到下载也会先确认（2026-11-14）
+
+**两个都是"差点丢东西"的问题，不是新功能。**
+
+**1. 离开设置页 / 关窗口时检查未保存的修改**
+
+设置页是"本地修改 + 点保存才生效"。以前改完内存、Java 路径，直接点侧边栏去别的页面，修改静默丢失，下次进来还是旧值——用户会以为启动器"忘了"。
+
+- 进入设置页时拍一份快照，保存成功后再拍一份；`快照 ≠ 当前` 就是脏（`SettingsDirtyPolicy`，纯逻辑、可单测）。
+- 离开设置页时（`Navigate` 的第一道门）弹窗：**是＝保存并离开 / 否＝放弃修改（重读配置回滚）/ 取消＝留在当前页**。
+- 关闭窗口时同样会问（`OnClosing` 最前面），因为关窗也是丢弃修改的一种方式。
+- 保存按钮旁边常驻一行橙色提示：「有 N 项修改尚未保存（内存分配、Java 路径…）」——不用再靠"记不记得点保存"。
+- 保存失败（例如存储目录填了无效路径）会**留在设置页**并说明原因，而不是假装成功然后离开。
+
+**为什么用快照而不是 dirty 标志位**：设置页有 18 个绑定字段，每个 setter 加一句 `MarkDirty()` 意味着 18 个手写点，而漏掉的那个正好就是会丢数据的那个。快照对比没有这个洞——以后新增字段，只要进了 `CaptureSettings` 就自动被覆盖。
+
+**提示行为什么用 500ms 定时器**：这些字段大多是纯自动属性（TextBox 往模型里推值，没人发 `PropertyChanged`）。给 18 个字段补 setter 只为一个提示不值；定时器只在设置页可见时做一次 18 条字符串比对，开销可以忽略。**拦截本身不依赖它**——`HasUnsavedSettings` 是实时算的，哪怕你在 500ms 内改完就走，弹窗照样会来。
+
+**2. 「直接退出」遇到下载仍在确认**
+
+第 74 轮的策略里本来就有这条（`Exit + 有任务 → Prompt`），但两处漏了：
+
+- **文案**：选项叫「直接退出」，那句话只写在下方的灰色小字里，很容易看漏。现在选项本身就叫 **「直接退出（有下载时仍会确认）」**，解析器同时接受新文案和旧的短文案（老配置不会因此变成「每次询问我」）。
+- **托盘菜单的退出**：`ExitFromTray` 以前直接 `_shuttingDown = true` 然后关窗，**完全绕过弹窗**。现在它先走同一个闸门 `ConfirmExitWithActiveJobs`，用户选「否」就继续下载。这也是"选了什么都不能静默中断"的一部分。
+
+「最小化到托盘」仍然不弹窗，这是刻意的：它只是收起窗口，下载继续，没有任何东西被中断。
+
+**机制防线（2 条新守卫）**
+- **离开设置页必须拦截**：源码断言 `Navigate` 里的 `ConfirmLeaveSettings(target)` 出现在 `CurrentPageKey = target` **之前**（顺序错了就拦不住）；断言脏检查走策略类、保存/放弃两条分支都在、回滚只调 `LoadSettingsFromConfig`（重新 `LoadAll` 会重复添加账号和实例）。
+- **有任务时关窗必须弹窗**：断言 `OnClosing` 调 `ConfirmCloseWithUnsavedSettings()`、`ExitFromTray` 里 `ConfirmExitWithActiveJobs` 出现在 `_shuttingDown = true` 之前；再加上策略层的功能断言（`Exit`/`Ask` × 有任务 → 必 Prompt，排队中同样算未完成）。
+
+**验证**
+- `--unit` **113/113**（离线）、`--all` **120/120**（含网络集成）
+- 新增 `--settings-smoke`（真实 VM + 真实设置页）：改一个字段 → 判定为脏、橙色提示渲染出来；选「取消」→ **页面没切走**；选「放弃」→ 离开且字段恢复成保存值、配置未被改写；选「保存并离开」→ 离开且配置真的写进去了；关窗询问选「取消」→ 返回 false（窗口留住）
+- 截图人工目检两处：下拉框里的「直接退出（有下载时仍会确认）」**没有被截断**；保存按钮旁的「有 1 项修改尚未保存（Java 路径）」与按钮垂直对齐、不重叠
+- 其余六个冒烟（crash / round79 / glass / memory / residue / cleanup）全绿——特别注意 round79 冒烟会经 Ctrl+K 跳进设置页再导航走，没有触发误拦
+
+**仍未真机验证（如实说明）**：真实点一次「保存并离开」时若存储目录无效会留在原页（逻辑已覆盖，但没有真人点过）；托盘菜单退出在有下载时的实际弹窗观感。
+
+**配套**：`BuildInfo.CurrentRound` → 90、应用内更新日志置顶第 90 轮、第 89 轮归档进 CHANGELOG；三份文档基线同步（Unit 113 / All 120、防线 26 条）；交互元素仍为 117（只把保存按钮包进一行、加了两个文本提示，没有新增可点控件）；新增 **ADR-0013**（设置脏检查与关闭闸门）。
+
+---
+
+## 更新补充（第 91 轮：首页底部被裁掉的问题）
+### 第 91 轮：首页底部被裁掉的问题（窗口矮时卡片区可滚动）（2026-11-15）
+
+**你截图里的现象**：全屏 + 系统缩放后，首页最下面的「性能概览」被切掉，而且没有滚动条。
+
+**根因**：`HomeView` 是"上半欢迎语（Auto）+ 下半卡片区（`*`，内部再分 `*` / `Auto`）"的固定布局。卡片区的自然高度约 475 DIP，窗口一矮就塞不下，多出来的部分直接被裁——而整个页面没有任何滚动机制。这不是"数据太多"，是**布局缺一个逃生口**。
+
+**改法**：把卡片区包进 `ScrollViewer`（`Auto` 纵向、禁用横向），但保留"窗口够高时两张卡撑满"的观感：
+
+- `CardArea.MinHeight` 绑定到 `HomeScroller.ActualHeight`。内容比视口矮时，MinHeight 把网格撑到视口高度，`*` 行照旧吸收剩余空间（和以前一模一样）；内容更高时 MinHeight 只是个下限，不起作用，于是正常滚动。
+- 正好塞下的那种情况（内容高度 == 视口）不会多出一条滚动条——因为内容高度**等于**视口，`ScrollableHeight` 是 0；冒烟实测 760px 时正是 `580.8 / 580.8 / 可滚 0`。
+- **hero 区（欢迎语 + 启动按钮）留在 ScrollViewer 外面**：滚动时它不动。这是主操作入口，不能跟着内容跑。
+- 实例列表原本就有 `MaxHeight="270"`——这一点很关键：不限高的 `ListBox` 放进滚动容器会全量生成容器（第 68 轮的坑），冒烟里也守住了。
+
+**验证（这是重点，不是"看着能滚就行"）**
+- 新增冒烟断言：把窗口压到 **760 / 600 / 480** 三档，每档滚到底后检查「性能概览」卡最底部那行字（"整机占用（3 秒刷新）"）**真的落在视口内**。实测：
+
+```
+首页 760px: 内容 580.8 / 视口 580.8 / 可滚 0 / 锚点可见=True
+首页 600px: 内容 474.7 / 视口 420.8 / 可滚 54 / 锚点可见=True
+首页 480px: 内容 474.7 / 视口 300.8 / 可滚 174 / 锚点可见=True
+```
+
+- 同时断言 **hero 启动按钮不随滚动移动**（用坐标比较，不靠肉眼）——写这条断言时它先失败了一次：页面上有两个「启动游戏」按钮（hero 一个、实例卡里一个），第一版选到了实例卡里那个，误判"hero 跟着滚"。改成"排除滚动容器内的那个"后才通过。这条断言现在是那个 bug 的复发网。
+- 首页渲染成 `%TEMP%\aurora-home-600.png` 人工目检：性能卡 CPU / 内存 / 上次运行 三列完整、右侧滚动条可见、没有元素重叠。
+- 离线守卫（CI 每次都跑）：首页必须有具名滚动容器且 `VerticalScrollBarVisibility="Auto"`、禁止横向滚动、实例列表必须带 `MaxHeight`、`ScrollViewer` 必须出现在欢迎语之后（防有人顺手把 hero 一起包进去）；顺带守住设置页/帮助页的滚动容器不被重构掉。
+
+**顺手确认的其他页面**：实例页/内容中心/设置/日志/帮助都已有滚动容器或自带虚拟化的列表（`LogsView` 是 `ListBox` 自滚，注释里写明了"外层不再套 ScrollViewer"）。**Downloads 是刻意的固定分栏**（左汇总右列表），列表内部滚动，不需要整页滚动。
+
+**验证汇总**：`--unit` **114/114**、`--all` **121/121**；七个冒烟全绿（crash / round79 / glass / memory / residue / cleanup / settings）。
+
+**仍未真机验证**：你的机器是 1080×700 物理像素（截图），如果系统缩放 125–150%，布局高度约 460–560 DIP——正好落在"需要滚动"的区间，新版应该直接出现滚动条。**还需要你在真实窗口里拉一下确认手感**（滚轮是否顺滑、滚动条是否挡住卡片）。
+
+**配套**：`BuildInfo.CurrentRound` → 91、应用内更新日志置顶第 91 轮、第 90 轮归档进 CHANGELOG；三份文档基线同步（Unit 114 / All 121、防线 27 条）；交互元素仍为 117（只加滚动容器，没有新增可点控件）；无新增 ADR（这是布局缺陷修复，决策边界见 README 上文"布局缺一个逃生口"）。
+
+## 更新补充（第 92 轮：整合包完整性 + 启动闸门 + 运行判定）
+### 第 92 轮：整合包没装完，不再装作没事（2026-11-15）
+
+**你截图里的现象**：实例叫「BattleArmory TACZ」，启动成功、也进了游戏，但里面是纯原版；顶上一条「启动失败: Object reference not set to an instance of an object.」；性能卡写「上次运行 1 分钟 · 峰值内存 2 MB」，还标着「健康」。
+
+**先说根因**——它与你猜测的三条不完全相同，我对着你机器上的 `instances.json` 和日志核过了：
+
+1. `BattleArmory TACZ` 的 `resolvedVersionId` 是 **null**（Forge 47.4.22 从未装成功）。启动时 `id` 回退成 `1.20.1`，而 `NeedsRepair` 只检查**原版**文件是否齐全 —— 齐全，于是判定「文件完整，直接启动」，`--versionType forge` 却指向原版 jar。日志里的命令行是铁证：classpath 全是原版 jar，主类 `net.minecraft.client.main.Main`。
+2. 导入失败时**没有任何地方记录「这个包本该有几个模组」**，所以就算加载器装好了，`mods/` 空着也永远判「完整」。
+3. 导入成功后 `InstallWithLoaderAsync` 填好的 `ResolvedVersionId` **没有落盘**（只有启动页那条路径会 `Update`）——重启启动器，实例又变回「加载器没装」。
+4. 内存采样是 `Task.Run` 里的 5 秒循环，实测只采到 `java.exe` 刚起来时的 **2 MB** 就再也没有下文；判定又只看内存数字，于是 2 MB 也被写成「健康」。
+
+**四处都改了**
+
+- **加载器没装好 = 不许启动**。新增 `LaunchReadiness`（纯策略）：只有「指向加载器形态的版本 id + 该 profile 真实存在」才算装好；`ResolvedVersionId` 为空、或等于原版 id，一律判没装。`BuildLaunchSpecAsync` 里还有第二道保险：加载器实例若要构建原版命令行，直接抛业务错误。
+- **整合包核对模组数量**。导入时**先**把「应有 N 个模组 / M 个文件」和每个文件的下载地址写进 `instances.json` 与 `instances/<id>/modpack-manifest.json`，再开始下载。启动前核对：0 个 → 拦住（「应有 87 个，实际 0 个」）；少于一半 → 拦住并报数字；只少一两个（你自己删的）不打扰。
+- **补全能真的补回来**：原始 `.mrpack` 还在就重跑导入；不在了就按清单里存的地址逐个补下（哈希已对的自动跳过）。两者都没有才说「请重新导入」。
+- **导入完成后保存 `ResolvedVersionId`**，重启不再退回原版。
+- **性能卡按退出结果判定**：退出码非 0 → 「异常退出」；活不过 3 秒 → 「闪退」；没采到读数 → 「峰值内存未采集到」。采样改成**专用线程**（首采样等 1.2 秒，绕开 launcher stub），每次运行把「采样次数 / 首采样 / 峰值 / 时长」写进日志。
+- **启动失败说人话**：`LaunchFailureText` 把空引用翻译成「加载器或版本 JSON 可能损坏，请先补全文件」，并把**完整堆栈**写进日志——这次查不到空引用，正是因为只记了 Message。
+
+**在你机器上的实测（只读诊断，不启动任何东西）**
+
+```
+[readiness-scan] 数据根: C:\Users\94232\AppData\Roaming\AuroraLauncher · 4 个实例
+1.21.10 (Fabric)   loader=Fabric resolved=(null)                      mods=0 → 拦住【LoaderNotInstalled】
+1.20.1 (Fabric)    loader=Fabric resolved=fabric-loader-0.20.1-1.20.1 mods=0 → 可以启动
+1.20.1 (Fabric)    loader=Fabric resolved=fabric-loader-0.20.1-1.20.1 mods=1 → 可以启动
+BattleArmory TACZ  loader=Forge  resolved=(null)                      mods=0 → 拦住【LoaderNotInstalled】
+    「BattleArmory TACZ」现在只有原版 1.20.1 的文件。从这里启动只会进原版……
+```
+
+**验证**
+
+- `--unit` **118/118**、`--all` **125/125**（新增 #116 模组数与清单双口径、#117 闸门策略 + 真实服务路径、#118 运行判定、#119 守卫）
+- 新增 `--launch-gate-smoke`：真实 `MainViewModel` → 点「启动游戏」→ 被拦住、状态栏写明原因、日志里**没有** `Launching:` 命令行（证明真的没启动进程）
+- 其余七个冒烟全绿（crash / round79 / glass / memory / residue / cleanup / settings）
+- 发布：EXE + 91→92 补丁 + 签名清单（见文末）
+
+**仍未真机验证**：Forge 47.4.22 在你这台机器上能否补全成功（10:02 的日志里有镜像 SSL 失败，重试可能仍需切线路）；「仍然启动」的实际弹窗观感；以及老实例（第 92 轮之前导入、没有清单）只能重新导入这一限制是否可接受。
+
+**配套**：`BuildInfo.CurrentRound` → 92、应用内更新日志置顶第 92 轮、第 91 轮归档进 CHANGELOG、新增帮助主题「整合包只装了一半 / 进游戏没有模组」。
+
+## 更新补充（第 93 轮：命令层防重入）
+### 第 93 轮：狂点也不会重复执行（2026-11-15）
+
+**问题**：点了按钮，界面上没马上出现变化，人的第一反应就是再点两下。如果那是网络请求、文件写入或启动进程，连点就会变成「同一件事跑两三遍」：重复账号、两个 Java 探测进程、两个安装器抢同一批文件。
+
+**做法：防呆放在命令层，不在每个按钮里各写一遍**
+
+`RelayCommand` 现在自带一个一次只允许一个执行者的门（`CommandGate`，纯状态机、可单测）：
+
+- 执行中 `CanExecute` 返回 false → **WPF 自动置灰按钮**，灰着的时候点击根本进不到业务代码；
+- 被丢掉的点击计入 `SuppressedClicks` 并写一条 Trace 日志 —— 「点了没反应」这类反馈以后能查证；
+- 完成或抛异常都会在 `finally` 里解锁；`CanExecuteChanged` / `PropertyChanged` 会切回 UI 线程再发（有些调用点 `ConfigureAwait(false)`，否则跨线程抛错）。
+
+**异步命令默认开启**（40 个全部生效），同步命令不开 —— 同步命令在 UI 线程内跑完才可能收到下一次点击，本来就不可能重入。
+
+**顺手抓出三个真 bug**：这三个是「火后不管」写法，命令立刻返回，防重入对它们**完全无效**：
+
+| 命令 | 原来 | 连点后果 |
+|---|---|---|
+| 继续下载 | `new RelayCommand(_ => _ = ResumePendingDownloadsAsync())` | 两个续传流程同时跑 |
+| 导出整合包 | `new RelayCommand(_ => _ = ExportMrpackAsync())` | 弹出两个保存对话框、两次打包 |
+| 检查更新 | `new RelayCommand(_ => _ = CheckForUpdateAsync())` | 两次更新检查并发 |
+
+全部改成 `async _ => await …`，现在它们也受同一道门保护。
+
+**文案会动**（耗时按钮不再只是灰一下）：
+
+- 实例管理：扫描未注册实例 →「扫描中…」、补全文件 →「补全中…」
+- 设置：检查更新 →「检查中…」
+- 首页：完成登录 →「登录中…」
+
+实现是把按钮 `Content` 绑到 `命令.IsRunning`，用已有的 `BoolToText` 转换器加一个 `ConverterParameter='忙碌|空闲'`（没有新增资源键，所有页面与冒烟的资源加载都不用改）。
+
+**顺手修的一处黑洞**：命令里未捕获的异常以前只进 `Debug.WriteLine`，等于消失；现在写进日志文件并解锁按钮（否则按钮会永久变灰）。
+
+**另外发现的一个显示 bug**：实例页「Java」下拉框收起时显示 `AuroraLauncher.Desktop.ViewModels.JavaChoiceVM` —— `DisplayMemberPath` 只喂下拉列表，收起状态在没有 `SelectionBoxItemTemplate` 时退回 `ToString()`。现在显示「自动选择（按游戏版本）」，截图前后对比确认过。
+
+**没有做的**：拦截「300 毫秒内的物理双击」。按钮已经按执行状态置灰，再加时间窗会误伤「快速点两个不同按钮」的正常操作。
+
+**验证**
+
+- `--unit` **121/121**（新增 #120 门的状态机含 32 线程并发只进一个、#121 真实 `RelayCommand` 重入/解锁/异常后解锁、#122 守卫）
+- 守卫扫描全部 ViewModel，**禁止再出现 `new RelayCommand(_ => _ = XxxAsync())`**（火后不管会让防重入失效）；并断言四个耗时按钮确实绑了 `IsRunning`
+- 清理冒烟的运行时断言：扫描进行中按钮必须置灰、结束后必须恢复
+- 八个冒烟全绿（crash / round79 / glass / memory / residue / cleanup / settings / launch-gate）
+- 发布：EXE + 92→93 补丁 + 签名清单（见文末）
+
+**仍需你实测**：真实窗口里连点那些按钮的手感（尤其「补全文件」这种要下载几分钟的操作，按钮会一直灰着、文案停在「补全中…」）。
+
+**配套**：`BuildInfo.CurrentRound` → 93、应用内更新日志置顶第 93 轮、第 92 轮归档进 CHANGELOG。

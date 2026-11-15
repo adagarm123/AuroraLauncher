@@ -1,0 +1,21 @@
+<Window x:Class="AuroraLauncher.Desktop.Views.ClosePromptWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="关闭启动器" Width="470" SizeToContent="Height"
+        WindowStyle="ToolWindow" ResizeMode="NoResize" ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource PanelBrush}">
+    <StackPanel Margin="22,18,22,18">
+        <TextBlock Text="关闭启动器" FontSize="16" FontWeight="SemiBold"/>
+        <TextBlock x:Name="MessageText" TextWrapping="Wrap" Margin="0,10,0,0"
+                   FontSize="12.5" Foreground="{DynamicResource TextMutedBrush}" LineHeight="19"/>
+        <CheckBox x:Name="RememberCheck" Margin="0,14,0,0" FontSize="12.5"
+                  Content="记住我的选择（以后不再询问，可在「设置 → 窗口与托盘」修改）"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
+            <Button Content="退出" Click="Exit_Click" Padding="18,7" Margin="0,0,8,0"/>
+            <Button x:Name="HideButton" Content="最小化到托盘" Click="Hide_Click"
+                    Style="{StaticResource PrimaryButton}" Padding="16,7" Margin="0,0,8,0"/>
+            <Button Content="取消" Click="Cancel_Click" Padding="16,7" IsCancel="True" IsDefault="True"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

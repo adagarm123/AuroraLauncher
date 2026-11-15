@@ -19,12 +19,97 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBox Text="{Binding RootDirectoryText, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,10,0"/>
+                        <TextBox Text="{Binding RootDirectoryText, UpdateSourceTrigger=PropertyChanged}"
+                                 IsEnabled="{Binding IsRootDirectoryEditable}" Margin="0,0,10,0"/>
                         <Button Grid.Column="1" Content="打开文件夹" Command="{Binding OpenRootDirectoryCommand}"
                                 ToolTip="在资源管理器中打开该目录（不存在时会自动创建）"/>
                     </Grid>
                     <TextBlock Text="修改后需重启启动器生效；已有文件不会自动迁移，新目录将按需重新下载。"
                                Style="{StaticResource FieldLabel}" Margin="0,6,0,0"/>
+
+                    <Border Height="1" Background="{DynamicResource BorderBrush}" Margin="0,16,0,14"/>
+
+                    <TextBlock Text="便携模式（U 盘 / 移动硬盘）" Style="{StaticResource FieldLabel}" Margin="0,0,0,6"/>
+                    <TextBlock Text="{Binding PortableModeText}" TextWrapping="Wrap" FontSize="12"
+                               Foreground="{DynamicResource TextMutedBrush}" LineHeight="18"/>
+                    <Button Content="创建 portable.txt（下次启动生效）" Command="{Binding EnablePortableModeCommand}"
+                            Padding="14,6" Margin="0,10,0,0" HorizontalAlignment="Left"
+                            Visibility="{Binding IsRootDirectoryEditable, Converter={StaticResource BoolToVis}}"
+                            ToolTip="在启动器所在目录放一个 portable.txt，配置 / 实例 / 缓存都改存到该目录；已有数据不会自动搬移"/>
+
+                    <Border Height="1" Background="{DynamicResource BorderBrush}" Margin="0,16,0,14"/>
+
+                    <!-- Round-87: 用户可控的磁盘回收入口：断点续传留下的 .part
+                         与 update/ 里的更新残留，一个按钮说清楚释放了多少 -->
+                    <TextBlock Text="下载残留（断点续传的临时文件 / 未完成的更新包）" Style="{StaticResource FieldLabel}" Margin="0,0,0,6"/>
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="清理残留下载文件" Command="{Binding CleanResidueCommand}"
+                                Padding="14,6" ToolTip="删除未完成的 .part 与 update/ 中的旧更新包；正在下载的文件不会被删"/>
+                        <TextBlock Text="正在清理…" Style="{StaticResource FieldLabel}" VerticalAlignment="Center"
+                                   Margin="10,0,0,0"
+                                   Visibility="{Binding IsCleaningResidue, Converter={StaticResource BoolToVis}}"/>
+                    </StackPanel>
+                    <TextBlock Text="{Binding ResidueStatusText}" Style="{StaticResource FieldLabel}"
+                               TextWrapping="Wrap" Margin="0,8,0,0"
+                               Visibility="{Binding ResidueStatusText, Converter={StaticResource NullToCollapsed}}"/>
+                    <TextBlock Text="正在下载的文件不会被清理；如果某个文件还能在「下载管理」里继续，清理前会先询问。"
+                               Style="{StaticResource FieldLabel}" FontSize="11.5" TextWrapping="Wrap" Margin="0,6,0,0"/>
+
+                    <Border Height="1" Background="{DynamicResource BorderBrush}" Margin="0,16,0,14"/>
+
+                    <!-- Round-88: 扫描整个数据目录，按分类勾选清理。
+                         交互与第 84 轮「扫描未注册实例」一致：先扫描、后确认、如实报告 -->
+                    <TextBlock Text="垃圾缓存（扫描后选择性清理）" Style="{StaticResource FieldLabel}" Margin="0,0,0,6"/>
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="{Binding StorageScanButtonText}" Command="{Binding ScanStorageCleanupCommand}"
+                                Padding="14,6" ToolTip="扫描图标缓存、OptiFine 缓存、旧日志、无主残片、空壳版本目录等；只统计，不删除"/>
+                        <Button Content="{Binding StorageCleanButtonText}" Command="{Binding ApplyStorageCleanupCommand}"
+                                Padding="14,6" Margin="8,0,0,0" ToolTip="只删除勾选的项目；正在下载的文件不会被删"/>
+                    </StackPanel>
+
+                    <!-- 清理可能涉及上万个文件：不确定态进度条 + 按钮文案切换，避免"点了没反应" -->
+                    <ProgressBar IsIndeterminate="True" Height="4" Margin="0,10,0,0">
+                        <ProgressBar.Style>
+                            <Style TargetType="ProgressBar">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsScanningStorage}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsCleaningStorage}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ProgressBar.Style>
+                    </ProgressBar>
+
+                    <TextBlock Text="{Binding StorageCleanupSummary}" Style="{StaticResource FieldLabel}"
+                               TextWrapping="Wrap" Margin="0,8,0,0"
+                               Visibility="{Binding StorageCleanupSummary, Converter={StaticResource NullToCollapsed}}"/>
+
+                    <ItemsControl ItemsSource="{Binding StorageCleanupGroups}" Margin="0,6,0,0"
+                                  IsEnabled="{Binding CanEditStorageSelection}"
+                                  Visibility="{Binding HasStorageCleanupReport, Converter={StaticResource BoolToVis}}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <CheckBox IsChecked="{Binding Selected, Mode=TwoWay}" Margin="0,4,0,0"
+                                          Content="{Binding Label}" ToolTip="{Binding Description}"/>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <TextBlock Text="{Binding StorageCleanupSelectionText}" Style="{StaticResource FieldLabel}"
+                               Margin="0,8,0,0"
+                               Visibility="{Binding StorageCleanupSelectionText, Converter={StaticResource NullToCollapsed}}"/>
+                    <TextBlock Text="{Binding StorageCleanupResult}" Style="{StaticResource FieldLabel}"
+                               TextWrapping="Wrap" Margin="0,6,0,0"
+                               Visibility="{Binding StorageCleanupResult, Converter={StaticResource NullToCollapsed}}"/>
+                    <TextBlock Text="{Binding StorageCleanupHint}"
+                               Style="{StaticResource FieldLabel}" FontSize="11.5" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                    <!-- 两个清理入口的分工（第 88 轮复核）：这里必须说清，否则用户会问"这两个按钮有什么区别" -->
+                    <TextBlock Text="上面「清理残留下载文件」只处理下载残渣（未完成的 .part 与更新包残片）；这里会扫描整个存储目录，把图标/安装器/清单缓存、旧日志、空壳版本目录一起列出来。"
+                               Style="{StaticResource FieldLabel}" FontSize="11.5" TextWrapping="Wrap" Margin="0,4,0,0"/>
                 </StackPanel>
             </Border>
 
@@ -99,8 +184,28 @@
                 <StackPanel>
                     <TextBlock Text="游戏" Style="{StaticResource CardTitle}" Margin="0,0,0,12"/>
 
-                    <TextBlock Text="内存分配 (MB)" Style="{StaticResource FieldLabel}" Margin="0,0,0,6"/>
-                    <TextBox Text="{Binding MemoryMb, UpdateSourceTrigger=PropertyChanged}" Width="180" HorizontalAlignment="Left"/>
+                    <TextBlock Text="内存分配" Style="{StaticResource FieldLabel}" Margin="0,0,0,6"/>
+                    <!-- Round-83: 自动分配（推荐）—— 按物理内存 + 模组数量 + 光影算 -->
+                    <CheckBox Content="自动（推荐）：按物理内存、模组数量与光影计算"
+                              IsChecked="{Binding AutoMemory}" Margin="0,0,0,8"/>
+                    <TextBox Text="{Binding MemoryMb, UpdateSourceTrigger=PropertyChanged}" Width="180"
+                             HorizontalAlignment="Left" IsEnabled="{Binding MemoryManualEnabled}"/>
+                    <TextBlock Text="{Binding MemoryAutoHint}" FontSize="11.5" TextWrapping="Wrap"
+                               Foreground="{DynamicResource TextMutedBrush}" Margin="0,6,0,0"/>
+                    <TextBlock Text="{Binding MemoryWarningText}" FontSize="11.5" TextWrapping="Wrap"
+                               Foreground="{DynamicResource DangerBrush}" Margin="0,6,0,0"
+                               Visibility="{Binding HasMemoryWarning, Converter={StaticResource BoolToVis}}"/>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                        <Button Content="释放启动器占用内存" Command="{Binding DeepCleanMemoryCommand}"
+                                IsEnabled="{Binding CanCleanMemory}" Padding="10,4"
+                                ToolTip="只清理启动器自己的图标缓存并回收本进程工作集；不会碰游戏（Java）进程，也不会清系统内存"/>
+                        <TextBlock Text="{Binding MemoryCleanStatus}" FontSize="11.5" VerticalAlignment="Center"
+                                   Margin="12,0,0,0" TextWrapping="Wrap" MaxWidth="420"
+                                   Foreground="{DynamicResource TextMutedBrush}"/>
+                    </StackPanel>
+                    <CheckBox Content="最小化到托盘 5 分钟后自动释放启动器缓存（不影响游戏）"
+                              IsChecked="{Binding ReleaseIdleMemory}" Margin="0,10,0,0"/>
 
                     <TextBlock Text="Java 路径（留空则自动检测）" Style="{StaticResource FieldLabel}" Margin="0,14,0,6"/>
                     <TextBox Text="{Binding JavaPath, UpdateSourceTrigger=PropertyChanged}"/>
@@ -118,6 +223,8 @@
                     <CheckBox Content="安装 Fabric 实例时自动安装适配的 Fabric API 前置"
                               IsChecked="{Binding AutoInstallFabricApi}" Margin="0,16,0,0"
                               ToolTip="大多数 Fabric Mod 依赖 Fabric API；开启后安装 Fabric 实例/模组时会自动安装适配当前 MC 版本的 Fabric API（关闭则改为弹窗询问）"/>
+                    <CheckBox Content="启动前检查模组依赖与冲突" IsChecked="{Binding CheckModsBeforeLaunch}" Margin="0,12,0,0"
+                              ToolTip="扫描 mods 文件夹里每个模组声明的依赖 / 冲突 / 重复项；发现问题时在启动前提示，可一键补装 Fabric API"/>
                     <TextBlock Text="关闭后安装 Fabric 实例或 Fabric 模组时会弹窗询问是否安装 Fabric API。"
                                Style="{StaticResource FieldLabel}" Margin="0,6,0,0"/>
                 </StackPanel>
@@ -127,9 +234,11 @@
                 <StackPanel>
                     <TextBlock Text="网络" Style="{StaticResource CardTitle}" Margin="0,0,0,12"/>
 
-                    <TextBlock Text="下载源" Style="{StaticResource FieldLabel}" Margin="0,0,0,6"/>
-                    <ComboBox ItemsSource="{Binding DownloadSourceOptions}" SelectedValue="{Binding DownloadSourceText}" Width="220" HorizontalAlignment="Left"/>
-                    <!-- 网络环境自动感知结果（启动探测写入，仅提示不拦截手动修改） -->
+                    <TextBlock Text="下载线路" Style="{StaticResource FieldLabel}" Margin="0,0,0,6"/>
+                    <ComboBox ItemsSource="{Binding DownloadSourceOptions}" SelectedValue="{Binding DownloadPolicyText}"
+                              Width="300" HorizontalAlignment="Left"
+                              ToolTip="自动：两条线路都参与，优先测速更快的一条，失败自动换另一条；也可以强制只走某一条"/>
+                    <!-- 测速结果 + 当前策略（实时计算，不是写死的字符串） -->
                     <TextBlock Text="{Binding NetworkNoteDisplay}" FontSize="11.5" TextWrapping="Wrap"
                                Foreground="{DynamicResource TextMutedBrush}" Margin="0,10,0,0"
                                Visibility="{Binding NetworkNoteDisplay, Converter={StaticResource NullToCollapsed}}"/>
@@ -147,6 +256,34 @@
                 <StackPanel>
                     <TextBlock Text="外观" Style="{StaticResource CardTitle}" Margin="0,0,0,12"/>
                     <Button Content="切换深色 / 浅色主题" Command="{Binding SwitchThemeCommand}" HorizontalAlignment="Left"/>
+
+                    <!-- Round-80: 液态玻璃（默认关闭；开启前有红色性能警告） -->
+                    <TextBlock Text="界面材质（液态玻璃）" Style="{StaticResource FieldLabel}" Margin="0,16,0,6"/>
+                    <ComboBox ItemsSource="{Binding GlassModeOptions}" SelectedItem="{Binding GlassModeText, Mode=TwoWay}"
+                              Width="340" HorizontalAlignment="Left"
+                              ToolTip="默认「关闭」= 原主题。选择任何玻璃方案都会先弹出红色性能警告，确认后才生效"/>
+                    <TextBlock Text="{Binding GlassNote}" Style="{StaticResource FieldLabel}"
+                               TextWrapping="Wrap" Margin="0,8,0,0"/>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource Card}" Margin="0,0,0,14">
+                <StackPanel>
+                    <TextBlock Text="窗口与托盘" Style="{StaticResource CardTitle}" Margin="0,0,0,12"/>
+
+                    <TextBlock Text="关闭窗口时" Style="{StaticResource FieldLabel}" Margin="0,0,0,6"/>
+                    <ComboBox ItemsSource="{Binding CloseActionOptions}" SelectedItem="{Binding CloseActionText}"
+                              Width="320" HorizontalAlignment="Left"
+                              ToolTip="点右上角 × 时的行为。只要还有下载在跑，「直接退出」也会先弹窗确认，不会静默中断"/>
+                    <TextBlock Text="选「直接退出」时，只要还有下载在跑，关闭窗口（含托盘菜单里的退出）仍会先弹窗确认，不会静默中断任务。每次询问我 = 弹窗让你选「退出 / 最小化到托盘」并可勾选记住；最小化到托盘 = 点 × 直接收起，下载继续。"
+                               Style="{StaticResource FieldLabel}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+
+                    <CheckBox Content="启用托盘图标" IsChecked="{Binding TrayEnabled}" Margin="0,14,0,0"
+                              ToolTip="关闭后没有托盘入口，「最小化到托盘」会自动降级为「询问」"/>
+                    <TextBlock Text="{Binding TrayNote}" Style="{StaticResource FieldLabel}"
+                               TextWrapping="Wrap" Margin="0,6,0,0"/>
+                    <TextBlock Text="隐藏到托盘时启动器会停下来不做的：空闲页面预热、界面数值刷新（降到每秒 1 次）。下载与安装照常进行。"
+                               Style="{StaticResource FieldLabel}" TextWrapping="Wrap" Margin="0,6,0,0"/>
                 </StackPanel>
             </Border>
 
@@ -165,7 +302,9 @@
                     <TextBox Text="{Binding UpdateFeedUrlText, UpdateSourceTrigger=PropertyChanged}"/>
 
                     <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
-                        <Button Content="检查更新" Command="{Binding CheckUpdateCommand}" Style="{StaticResource PrimaryButton}" Padding="16,7"/>
+                        <Button Command="{Binding CheckUpdateCommand}"
+                                Content="{Binding CheckUpdateCommand.IsRunning, Converter={StaticResource BoolToText}, ConverterParameter='检查中…|检查更新'}"
+                                Style="{StaticResource PrimaryButton}" Padding="16,7"/>
                         <Button Content="立即重启并应用更新" Command="{Binding RestartToApplyCommand}"
                                 Visibility="{Binding StagedUpdateReady, Converter={StaticResource BoolToVis}}"
                                 Style="{StaticResource PrimaryButton}" Padding="16,7" Margin="10,0,0,0"/>
@@ -192,8 +331,15 @@
                 </StackPanel>
             </Border>
 
-            <Button Content="保存设置" Command="{Binding ApplySettingsCommand}" Style="{StaticResource PrimaryButton}"
-                    Padding="20,9" HorizontalAlignment="Left" Margin="0,0,0,24"/>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,24">
+                <Button Content="保存设置" Command="{Binding ApplySettingsCommand}" Style="{StaticResource PrimaryButton}"
+                        Padding="20,9" VerticalAlignment="Center"/>
+                <!-- Round-90: 改完就走的用户不该靠"记不记得点保存"来决定设置是否生效 -->
+                <TextBlock Text="{Binding SettingsDirtyHint}" FontSize="11.5" VerticalAlignment="Center"
+                           Margin="12,0,0,0" TextWrapping="Wrap" MaxWidth="420"
+                           Foreground="{DynamicResource WarningBrush}"
+                           Visibility="{Binding HasSettingsDirtyHint, Converter={StaticResource BoolToVis}}"/>
+            </StackPanel>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

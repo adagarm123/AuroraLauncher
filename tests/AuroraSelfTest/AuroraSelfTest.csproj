@@ -14,6 +14,9 @@
     <!-- Round-53: VM state-machine regression tests (LoaderCardVM etc.) live
          in the Desktop project; they are pure INPC logic with no UI types. -->
     <ProjectReference Include="..\..\src\AuroraLauncher.Desktop\AuroraLauncher.Desktop.csproj" />
+    <!-- Round-67: nav-smoke diagnostic needs real WPF types. A plain
+         FrameworkReference avoids UseWPF's different implicit-using set. -->
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
   </ItemGroup>
 
 </Project>

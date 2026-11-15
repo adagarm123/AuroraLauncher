@@ -188,19 +188,48 @@ public sealed class DownloadEngine
     private async Task DownloadFileAsync(DownloadEntry entry, Action<long> onBytes, Action<string>? onStatus, CancellationToken ct)
     {
         var dest = entry.Destination;
+
+        // Round-87: tell the residue cleaner that this destination is owned for
+        // as long as we are working on it — including the retry/backoff sleeps,
+        // not just the byte-copy loop. Without this a cleanup click could delete
+        // a 90%-complete modpack chunk out from under a running job.
+        using var _active = ActiveDownloads.Register(dest);
+
+        // Round-73: one writer per destination path across the WHOLE process.
+        // Two instances of the same MC version legitimately download the same
+        // library/asset; without this gate they could open the same .part at
+        // once (sharing violation) or commit a half-written file.
+        using var _gate = await PathWriteGate.AcquireAsync(dest, ct).ConfigureAwait(false);
+
         PathEx.EnsureDirectory(Path.GetDirectoryName(dest)!);
         var part = dest + ".part";
 
-        // Already complete?
-        if (File.Exists(dest) && VerifyHash(dest, entry.ExpectedSha1))
+        // Already complete? (Re-checked AFTER taking the gate: another job may
+        // have finished this very file while we were waiting.)
+        // Round-87: "no hash published" is no longer the same as "complete" —
+        // the size must match too, and if neither is known we cannot tell, so we
+        // download again rather than trusting a possibly truncated file.
+        if (File.Exists(dest))
         {
-            _log.Trace("Download", $"Cached (skip): {entry.DisplayName ?? dest}");
-            return;
+            var cached = DownloadIntegrity.Check(dest, entry.ExpectedSha1, entry.ExpectedSize);
+            if (DownloadIntegrity.IsTrustworthyForSkip(cached))
+            {
+                _log.Trace("Download", $"Cached (skip): {entry.DisplayName ?? dest}");
+                return;
+            }
+            _log.Warn("Download", cached == IntegrityVerdict.Mismatch
+                ? $"Cached file rejected ({entry.DisplayName ?? dest}): size/hash does not match, downloading again."
+                : $"Cached file cannot be verified ({entry.DisplayName ?? dest}): no hash or size published, downloading again.");
         }
 
         // Resume point.
         long existing = 0;
         if (File.Exists(part)) { existing = new FileInfo(part).Length; }
+
+        // Round-74: remember what this file is, so a killed process does not turn
+        // a 5 GB modpack into "download from zero". The completion line is written
+        // after the atomic commit; a leftover entry without a .part is ignored.
+        DownloadJournal.Record(entry);
 
         int hashFailures = 0;
         const int maxHashFailures = 3;
@@ -216,6 +245,7 @@ public sealed class DownloadEngine
             }
 
         const int maxAttempts = 5;
+        var switchedRoute = false;
         for (int attempt = 1; attempt <= maxAttempts; attempt++)
         {
             // Per-attempt IDLE timeout: if no bytes arrive for 25s (stalled
@@ -254,6 +284,12 @@ public sealed class DownloadEngine
                     throw new HttpRequestException($"HTTP {(int)resp.StatusCode} {resp.StatusCode} for {entry.Url}");
                 }
 
+                // Round-87: a size comparison is only meaningful when the bytes
+                // on disk ARE the bytes on the wire. With gzip/brotli we write
+                // the expanded payload, so the published size cannot be checked
+                // here (the hash still can, and it covers the expanded content).
+                var sizeComparable = resp.Content.Headers.ContentEncoding.Count == 0;
+
                 bool append = resp.StatusCode == (HttpStatusCode)206;
                 if (append && startOffset > 0 &&
                     !IsResumeOffsetAcceptable(resp.Content.Headers.ContentRange?.ToString(), startOffset))
@@ -288,8 +324,13 @@ public sealed class DownloadEngine
                     await outStream.FlushAsync(attemptCts.Token).ConfigureAwait(false);
                 } // outStream is closed here so the file can be read/renamed.
 
-                // Verify hash.
-                if (!VerifyHash(part, entry.ExpectedSha1))
+                // Verify hash (or, when no hash was published, the size).
+                // Round-87: only an explicit MISMATCH is a failure here — a body
+                // we just wrote with nothing to compare against cannot be
+                // "wrong", and retrying it would loop forever.
+                var verdict = DownloadIntegrity.Check(part, entry.ExpectedSha1,
+                    sizeComparable ? entry.ExpectedSize : null);
+                if (!DownloadIntegrity.IsAcceptableAfterDownload(verdict))
                 {
                     hashFailures++;
                     // Corrupt payload (resume gone stale or bad CDN node):
@@ -301,24 +342,42 @@ public sealed class DownloadEngine
 
                     if (attempt < maxAttempts)
                     {
-                        _log.Warn("Download", $"Hash mismatch for {entry.DisplayName ?? entry.Url}; invalidating resume, retrying from scratch.");
+                        _log.Warn("Download", $"Integrity mismatch for {entry.DisplayName ?? entry.Url}; invalidating resume, retrying from scratch.");
                         onStatus?.Invoke($"校验失败，从头重下 ({attempt}/{maxAttempts})：{entry.DisplayName ?? entry.Url}");
                         TryDeletePart(part);
                         existing = 0;
                         continue;
                     }
-                    throw new IOException($"Hash mismatch for {entry.DisplayName ?? entry.Url} (expected {entry.ExpectedSha1 ?? "n/a"})");
+                    throw new IOException($"Integrity mismatch for {entry.DisplayName ?? entry.Url} " +
+                        $"(expected {entry.ExpectedSha1 ?? "sha1 n/a"}, {entry.ExpectedSize?.ToString() ?? "size n/a"} bytes)");
                 }
 
                 // Atomic commit.
                 if (File.Exists(dest)) File.Delete(dest);
                 File.Move(part, dest, overwrite: true);
+                DownloadJournal.Complete(dest);
                 _log.Trace("Download", $"Done: {entry.DisplayName ?? dest}");
                 return;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex) when (attempt < maxAttempts)
             {
+                // Round-85: Auto mode picked the faster host once; if that host
+                // dies mid-download (DNS blip, RST, VPN came down), the other
+                // route is one assignment away. Forced policies only fall back
+                // for non-core assets — the user asked us not to silently use
+                // the other host for the files that matter.
+                if (!switchedRoute && RouteSwitchAllowed(entry.Url) &&
+                    AlternateRouteUrl(entry.Url) is { } alternate)
+                {
+                    switchedRoute = true;
+                    _log.Warn("Download",
+                        $"Route failed for {entry.DisplayName ?? entry.Destination}; switching to {HostOf(alternate)}: {ex.Message}");
+                    onStatus?.Invoke($"切换线路重试：{entry.DisplayName ?? entry.Url}");
+                    entry.Url = alternate;
+                    continue; // same attempt budget, different host
+                }
+
                 _log.Warn("Download", $"Attempt {attempt} failed for {entry.DisplayName ?? entry.Url}: {ex.Message}. Retrying...");
                 onStatus?.Invoke($"重试中 ({attempt}/{maxAttempts})：{entry.DisplayName ?? entry.Url}");
                 int delay = (int)(Math.Pow(2, attempt) * 250) + Random.Shared.Next(0, 250);
@@ -333,6 +392,32 @@ public sealed class DownloadEngine
     private static void TryDeletePart(string part)
     {
         try { if (File.Exists(part)) File.Delete(part); } catch { /* best effort */ }
+    }
+
+    /// <summary>Round-85: may this URL silently switch hosts on failure?
+    /// Auto = always yes. Forced = only for non-core assets (icons, sounds,
+    /// language files) — a client.jar must fail loudly instead of pulling bytes
+    /// from a host the user excluded.</summary>
+    public static bool RouteSwitchAllowed(string url)
+    {
+        var policy = LauncherConfig.Instance.RoutePolicy;
+        if (policy == Utils.DownloadPolicy.Auto) return true;
+        return !DownloadRoutePolicy.IsCoreAsset(url);
+    }
+
+    /// <summary>The other host for the same file, or null when the URL cannot be
+    /// mapped back (e.g. an ambiguous /maven/ path — see ToOfficialUrl).</summary>
+    public static string? AlternateRouteUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return null;
+        var isMirror = url.Contains("bmclapi", StringComparison.OrdinalIgnoreCase);
+        var alternate = isMirror ? LauncherConfig.ToOfficialUrl(url) : LauncherConfig.ToBmclapiUrl(url);
+        return string.Equals(alternate, url, StringComparison.OrdinalIgnoreCase) ? null : alternate;
+    }
+
+    private static string HostOf(string url)
+    {
+        try { return new Uri(url).Host; } catch { return url; }
     }
 
     /// <summary>Pure rule: does a 206 Content-Range header confirm resuming
@@ -352,18 +437,6 @@ public sealed class DownloadEngine
         if (!long.TryParse(rangePart[..dashIdx].Trim(), out var from))
             return true; // unparseable start → don't judge (hash check arbitrates)
         return from == startOffset;
-    }
-
-    private static bool VerifyHash(string file, string? expectedSha1)
-    {
-        if (string.IsNullOrEmpty(expectedSha1)) return true;
-        if (!File.Exists(file)) return false;
-        try
-        {
-            var actual = CryptoHelper.Sha1(file);
-            return CryptoHelper.Matches(expectedSha1, actual);
-        }
-        catch { return false; }
     }
 }
 

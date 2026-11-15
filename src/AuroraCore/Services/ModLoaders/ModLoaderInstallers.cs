@@ -345,26 +345,71 @@ public sealed class ModLoaderInstaller
             // Mark the stage BEFORE resolving (metadata lookups can take a few
             // seconds on slow networks) so the UI reflects what is happening.
             onStage?.Invoke("installer-download");
-            var (installerUrl, installerFile, args, versionIdHint) = await ResolveInstallerAsync(type, mcVersion, loaderVersion, ct).ConfigureAwait(false);
+            var (installerUrl, installerFile, args, versionIdHint) =
+                await ResolveInstallerAsync(type, mcVersion, loaderVersion, gameRoot, ct).ConfigureAwait(false);
             if (string.IsNullOrEmpty(installerUrl)) throw new InvalidOperationException("Could not resolve installer download URL.");
 
             PathEx.EnsureDirectory(CacheDir);
             var jarPath = Path.Combine(CacheDir, installerFile);
+
+            // Round-86: an installer jar carries neither a published hash nor a
+            // size, so "already complete?" cannot be answered for it at all.
+            // Round-87 made that explicit (DownloadIntegrity returns Unverifiable
+            // instead of a false "complete"), but we still delete the leftovers
+            // ourselves: an installer that failed halfway must never be handed to
+            // java just because the file exists.
+            foreach (var stale in new[] { jarPath, jarPath + ".part" })
+            {
+                try
+                {
+                    if (!File.Exists(stale)) continue;
+                    File.Delete(stale);
+                    _log.Info("ModLoader", $"清理上次残留的安装器文件：{Path.GetFileName(stale)}");
+                }
+                catch (Exception ex)
+                {
+                    _log.Warn("ModLoader", $"无法清理残留安装器 {stale}: {ex.Message}");
+                }
+            }
+
+            var mirrorUrl = LauncherConfig.ToBmclapiUrl(installerUrl);
+            var canUseMirror = LauncherConfig.Instance.RoutePolicy != DownloadPolicy.Official &&
+                               !string.Equals(mirrorUrl, installerUrl, StringComparison.OrdinalIgnoreCase);
             try
             {
+                log?.Invoke($"[ModLoader] 下载安装器：{installerUrl}");
                 await _engine.DownloadAsync(new[]
                 {
                     new DownloadEntry { Url = installerUrl, Destination = jarPath, DisplayName = installerFile, Category = "installer" }
                 }, null, ct).ConfigureAwait(false);
             }
-            catch (DownloadException)
+            catch (DownloadException first)
             {
-                var mirrorUrl = LauncherConfig.ToBmclapiUrl(installerUrl);
-                _log.Warn("ModLoader", $"Installer official route failed; retrying via BMCLAPI: {mirrorUrl}");
-                await _engine.DownloadAsync(new[]
+                if (!canUseMirror)
+                    throw new InvalidOperationException(
+                        "安装器下载失败，且当前设置为「仅使用官方线路」，不会自动改用镜像：\n" +
+                        $"· {installerUrl}\n· 原因：{first.Message}", first);
+
+                _log.Warn("ModLoader", $"Installer route failed; retrying via BMCLAPI: {mirrorUrl}");
+                log?.Invoke($"[ModLoader] 官方线路失败，改用镜像重试：{mirrorUrl}");
+                try
                 {
-                    new DownloadEntry { Url = mirrorUrl, Destination = jarPath, DisplayName = installerFile, Category = "installer" }
-                }, null, ct).ConfigureAwait(false);
+                    await _engine.DownloadAsync(new[]
+                    {
+                        new DownloadEntry { Url = mirrorUrl, Destination = jarPath, DisplayName = installerFile, Category = "installer" }
+                    }, null, ct).ConfigureAwait(false);
+                }
+                catch (DownloadException second)
+                {
+                    // Both gone: the most likely cause is a wrong path, not a
+                    // flaky network — say so instead of showing a bare 404.
+                    throw new InvalidOperationException(
+                        "安装器下载失败（官方与镜像都不可用）：\n" +
+                        $"· {installerUrl}\n· {mirrorUrl}\n" +
+                        $"常见原因：maven 上不存在这个 {type} 版本。Forge 的路径必须是「MC版本-Forge版本」" +
+                        $"（例如 1.20.1-47.4.22），而整合包通常只给 Forge 版本号。\n" +
+                        $"原始错误：{second.Message}", second);
+                }
             }
 
             var existing = Directory.Exists(Path.Combine(gameRoot, "versions"))
@@ -372,6 +417,24 @@ public sealed class ModLoaderInstaller
                 : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             onStage?.Invoke("installer-run");
+            // Round-94: Forge / NeoForge installers hard-require a launcher
+            // profile file in the target directory — without it they exit 1 with
+            // "There is no Minecraft launcher profile in …, you need to run the
+            // launcher first!". Our data root never had one, so EVERY Forge
+            // install failed at this exact step.
+            var profiles = LauncherProfiles.Ensure(gameRoot);
+            if (profiles.Created)
+                log?.Invoke($"[ModLoader] 安装器需要 launcher_profiles.json，已自动补上：{profiles.Path}");
+            else if (profiles.Repaired)
+                log?.Invoke($"[ModLoader] launcher_profiles.json 无法识别（缺少 profiles），已重建（原文件备份为 .bak）：{profiles.Path}");
+
+            // A JVM far newer than the game is a classic installer failure
+            // ("UnsupportedClassVersionError"): warn before the wall of output.
+            var recommendedMajor = JavaRequirement.RecommendMajor(mcVersion);
+            if (java.Major > recommendedMajor + 2)
+                log?.Invoke($"[ModLoader] 注意：安装器将使用 Java {java.Major}，而 MC {mcVersion} 通常用 Java {recommendedMajor}。" +
+                            "若安装失败，请换用该版本的 Java 再试。");
+
             await RunJavaAsync(java.JavaExecutable, $"-jar \"{jarPath}\" {args}", gameRoot, log, ct).ConfigureAwait(false);
 
             // Detect the newly created loader version directory.
@@ -395,35 +458,39 @@ public sealed class ModLoaderInstaller
     }
 
     // ---------- resolution ----------
-    private async Task<(string Url, string File, string Args, string? VersionIdHint)> ResolveInstallerAsync(ModLoaderType type, string mc, string? loaderVer, CancellationToken ct)
+    private async Task<(string Url, string File, string Args, string? VersionIdHint)> ResolveInstallerAsync(
+        ModLoaderType type, string mc, string? loaderVer, string gameRoot, CancellationToken ct)
     {
         return type switch
         {
-            ModLoaderType.Fabric => await ResolveFabricAsync(mc, loaderVer, ct).ConfigureAwait(false),
-            ModLoaderType.Quilt => await ResolveQuiltAsync(mc, loaderVer, ct).ConfigureAwait(false),
-            ModLoaderType.NeoForge => await ResolveMavenLoaderAsync(mc, loaderVer, ct, "https://maven.neoforged.net/releases/net/neoforged/neoforge", "neoforge", "neoforge-").ConfigureAwait(false),
-            ModLoaderType.Forge => await ResolveMavenLoaderAsync(mc, loaderVer, ct, "https://maven.minecraftforge.net/net/minecraftforge/forge", "forge", "forge-").ConfigureAwait(false),
+            ModLoaderType.Fabric => await ResolveFabricAsync(mc, loaderVer, gameRoot, ct).ConfigureAwait(false),
+            ModLoaderType.Quilt => await ResolveQuiltAsync(mc, loaderVer, gameRoot, ct).ConfigureAwait(false),
+            ModLoaderType.NeoForge => await ResolveMavenLoaderAsync(mc, loaderVer, gameRoot, ct, "https://maven.neoforged.net/releases/net/neoforged/neoforge", "neoforge", "neoforge-").ConfigureAwait(false),
+            ModLoaderType.Forge => await ResolveMavenLoaderAsync(mc, loaderVer, gameRoot, ct, "https://maven.minecraftforge.net/net/minecraftforge/forge", "forge", "forge-").ConfigureAwait(false),
             _ => throw new ArgumentOutOfRangeException(nameof(type))
         };
     }
 
-    private async Task<(string, string, string, string?)> ResolveFabricAsync(string mc, string? loaderVer, CancellationToken ct)
+    private async Task<(string, string, string, string?)> ResolveFabricAsync(string mc, string? loaderVer, string gameRoot, CancellationToken ct)
     {
         var instVer = (await LatestFromMetaAsync("https://meta.fabricmc.net/v2/versions/installer", ct).ConfigureAwait(false));
         var loader = loaderVer ?? (await LatestFromMetaAsync($"https://meta.fabricmc.net/v2/versions/loader/{mc}", ct).ConfigureAwait(false));
         var url = $"https://maven.fabricmc.net/net/fabricmc/fabric-installer/{instVer}/fabric-installer-{instVer}.jar";
         var file = $"fabric-installer-{instVer}.jar";
-        var args = $"client -mcversion {mc} -loader {loader} -dir \"{LauncherConfig.Instance.RootDirectory}\"";
+        // Round-94: the target directory comes from the parameter, not the
+        // global config — otherwise a caller that installs into another root
+        // (tests, portable mode) gets its files written to the wrong place.
+        var args = $"client -mcversion {mc} -loader {loader} -dir \"{gameRoot}\"";
         return (url, file, args, $"fabric-loader-{loader}-{mc}");
     }
 
-    private async Task<(string, string, string, string?)> ResolveQuiltAsync(string mc, string? loaderVer, CancellationToken ct)
+    private async Task<(string, string, string, string?)> ResolveQuiltAsync(string mc, string? loaderVer, string gameRoot, CancellationToken ct)
     {
         var instVer = await LatestFromMetaAsync("https://meta.quiltmc.org/v3/versions/installer", ct).ConfigureAwait(false);
         var loader = loaderVer ?? (await LatestFromMetaAsync($"https://meta.quiltmc.org/v3/versions/loader/{mc}", ct).ConfigureAwait(false));
         var url = $"https://maven.quiltmc.org/repository/release/org/quiltmc/quilt-installer/{instVer}/quilt-installer-{instVer}.jar";
         var file = $"quilt-installer-{instVer}.jar";
-        var args = $"install client {mc} {loader} -d \"{LauncherConfig.Instance.RootDirectory}\"";
+        var args = $"install client {mc} {loader} -d \"{gameRoot}\"";
         return (url, file, args, $"quilt-loader-{loader}-{mc}");
     }
 
@@ -431,7 +498,7 @@ public sealed class ModLoaderInstaller
     /// loader version is given ("自动选择最新"), the newest real version is
     /// taken from the maven metadata (the old "…-latest" filename 404'd).</summary>
     private async Task<(string, string, string, string?)> ResolveMavenLoaderAsync(
-        string mc, string? loaderVer, CancellationToken ct, string mavenBase, string artifact, string hintPrefix)
+        string mc, string? loaderVer, string gameRoot, CancellationToken ct, string mavenBase, string artifact, string hintPrefix)
     {
         var ver = loaderVer;
         if (string.IsNullOrEmpty(ver))
@@ -441,10 +508,42 @@ public sealed class ModLoaderInstaller
             ver = infos.FirstOrDefault()?.Version
                   ?? throw new InvalidOperationException($"{artifact} 暂无 MC {mc} 的可用版本");
         }
-        var url = $"{mavenBase}/{ver}/{artifact}-{ver}-installer.jar";
-        var file = $"{artifact}-{ver}-installer.jar";
-        var args = $"--installClient \"{LauncherConfig.Instance.RootDirectory}\"";
+
+        // Round-86: Forge's maven path is "{mc}-{forge}" for BOTH the directory
+        // and the artifact. A modpack hands us the bare forge version
+        // ("47.4.22"), and ".../forge/47.4.22/forge-47.4.22-installer.jar" is a
+        // hard 404 on the official host AND on BMCLAPI (verified). NeoForge
+        // versions already carry the MC prefix ("21.1.72"), so this rewrite is
+        // Forge-only.
+        if (artifact == "forge") ver = ForgeMavenVersion(mc, ver);
+
+        var (url, file) = BuildMavenInstallerUrl(mavenBase, artifact, ver);
+        var args = $"--installClient \"{gameRoot}\"";
         return (url, file, args, hintPrefix + ver);
+    }
+
+    /// <summary>Round-86 pure: normalize whatever we were told into Forge's
+    /// "{mc}-{forge}" form. Accepts the bare version a modpack provides
+    /// ("47.4.22"), an already-combined one ("1.20.1-47.4.22") and a legacy
+    /// full version id ("forge-1.20.1-47.4.22").</summary>
+    public static string ForgeMavenVersion(string mc, string version)
+    {
+        var v = (version ?? "").Trim();
+        if (v.StartsWith("forge-", StringComparison.OrdinalIgnoreCase))
+            v = v["forge-".Length..];
+        if (v.Length == 0) return v;
+        if (v.StartsWith(mc + "-", StringComparison.OrdinalIgnoreCase)) return v;
+        return $"{mc}-{v}";
+    }
+
+    /// <summary>Round-86 pure: the two strings a maven installer download needs.
+    /// Both are derived from the SAME version string — the 404 in the bug report
+    /// came from a path that said "forge/47.4.22" while the file name also said
+    /// "forge-47.4.22".</summary>
+    public static (string Url, string File) BuildMavenInstallerUrl(string mavenBase, string artifact, string mavenVersion)
+    {
+        var file = $"{artifact}-{mavenVersion}-installer.jar";
+        return ($"{mavenBase}/{mavenVersion}/{file}", file);
     }
 
     // ---------- helpers ----------
@@ -577,7 +676,13 @@ public sealed class ModLoaderInstaller
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Where(l => l.Length > 0)
                 .TakeLast(6));
-            throw new InvalidOperationException($"Installer exited with code {p.ExitCode}. 输出末尾: {tail}");
+            // Round-94: translate the failures we recognise instead of dumping
+            // the raw maven noise at the user.
+            var explanation = LauncherProfiles.Explain(tail);
+            throw new InvalidOperationException(
+                $"Installer exited with code {p.ExitCode}." +
+                (explanation != null ? $" {explanation}" : "") +
+                $" 输出末尾: {tail}");
         }
         return p.ExitCode;
     }

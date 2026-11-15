@@ -57,12 +57,17 @@
 
             <StackPanel Grid.Row="2">
                 <WrapPanel Margin="0,0,0,8">
-                    <Button Content="新建实例" Command="{Binding CreateInstanceCommand}" Style="{StaticResource PrimaryButton}" Margin="0,0,8,8"/>
-                    <Button Content="删除实例" Command="{Binding DeleteSelectedInstanceCommand}" Style="{StaticResource DangerButton}" Margin="0,0,8,8"/>
+                    <Button Content="新建实例" Command="{Binding CreateInstanceCommand}" Style="{StaticResource PrimaryButton}" Margin="0,0,8,8"
+                            ToolTip="去「游戏下载」选版本安装；装完自动出现在这里"/>
+                    <Button Content="删除实例" Command="{Binding DeleteSelectedInstanceCommand}" Style="{StaticResource DangerButton}" Margin="0,0,8,8"
+                            ToolTip="删除该实例的整个文件夹（含存档/模组）以及列表记录"/>
+                    <Button Command="{Binding ScanInstancesCommand}"
+                            Content="{Binding ScanInstancesCommand.IsRunning, Converter={StaticResource BoolToText}, ConverterParameter='扫描中…|扫描未注册实例'}" Margin="0,0,8,8"
+                            ToolTip="对比列表与 instances 文件夹：找回未登记的实例、清理已丢失的死链；陌生文件夹只会报告，不会改动"/>
                     <Button Content="导入 .minecraft" Command="{Binding ImportMinecraftCommand}" Margin="0,0,8,8"/>
                     <Button Content="导入其他启动器" Command="{Binding ImportLauncherCommand}" Margin="0,0,8,8"/>
                 </WrapPanel>
-                <TextBlock Text="删除仅作用于实例目录，绝不触碰其他实例或共享资源；导入为复制式，不会修改源数据。"
+                <TextBlock Text="删除会移除整个实例文件夹（不可恢复）；导入为复制式，不会修改源数据。「扫描未注册实例」只比对、只加记录，不会删除任何文件夹。"
                            Style="{StaticResource FieldLabel}" TextWrapping="Wrap"/>
             </StackPanel>
         </Grid>
@@ -148,10 +153,67 @@
                                           Text="{Binding SelectedInstanceCategory, UpdateSourceTrigger=LostFocus}"
                                           ToolTip="可选预设分类，也可输入自定义分类名"/>
                             </Grid>
+                            <Grid Margin="0,0,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Java" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <ComboBox Grid.Column="1" ItemsSource="{Binding InstanceJavaChoices}"
+                                          DisplayMemberPath="Label" SelectedValuePath="Path"
+                                          SelectedValue="{Binding SelectedInstanceJavaPath, Mode=TwoWay}"
+                                          ToolTip="给这个实例单独指定 Java；选「自动选择」则跟随全局设置和游戏版本需求"/>
+                            </Grid>
+                            <TextBlock Text="{Binding InstanceJavaHint}" Style="{StaticResource FieldLabel}"
+                                       TextWrapping="Wrap" Margin="0,0,0,12"/>
                             <WrapPanel>
                                 <Button Content="修改版本名" Command="{Binding RenameInstanceCommand}" Margin="0,0,8,8"/>
                                 <Button Content="修改版本描述" Command="{Binding EditNotesCommand}" Margin="0,0,8,8"/>
                                 <Button Content="{Binding SelectedInstanceFavoriteText}" Command="{Binding ToggleFavoriteCommand}"/>
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 游玩统计（round-77） -->
+                    <Border Style="{StaticResource Card}" Padding="16" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="游玩统计" Style="{StaticResource CardTitle}" Margin="0,0,0,10"/>
+                            <TextBlock Text="{Binding SelectedInstance.PlayStatsText, TargetNullValue=还没有游玩记录}"
+                                       FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding SelectedInstance.LastPlayedText}" Style="{StaticResource FieldLabel}"
+                                       Margin="0,4,0,0"/>
+                            <TextBlock Text="启动器在游戏进程启动/退出时记录；若启动器被强制结束，下次启动会按最后一次心跳补记（最多一分钟误差）。"
+                                       Style="{StaticResource FieldLabel}" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 存档备份（round-79） -->
+                    <Border Style="{StaticResource Card}" Padding="16" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="存档备份" Style="{StaticResource CardTitle}" Margin="0,0,0,10"/>
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="自动备份" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <ComboBox Grid.Column="1" ItemsSource="{Binding SaveBackupModeOptions}"
+                                          SelectedItem="{Binding SaveBackupText, Mode=TwoWay}"
+                                          ToolTip="启动前备份最安全（游戏还没碰存档）；退出后备份不拖慢启动"/>
+                                <TextBlock Grid.Column="2" Text="保留" Style="{StaticResource FieldLabel}"
+                                           VerticalAlignment="Center" Margin="12,0,8,0"/>
+                                <ComboBox Grid.Column="3" ItemsSource="{Binding SaveBackupKeepOptions}"
+                                          SelectedItem="{Binding SaveBackupKeepText, Mode=TwoWay}" MinWidth="80"/>
+                            </Grid>
+                            <TextBlock Text="{Binding BackupInfoText}" FontWeight="SemiBold" FontSize="12.5" TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding SaveBackupNote}" Style="{StaticResource FieldLabel}"
+                                       TextWrapping="Wrap" Margin="0,6,0,10"/>
+                            <WrapPanel>
+                                <Button Content="立即备份" Command="{Binding BackupSavesNowCommand}"
+                                        Style="{StaticResource PrimaryButton}" Margin="0,0,8,8"/>
+                                <Button Content="打开备份文件夹" Command="{Binding OpenBackupFolderCommand}" Margin="0,0,8,8"/>
                             </WrapPanel>
                         </StackPanel>
                     </Border>
@@ -173,12 +235,17 @@
                         <StackPanel>
                             <TextBlock Text="高级管理" Style="{StaticResource CardTitle}" Margin="0,0,0,12"/>
                             <WrapPanel>
+                                <Button Content="导出整合包 (.mrpack)" Command="{Binding ExportMrpackCommand}" Margin="0,0,8,8"
+                                        ToolTip="把模组与配置打包成 .mrpack：Modrinth 已收录的模组只写下载链接，朋友拖进启动器即可安装"/>
+                                <Button Content="导入整合包" Command="{Binding ImportMrpackCommand}" Margin="0,0,8,8"
+                                        ToolTip="选择本地 .mrpack，自动按包内声明的版本与加载器创建实例并安装"/>
                                 <Button Content="导出启动脚本" Command="{Binding ExportLaunchScriptCommand}" Margin="0,0,8,8"
                                         ToolTip="导出可直接双击运行的 .bat 启动脚本（含登录令牌，请妥善保管）"/>
-                                <Button Content="补全文件" Command="{Binding RepairInstanceCommand}" Margin="0,0,8,8"
-                                        ToolTip="扫描并补全缺失的游戏文件"/>
-                                <Button Content="删除版本" Command="{Binding DeleteSelectedInstanceCommand}" Style="{StaticResource DangerButton}"
-                                        ToolTip="删除该实例（未引用的版本文件会自动清理）"/>
+                                <Button Command="{Binding RepairInstanceCommand}"
+                                        Content="{Binding RepairInstanceCommand.IsRunning, Converter={StaticResource BoolToText}, ConverterParameter='补全中…|补全文件'}" Margin="0,0,8,8"
+                                        ToolTip="扫描并补全缺失的游戏文件（加载器未装完、整合包模组缺失都靠这个补）"/>
+                                <Button Content="删除实例（含文件）" Command="{Binding DeleteSelectedInstanceCommand}" Style="{StaticResource DangerButton}"
+                                        ToolTip="删除整个实例文件夹（存档/模组/配置）+ 列表记录；先删文件，失败则保留记录并提示原因"/>
                             </WrapPanel>
                         </StackPanel>
                     </Border>

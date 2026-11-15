@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Threading;
 using AuroraLauncher.Desktop.ViewModels;
 
 namespace AuroraLauncher.Desktop.Views;
@@ -10,11 +11,17 @@ public partial class SettingsView : UserControl
     public SettingsView()
     {
         InitializeComponent();
-        Loaded += async (_, _) =>
+        // Round-63: Java detection spawns several `java -version` processes.
+        // On a cached page this used to run on every Loaded — single-shot it.
+        // Round-68: trigger on first ACTUAL display instead of first attach, so
+        // idle pre-warming (PageWarmupPolicy) never spawns Java probes for a
+        // page the user has not opened yet.
+        PageLifecycle.OnFirstShown(this, () =>
         {
             if (DataContext is MainViewModel vm && vm.JavaList.Count == 0)
-                await vm.LoadJavaListAsync();
-        };
+                Dispatcher.BeginInvoke(new Action(async () => await vm.LoadJavaListAsync()),
+                    DispatcherPriority.Background);
+        });
     }
 
     /// <summary>Round-49 scroll fix: the Java ListBox (MaxHeight 220) has its

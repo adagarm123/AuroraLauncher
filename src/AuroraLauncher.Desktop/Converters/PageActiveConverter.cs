@@ -11,7 +11,9 @@ public sealed class PageActiveConverter : IValueConverter
     public object Convert(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
     {
         var active = string.Equals(value?.ToString(), parameter?.ToString(), StringComparison.OrdinalIgnoreCase);
-        if (!active) return new SolidColorBrush(Colors.Transparent);
+        // Round-66: reuse the frozen system brush. Every navigation used to
+        // allocate 8 new SolidColorBrush instances (one per inactive nav item).
+        if (!active) return Brushes.Transparent;
         return Application.Current.TryFindResource("NavActiveBrush") as Brush
                ?? new SolidColorBrush(Color.FromArgb(0x2E, 0x7C, 0x6A, 0xF8));
     }

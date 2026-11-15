@@ -12,13 +12,24 @@ public partial class ModsView : UserControl
     {
         InitializeComponent();
         DataContextChanged += (_, _) => HookVm(DataContext as MainViewModel);
-        Loaded += async (_, _) =>
+        Loaded += (_, _) =>
         {
+            // Unloaded unsubscribes; re-subscribe on every re-attach (the
+            // DataContext itself never changes for a cached page).
             HookVm(DataContext as MainViewModel);
-            if (DataContext is MainViewModel vm && vm.ModSearchResults.Count == 0 && vm.ContentKind != "本地管理")
-                await vm.SearchContentAsync();
         };
         Unloaded += (_, _) => HookVm(null);
+        // Round-68: first ACTUAL display, not first attach. Idle pre-warming
+        // attaches this page Hidden; firing a Modrinth search then would hit
+        // the network for a page the user never opened.
+        PageLifecycle.OnFirstShown(this, () =>
+        {
+            // Round-63: a search fired on EVERY visit while results were
+            // empty. Single-shot + background priority + VM single-flight.
+            if (DataContext is MainViewModel vm && vm.ModSearchResults.Count == 0 && vm.ContentKind != "本地管理")
+                Dispatcher.BeginInvoke(new Action(async () => await vm.SearchContentAsync()),
+                    DispatcherPriority.Background);
+        });
     }
 
     private MainViewModel? _hooked;
@@ -36,7 +47,7 @@ public partial class ModsView : UserControl
         // When the detail page opens, auto-scroll to the first group that
         // contains a version compatible with the selected instance.
         if (e.PropertyName == nameof(MainViewModel.ShowContentDetail)
-            && sender is MainViewModel vm && vm.ShowContentDetail)
+            && sender is MainViewModel vm && vm.ShowContentDetail && IsVisible)
         {
             Dispatcher.BeginInvoke(ScrollToCompatibleGroup, DispatcherPriority.Loaded);
         }
@@ -44,6 +55,7 @@ public partial class ModsView : UserControl
 
     private void ScrollToCompatibleGroup()
     {
+        if (!IsVisible) return; // hidden pages must never force layout (round-65)
         if (DataContext is not MainViewModel vm) return;
         if (!vm.ShowContentDetail || vm.DetailRows.Count == 0) return;
 

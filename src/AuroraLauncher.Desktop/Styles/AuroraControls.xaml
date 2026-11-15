@@ -20,7 +20,7 @@
   </Style>
 
   <Style x:Key="CardTitle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
-    <Setter Property="FontSize" Value="15"/>
+    <Setter Property="FontSize" Value="16"/>
     <Setter Property="FontWeight" Value="SemiBold"/>
   </Style>
 
@@ -35,30 +35,19 @@
   </Style>
 
   <!-- ============ Card ============ -->
-  <DropShadowEffect x:Key="CardShadow" BlurRadius="22" ShadowDepth="3" Direction="270" Opacity="0.20"/>
-  <DropShadowEffect x:Key="HeroShadow" BlurRadius="30" ShadowDepth="5" Direction="270" Opacity="0.35"/>
-  <DropShadowEffect x:Key="PopupShadow" BlurRadius="18" ShadowDepth="3" Direction="270" Opacity="0.35"/>
-  <DropShadowEffect x:Key="FocusGlow" BlurRadius="8" ShadowDepth="0" Opacity="0.55" Color="#7C6AF8"/>
-
+  <!-- Round-67: NO DropShadowEffect, NO BitmapCache, NO visibility triggers.
+       Round-66 released Effect/CacheMode on hidden pages — but with pages
+       kept alive (round-65) that turned EVERY navigation into a full
+       re-generation of software-rendered shadow bitmaps for EVERY card on
+       the incoming page. One click could freeze/crash the UI. The whole
+       effect/cache class is removed; depth now comes from the rounded
+       border + background contrast, which costs nothing to render. -->
   <Style x:Key="Card" TargetType="Border">
     <Setter Property="Background" Value="{DynamicResource PanelBrush}"/>
-    <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource CardEdgeBrush}"/>
     <Setter Property="BorderThickness" Value="1"/>
-    <Setter Property="CornerRadius" Value="12"/>
-    <Setter Property="Padding" Value="18"/>
-    <Setter Property="Effect" Value="{StaticResource CardShadow}"/>
-    <!-- Round-49 scroll smoothness: cache the card + its DropShadow as a
-         texture so scrolling re-uses the cached bitmap instead of
-         re-rendering the (software-rendered) blur every frame.
-         Round-51: EnableClearType=True — cards DO contain text, and the
-         default (false) would render it as grayscale antialiasing instead
-         of ClearType. DPI rescaling is handled by MainWindow.DpiChanged
-         (RenderAtScale update); theme switches re-render automatically. -->
-    <Setter Property="CacheMode">
-      <Setter.Value>
-        <BitmapCache EnableClearType="True"/>
-      </Setter.Value>
-    </Setter>
+    <Setter Property="CornerRadius" Value="16"/>
+    <Setter Property="Padding" Value="22"/>
   </Style>
 
   <Style x:Key="Chip" TargetType="Border">
@@ -156,6 +145,44 @@
     <Setter Property="BorderBrush" Value="{DynamicResource InputBorderBrush}"/>
   </Style>
 
+  <!-- ============ Round-81: 玻璃皮肤的胶囊 / 描边按钮 ============ -->
+  <!-- 胶囊主按钮：24px 圆角 + 品牌渐变，右侧留白更"呼吸"。 -->
+  <ControlTemplate x:Key="PillButtonTemplate" TargetType="Button">
+    <Border x:Name="Bd" Background="{TemplateBinding Background}"
+            BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+            CornerRadius="24" Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+      <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+    </Border>
+    <ControlTemplate.Triggers>
+      <Trigger Property="IsMouseOver" Value="True">
+        <Setter TargetName="Bd" Property="Opacity" Value="0.9"/>
+      </Trigger>
+      <Trigger Property="IsPressed" Value="True">
+        <Setter TargetName="Bd" Property="Opacity" Value="0.75"/>
+      </Trigger>
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter TargetName="Bd" Property="Opacity" Value="0.45"/>
+      </Trigger>
+    </ControlTemplate.Triggers>
+  </ControlTemplate>
+
+  <Style x:Key="PillButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+    <Setter Property="Background" Value="{DynamicResource AccentGradient}"/>
+    <Setter Property="Foreground" Value="White"/>
+    <Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
+    <Setter Property="Padding" Value="26,11"/>
+    <Setter Property="Template" Value="{StaticResource PillButtonTemplate}"/>
+  </Style>
+
+  <!-- 次要按钮：透明底 + 1px 高光描边（图 1 的"呼吸感"来自这里）。 -->
+  <Style x:Key="OutlineButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource OutlineBorderBrush}"/>
+    <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+    <Setter Property="Padding" Value="16,7"/>
+  </Style>
+
   <!-- ============ TextBox ============ -->
   <Style TargetType="TextBox">
     <Setter Property="Background" Value="{DynamicResource InputBgBrush}"/>
@@ -178,7 +205,7 @@
             </Trigger>
             <Trigger Property="IsKeyboardFocused" Value="True">
               <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
-              <Setter TargetName="Bd" Property="Effect" Value="{StaticResource FocusGlow}"/>
+              <!-- Round-67: no Effect (software-rendered DropShadow) here. -->
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter TargetName="Bd" Property="Opacity" Value="0.45"/>
@@ -239,9 +266,7 @@
                       BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
                       Margin="10,4,10,12" Padding="5" MinWidth="{TemplateBinding ActualWidth}"
                       MaxHeight="{TemplateBinding MaxDropDownHeight}">
-                <Border.Effect>
-                  <DropShadowEffect BlurRadius="16" ShadowDepth="2" Direction="270" Opacity="0.35"/>
-                </Border.Effect>
+                <!-- Round-67: no software-rendered DropShadow on the popup. -->
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                   <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/>
                 </ScrollViewer>
@@ -287,6 +312,14 @@
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="BorderThickness" Value="0"/>
     <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+    <!-- Round-66: guarantee container recycling for EVERY list (103 version
+         rows, hundreds of log lines, search results). Without this, a list
+         inside an unconstrained panel can materialise all containers and
+         keep them alive on a hidden page. Never wrap a ListBox in an outer
+         ScrollViewer — that disables virtualization (round-17 lesson). -->
+    <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True"/>
+    <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling"/>
+    <Setter Property="ScrollViewer.CanContentScroll" Value="True"/>
   </Style>
 
   <Style TargetType="ListBoxItem">
@@ -347,16 +380,15 @@
             <Trigger Property="IsIndeterminate" Value="True">
               <Setter TargetName="PART_Indicator" Property="Visibility" Value="Collapsed"/>
               <Setter TargetName="IndeterminateBar" Property="Opacity" Value="1"/>
-              <Trigger.EnterActions>
-                <BeginStoryboard>
-                  <Storyboard RepeatBehavior="Forever">
-                    <DoubleAnimation Storyboard.TargetName="IndeterminateBar"
-                                     Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.X)"
-                                     From="0" To="80" Duration="0:0:0.9"/>
-                  </Storyboard>
-                </BeginStoryboard>
-              </Trigger.EnterActions>
             </Trigger>
+            <!-- Round-67: NO storyboard at all. Round-66 paired the Forever
+                 animation with StopStoryboard, but a real window has four
+                 indeterminate bars across always-resident pages and anything
+                 time-based on the UI thread is a liability. The template's
+                 IndeterminateBar is a repeating gradient: shown statically it
+                 still reads as "busy", with zero animation clocks, zero
+                 timelines and nothing that can accumulate. -->
+            <!-- (intentionally no time-based animation here) -->
           </ControlTemplate.Triggers>
         </ControlTemplate>
       </Setter.Value>

@@ -35,6 +35,15 @@
   <SolidColorBrush x:Key="ListHoverBrush" Color="#232739"/>
   <SolidColorBrush x:Key="ListSelectedBrush" Color="#2E7C6AF8"/>
   <SolidColorBrush x:Key="NavActiveBrush" Color="#2E7C6AF8"/>
+  <!-- Round-81: hairline used by outline buttons / glass dividers. -->
+  <SolidColorBrush x:Key="OutlineBorderBrush" Color="#55FFFFFF"/>
+  <SolidColorBrush x:Key="HairlineBrush" Color="#22FFFFFF"/>
+  <!-- 卡片边缘：斜向高光，亮 → 极淡 → 微亮，模拟光在玻璃边缘的折射 -->
+  <LinearGradientBrush x:Key="CardEdgeBrush" StartPoint="0,0" EndPoint="1,1">
+    <GradientStop Color="#33FFFFFF" Offset="0"/>
+    <GradientStop Color="#0AFFFFFF" Offset="0.5"/>
+    <GradientStop Color="#1AFFFFFF" Offset="1"/>
+  </LinearGradientBrush>
   <SolidColorBrush x:Key="ChipBrush" Color="#262A3A"/>
   <SolidColorBrush x:Key="ScrollBrush" Color="#3C415C"/>
 

@@ -4,11 +4,24 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:AuroraLauncher.Desktop"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         mc:Ignorable="d"
         Title="Aurora Launcher" Height="720" Width="1160" MinHeight="640" MinWidth="980"
         Icon="/app.ico"
         FontFamily="Segoe UI, Microsoft YaHei UI"
-        Background="{DynamicResource BgBrush}" Foreground="{DynamicResource TextBrush}">
+        Foreground="{DynamicResource TextBrush}"
+        AllowDrop="True" DragOver="OnFileDragOver" Drop="OnFileDrop"
+        PreviewKeyDown="OnWindowPreviewKeyDown"
+        SizeChanged="OnWindowFrameSizeChanged"
+        StateChanged="OnWindowStateChanged"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ResizeMode="CanResize" WindowStartupLocation="CenterScreen">
+    <!-- Round-81: 去掉系统边框，自绘标题栏（拖动 / 最小化 / 最大化 / 关闭）。
+         WindowChrome 保留贴边缩放与 Aero Snap。 -->
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="0" ResizeBorderThickness="6"
+                            GlassFrameThickness="0" UseAeroCaptionButtons="False"/>
+    </shell:WindowChrome.WindowChrome>
     <Window.Resources>
         <Style x:Key="NavGlyph" TargetType="TextBlock">
             <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets"/>
@@ -25,14 +38,26 @@
             <Setter Property="FontSize" Value="14"/>
         </Style>
     </Window.Resources>
-    <Grid>
+    <Grid x:Name="WindowRoot" Background="{DynamicResource BgBrush}">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="236"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
+        <!-- Round-81: 底层光影（矢量渐变，无位图、无 Effect），仅玻璃模式可见。
+             左上紫、右上蓝、右下极光绿、左下品红 —— 图 1 的"底下有光"靠它。 -->
+        <Rectangle x:Name="GlassWallpaper" Grid.ColumnSpan="2" IsHitTestVisible="False"
+                   Visibility="Collapsed" RadiusX="12" RadiusY="12"/>
+
+        <!-- Round-80/81: 玻璃噪点层（仅伪玻璃模式可见）。纯平铺位图填充，没有 Effect、
+             没有动画、没有 BitmapCache —— 成本等同多刷一个矩形。 -->
+        <Rectangle x:Name="GlassNoiseOverlay" Grid.ColumnSpan="2" IsHitTestVisible="False"
+                   Visibility="Collapsed" Opacity="0.9"/>
+
         <!-- ======== Sidebar ======== -->
-        <Border Grid.Column="0" Background="{DynamicResource BgDeepBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0">
+        <Border Grid.Column="0" Background="{DynamicResource BgDeepBrush}"
+                BorderBrush="{DynamicResource HairlineBrush}" BorderThickness="0,0,1,0"
+                MouseLeftButtonDown="OnTitleBarDrag">
             <DockPanel LastChildFill="True">
                 <!-- Brand -->
                 <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="20,20,16,18">
@@ -136,9 +161,31 @@
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <!-- Status bar -->
-            <Border Grid.Row="0" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="20,12">
+            <!-- Status bar / 自定义标题栏（可拖动，右侧为窗口按钮） -->
+            <Border Grid.Row="0" Background="{DynamicResource PanelBrush}"
+                    BorderBrush="{DynamicResource HairlineBrush}" BorderThickness="0,0,0,1" Padding="20,10"
+                    MouseLeftButtonDown="OnTitleBarDrag">
                 <DockPanel LastChildFill="True">
+                    <!-- 窗口按钮（最右） -->
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center"
+                                Margin="6,0,0,0">
+                        <Button Click="OnWindowMinimize" Style="{StaticResource GhostButton}"
+                                Padding="0" Width="34" Height="26" BorderThickness="0" Background="Transparent"
+                                ToolTip="最小化">
+                            <TextBlock Text="&#xE921;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="11"/>
+                        </Button>
+                        <Button Click="OnWindowMaximizeToggle" Style="{StaticResource GhostButton}"
+                                Padding="0" Width="34" Height="26" BorderThickness="0" Background="Transparent"
+                                ToolTip="最大化 / 还原">
+                            <TextBlock x:Name="MaximizeGlyph" Text="&#xE922;"
+                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="11"/>
+                        </Button>
+                        <Button Click="OnWindowClose" Style="{StaticResource GhostButton}"
+                                Padding="0" Width="34" Height="26" BorderThickness="0" Background="Transparent"
+                                ToolTip="关闭">
+                            <TextBlock Text="&#xE8BB;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="11"/>
+                        </Button>
+                    </StackPanel>
                     <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
                         <Ellipse Width="9" Height="9" VerticalAlignment="Center">
                             <Ellipse.Style>
@@ -162,15 +209,93 @@
                     <Border DockPanel.Dock="Right" Style="{StaticResource Chip}" HorizontalAlignment="Right" VerticalAlignment="Center">
                         <TextBlock Text="Aurora Launcher" FontSize="11" Foreground="{DynamicResource TextMutedBrush}"/>
                     </Border>
+                    <!-- Round-79: Ctrl+K 全局搜索的可见入口（纯键盘入口没人会发现） -->
+                    <Button DockPanel.Dock="Right" Command="{Binding TogglePaletteCommand}"
+                            Margin="0,0,10,0" Padding="10,4" VerticalAlignment="Center"
+                            Style="{StaticResource GhostButton}"
+                            ToolTip="全局搜索（Ctrl + K）：实例 / 模组 / 页面 / 操作">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                       FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock Text="搜索" VerticalAlignment="Center" FontSize="12"/>
+                            <Border Background="{DynamicResource InputBgBrush}" CornerRadius="4" Padding="5,1" Margin="7,0,0,0">
+                                <TextBlock Text="Ctrl K" FontSize="10" Foreground="{DynamicResource TextMutedBrush}"/>
+                            </Border>
+                        </StackPanel>
+                    </Button>
                     <Grid/>
                 </DockPanel>
             </Border>
 
-            <ContentControl Grid.Row="1" Content="{Binding CurrentPage}"/>
+            <!-- Round-65: pages are created lazily and STAY in this host;
+                 navigation only flips Visibility. Swapping ContentControl
+                 .Content destroyed and rebuilt the whole visual tree on
+                 every sidebar click ("未响应"). See MainWindow.xaml.cs. -->
+            <Grid x:Name="PageHost" Grid.Row="1"/>
+        </Grid>
+
+        <!-- Round-81: 1px 窗口边缘高光（无边框窗口靠它区分屏幕背景），不吃点击 -->
+        <Border x:Name="WindowEdge" Grid.ColumnSpan="2" CornerRadius="12" IsHitTestVisible="False"
+                BorderBrush="{DynamicResource HairlineBrush}" BorderThickness="1"/>
+
+        <!-- ======== Ctrl+K 全局搜索（round-79） ======== -->
+        <Grid Grid.RowSpan="2" Grid.ColumnSpan="2" Panel.ZIndex="120"
+              Visibility="{Binding IsPaletteOpen, Converter={StaticResource BoolToVis}}">
+            <Border Background="#8C0E1119" MouseDown="OnPaletteBackdropClick"/>
+            <Border Style="{StaticResource Card}" Width="640" MaxHeight="460" Padding="0"
+                    HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,88,0,0"
+                    BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1">
+                <DockPanel>
+                    <Grid DockPanel.Dock="Top" Margin="14,12,8,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="PaletteInput" BorderThickness="0" Background="Transparent" FontSize="15"
+                                 Text="{Binding PaletteQuery, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="输入实例名、模组名、页面或操作，例如「内存」「sodium」「备份」"/>
+                        <Button Grid.Column="1" Content="✕" Command="{Binding ClosePaletteCommand}"
+                                Style="{StaticResource GhostButton}" Padding="9,2" FontSize="12"/>
+                    </Grid>
+                    <Separator DockPanel.Dock="Top"/>
+                    <TextBlock DockPanel.Dock="Bottom" Text="{Binding PaletteNote}" FontSize="11"
+                               Foreground="{DynamicResource TextMutedBrush}" Margin="14,6,14,10"/>
+                    <ListBox ItemsSource="{Binding PaletteResults}"
+                             SelectedItem="{Binding PaletteSelected, Mode=TwoWay}"
+                             MouseDoubleClick="OnPaletteItemDoubleClick"
+                             BorderThickness="0" Background="Transparent" MaxHeight="340"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="2,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding Glyph}" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                               FontSize="15" Width="26" VerticalAlignment="Center"
+                                               Foreground="{DynamicResource AccentBrush}"/>
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="SemiBold"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Text="{Binding Subtitle}" FontSize="11.5" TextTrimming="CharacterEllipsis"
+                                                   Foreground="{DynamicResource TextMutedBrush}"/>
+                                    </StackPanel>
+                                    <Border Grid.Column="2" Style="{StaticResource Chip}" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding KindText}" FontSize="10.5"
+                                                   Foreground="{DynamicResource TextMutedBrush}"/>
+                                    </Border>
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+            </Border>
         </Grid>
 
         <!-- ======== 首次启动引导浮层 ======== -->
-        <Grid Grid.RowSpan="2" Grid.ColumnSpan="2"
+        <Grid Grid.RowSpan="2" Grid.ColumnSpan="2" Panel.ZIndex="130"
               Visibility="{Binding FirstRunWizardVisible, Converter={StaticResource BoolToVis}}">
             <Border Background="{DynamicResource BgDeepBrush}" Opacity="0.97"/>
             <Border Background="Transparent" MaxWidth="620" MaxHeight="520"

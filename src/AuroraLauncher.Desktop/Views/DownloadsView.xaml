@@ -16,176 +16,282 @@
             <Setter Property="HorizontalAlignment" Value="Center"/>
             <Setter Property="Margin" Value="0,8,0,0"/>
         </Style>
-        <!-- Stage marker: percent while running, check when done -->
-        <Style x:Key="StageMarker" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="13.5"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Width" Value="52"/>
-            <Setter Property="TextAlignment" Value="Right"/>
+        <Style x:Key="KindChip" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}"/>
+            <Setter Property="CornerRadius" Value="7"/>
+            <Setter Property="Padding" Value="8,2"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}"/>
-            <Style.Triggers>
-                <DataTrigger Binding="{Binding State}" Value="Running">
-                    <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
-                </DataTrigger>
-                <DataTrigger Binding="{Binding State}" Value="Done">
-                    <Setter Property="Foreground" Value="{DynamicResource SuccessBrush}"/>
-                </DataTrigger>
-                <DataTrigger Binding="{Binding State}" Value="Failed">
-                    <Setter Property="Foreground" Value="{DynamicResource DangerBrush}"/>
-                </DataTrigger>
-            </Style.Triggers>
         </Style>
-        <Style x:Key="StageLabel" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
-            <Setter Property="FontSize" Value="14"/>
-            <Setter Property="Margin" Value="14,0,0,0"/>
-            <Setter Property="VerticalAlignment" Value="Center"/>
+        <Style x:Key="MetaText" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Setter Property="FontSize" Value="11.5"/>
             <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}"/>
-            <Style.Triggers>
-                <DataTrigger Binding="{Binding State}" Value="Running">
-                    <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
-                    <Setter Property="FontWeight" Value="SemiBold"/>
-                </DataTrigger>
-                <DataTrigger Binding="{Binding State}" Value="Done">
-                    <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
-                </DataTrigger>
-                <DataTrigger Binding="{Binding State}" Value="Failed">
-                    <Setter Property="Foreground" Value="{DynamicResource DangerBrush}"/>
-                    <Setter Property="FontWeight" Value="SemiBold"/>
-                </DataTrigger>
-            </Style.Triggers>
+            <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
     </UserControl.Resources>
 
     <Grid Margin="24">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="240"/>
+            <ColumnDefinition Width="250"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <!-- ======== 左侧统计（总进度 / 速度 / 剩余文件） ======== -->
+        <!-- ======== 左侧：多任务汇总 ======== -->
         <Border Grid.Column="0" Margin="0,0,14,0">
             <StackPanel VerticalAlignment="Center">
-                <StackPanel Margin="0,0,0,26">
+                <StackPanel Margin="0,0,0,22">
                     <TextBlock Text="总进度" Style="{StaticResource StatLabel}"/>
-                    <Separator Margin="14,8,14,0" Width="130"/>
-                    <TextBlock Style="{StaticResource StatValue}" HorizontalAlignment="Center">
-                        <Run Text="{Binding Download.Percent, Mode=OneWay}"/>
+                    <TextBlock Style="{StaticResource StatValue}">
+                        <Run Text="{Binding DownloadAggregatePercent, Mode=OneWay}"/>
                         <Run Text="%"/>
                     </TextBlock>
+                    <ProgressBar Height="6" Margin="18,10,18,0" Value="{Binding DownloadAggregatePercent, Mode=OneWay}"
+                                 Minimum="0" Maximum="100"/>
                 </StackPanel>
-                <StackPanel Margin="0,0,0,26">
-                    <TextBlock Text="下载速度" Style="{StaticResource StatLabel}"/>
-                    <Separator Margin="14,8,14,0" Width="130"/>
-                    <TextBlock Text="{Binding Download.Speed}" Style="{StaticResource StatValue}" FontSize="22"/>
+                <StackPanel Margin="0,0,0,22">
+                    <TextBlock Text="合计速度" Style="{StaticResource StatLabel}"/>
+                    <TextBlock Text="{Binding DownloadSpeedText}" Style="{StaticResource StatValue}" FontSize="20"/>
                 </StackPanel>
-                <StackPanel>
-                    <TextBlock Text="剩余文件" Style="{StaticResource StatLabel}"/>
-                    <Separator Margin="14,8,14,0" Width="130"/>
-                    <TextBlock Text="{Binding Download.Remaining}" Style="{StaticResource StatValue}"/>
+                <StackPanel Margin="0,0,0,16">
+                    <TextBlock Text="任务" Style="{StaticResource StatLabel}"/>
+                    <TextBlock Text="{Binding DownloadSummaryText}" FontSize="13" FontWeight="SemiBold"
+                               HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" Margin="0,6,0,0"/>
                 </StackPanel>
-                <!-- 当前状态（重试/跳过等），有消息时显示 -->
-                <TextBlock Text="{Binding Download.Detail}" FontSize="11.5" TextWrapping="Wrap" TextAlignment="Center"
-                           Foreground="{DynamicResource WarningBrush}" Margin="0,14,0,0">
-                    <TextBlock.Style>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="Visibility" Value="Collapsed"/>
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding Download.HasDetail}" Value="True">
-                                    <Setter Property="Visibility" Value="Visible"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </TextBlock.Style>
-                </TextBlock>
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                    <Button Content="全部取消" Command="{Binding CancelAllDownloadsCommand}"
+                            Style="{StaticResource DangerButton}" Padding="14,7" Margin="0,0,8,0"
+                            ToolTip="取消所有进行中与排队中的任务；已完成的记录留在列表里"/>
+                    <Button Content="清理已完成" Command="{Binding ClearFinishedDownloadsCommand}"
+                            Padding="12,7" IsEnabled="{Binding CanClearFinished}"
+                            ToolTip="从列表移除已完成 / 失败 / 已取消的任务（不影响已安装的文件）"/>
+                </StackPanel>
+
+                <TextBlock Text="最多同时进行 3 个任务，其余自动排队；每个任务可单独取消。"
+                           Style="{StaticResource StatLabel}" Margin="8,16,8,0" TextWrapping="Wrap"/>
             </StackPanel>
         </Border>
 
-        <!-- ======== 右侧安装流程图 ======== -->
-        <Border Grid.Column="1" Style="{StaticResource Card}" Padding="22,18">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
+        <!-- ======== 右侧：任务列表 + 选中任务阶段 ======== -->
+        <Grid Grid.Column="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
 
-                <TextBlock Grid.Row="0" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,14"
-                           Text="{Binding InstallTitle, Mode=OneWay}"/>
+            <StackPanel Grid.Row="0" Margin="0,0,0,12">
+                <TextBlock Text="下载管理" Style="{StaticResource PageTitle}"/>
+                <TextBlock Text="同时查看并管理不同实例、整合包、模组与修复任务；每个任务独立进度、独立取消。"
+                           Style="{StaticResource PageSubtitle}"/>
+            </StackPanel>
 
-                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                    <StackPanel>
-                        <!-- 安装成功横幅 -->
-                        <Border CornerRadius="8" Background="{DynamicResource SuccessSoftBrush}" Padding="14,10" Margin="0,0,0,10"
-                                Visibility="{Binding InstallSuccess, Converter={StaticResource NullToCollapsed}}">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="&#xE73E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="16"
-                                           Foreground="{DynamicResource SuccessBrush}" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                                <TextBlock Text="{Binding InstallSuccess}" FontSize="13.5" FontWeight="SemiBold"
-                                           Foreground="{DynamicResource SuccessBrush}" VerticalAlignment="Center" TextWrapping="Wrap"/>
-                            </StackPanel>
-                        </Border>
-                        <!-- 失败原因 -->
-                        <Border CornerRadius="8" Background="{DynamicResource DangerSoftBrush}" Padding="12,9" Margin="0,0,0,10"
-                                Visibility="{Binding InstallError, Converter={StaticResource NullToCollapsed}}">
-                            <TextBlock Text="{Binding InstallError}" FontSize="12" TextWrapping="Wrap"
-                                       Foreground="{DynamicResource DangerBrush}"/>
-                        </Border>
-                        <ItemsControl ItemsSource="{Binding InstallStages}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Grid Margin="0,7">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="60"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{Binding Marker}" Style="{StaticResource StageMarker}"/>
-                                        <TextBlock Grid.Column="1" Text="{Binding Label}" Style="{StaticResource StageLabel}"
-                                                   TextTrimming="CharacterEllipsis"/>
-                                    </Grid>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-
-                        <!-- 空状态 -->
-                        <StackPanel>
-                            <StackPanel.Style>
-                                <Style TargetType="StackPanel">
-                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding InstallStages.Count}" Value="0">
-                                            <Setter Property="Visibility" Value="Visible"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </StackPanel.Style>
-                            <TextBlock Text="当前没有安装任务" Foreground="{DynamicResource TextMutedBrush}" Margin="0,10,0,4"/>
-                            <TextBlock Text="在「游戏下载」页选择版本并点击安装，或在「内容中心」安装整合包时，这里会显示安装流程。"
-                                       Foreground="{DynamicResource TextMutedBrush}" FontSize="12" TextWrapping="Wrap"/>
+            <StackPanel Grid.Row="1">
+                <!-- Round-74：被强杀 / 断电后残留的 .part，一次性询问是否续传 -->
+                <Border CornerRadius="8" Background="{DynamicResource PanelAltBrush}" Padding="14,11" Margin="0,0,0,10"
+                        BorderBrush="{DynamicResource WarningBrush}" BorderThickness="1"
+                        Visibility="{Binding HasPendingDownloads, Converter={StaticResource BoolToVis}}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="&#xE81C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="18"
+                                   Foreground="{DynamicResource WarningBrush}" VerticalAlignment="Top" Margin="0,2,0,0"/>
+                        <StackPanel Grid.Column="1" Margin="11,0,14,0">
+                            <TextBlock Text="上次有下载没有完成" FontSize="13.5" FontWeight="SemiBold"/>
+                            <TextBlock Text="{Binding PendingDownloadsText}" FontSize="12" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource TextMutedBrush}" Margin="0,3,0,0"/>
                         </StackPanel>
-                    </StackPanel>
-                </ScrollViewer>
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button Content="继续下载" Command="{Binding ResumePendingDownloadsCommand}"
+                                    Style="{StaticResource PrimaryButton}" Padding="14,6" Margin="0,0,8,0"
+                                    ToolTip="从已下载的位置继续（断点续传），不会从头开始"/>
+                            <Button Content="忽略并清理" Command="{Binding DismissPendingDownloadsCommand}"
+                                    Padding="12,6" ToolTip="删掉未完成的临时文件，释放磁盘空间"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
 
-                <!-- 底部动作区：运行中显示取消，完成后显示启动 -->
-                <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,16,0,0">
-                    <Button Content="取消下载" Command="{Binding CancelDownloadCommand}"
-                            Padding="18,8" Margin="0,0,10,0">
-                        <Button.Style>
-                            <Style TargetType="Button" BasedOn="{StaticResource DangerButton}">
-                                <Setter Property="Visibility" Value="Visible"/>
+                <!-- Round-87：无主 .part 超过阈值时的一条非阻塞提示（只在真的攒多了才出现） -->
+                <Border CornerRadius="8" Background="{DynamicResource PanelAltBrush}" Padding="14,10" Margin="0,0,0,10"
+                        BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                        Visibility="{Binding HasResidueNotice, Converter={StaticResource BoolToVis}}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="&#xE74D;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="16"
+                                   Foreground="{DynamicResource TextMutedBrush}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="{Binding ResidueNoticeText}" FontSize="12.5" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TextMutedBrush}" VerticalAlignment="Center"
+                                   Margin="11,0,14,0"/>
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button Content="去设置清理" Command="{Binding OpenResidueSettingsCommand}"
+                                    Padding="12,5" Margin="0,0,8,0" ToolTip="打开设置页的「清理残留下载文件」"/>
+                            <Button Content="知道了" Command="{Binding DismissResidueNoticeCommand}"
+                                    Padding="10,5" ToolTip="本次运行不再提示（不会删除任何文件）"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <Border CornerRadius="8" Background="{DynamicResource SuccessSoftBrush}" Padding="14,10" Margin="0,0,0,10"
+                        Visibility="{Binding InstallSuccess, Converter={StaticResource NullToCollapsed}}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE73E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="16"
+                                   Foreground="{DynamicResource SuccessBrush}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <TextBlock Text="{Binding InstallSuccess}" FontSize="13.5" FontWeight="SemiBold" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource SuccessBrush}" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Border>
+                <Border CornerRadius="8" Background="{DynamicResource DangerSoftBrush}" Padding="12,9" Margin="0,0,0,10"
+                        Visibility="{Binding InstallError, Converter={StaticResource NullToCollapsed}}">
+                    <TextBlock Text="{Binding InstallError}" FontSize="12" TextWrapping="Wrap"
+                               Foreground="{DynamicResource DangerBrush}"/>
+                </Border>
+            </StackPanel>
+
+            <Border Grid.Row="2" CornerRadius="12" Background="{DynamicResource PanelBrush}"
+                    BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Padding="8">
+                <Grid>
+                    <ListBox x:Name="JobList" ItemsSource="{Binding DownloadJobs}"
+                             SelectedItem="{Binding SelectedDownloadJob, Mode=TwoWay}"
+                             Background="Transparent" BorderThickness="0"
+                             VirtualizingPanel.IsVirtualizing="True"
+                             VirtualizingPanel.VirtualizationMode="Recycling"
+                             VirtualizingPanel.ScrollUnit="Pixel" Focusable="False"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border CornerRadius="10" BorderThickness="1" Padding="12,10" Margin="2,3"
+                                        BorderBrush="{DynamicResource BorderBrush}">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="Transparent"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsFinished}" Value="True">
+                                                    <Setter Property="Opacity" Value="0.82"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+
+                                        <Grid Grid.Row="0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Border Style="{StaticResource KindChip}" Margin="0,0,8,0">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding KindGlyph}" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                               FontSize="11" VerticalAlignment="Center"
+                                                               Foreground="{DynamicResource AccentBrush}" Margin="0,0,5,0"/>
+                                                    <TextBlock Text="{Binding Kind}" FontSize="11"
+                                                               Foreground="{DynamicResource AccentBrush}"/>
+                                                </StackPanel>
+                                            </Border>
+                                            <TextBlock Grid.Column="1" Text="{Binding Title}" FontWeight="SemiBold" FontSize="13.5"
+                                                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                                <TextBlock Text="{Binding StateText}" Style="{StaticResource MetaText}"
+                                                           Margin="0,0,8,0"/>
+                                                <Button Content="取消" Padding="10,3" FontSize="11.5"
+                                                        Command="{Binding DataContext.CancelDownloadJobCommand,
+                                                                  RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                        CommandParameter="{Binding}"
+                                                        Visibility="{Binding CanCancel, Converter={StaticResource BoolToVis}}"
+                                                        ToolTip="只取消这一个任务，其他任务继续"/>
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,5,0,0">
+                                            <TextBlock Text="{Binding RowSubtitle}" Style="{StaticResource MetaText}"/>
+                                            <TextBlock Text=" · " Style="{StaticResource MetaText}"/>
+                                            <TextBlock Text="{Binding StageText}" Style="{StaticResource MetaText}"
+                                                       TextTrimming="CharacterEllipsis"/>
+                                        </StackPanel>
+
+                                        <Grid Grid.Row="2" Margin="0,7,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <ProgressBar Height="6" VerticalAlignment="Center" Minimum="0" Maximum="100"
+                                                         Value="{Binding Percent, Mode=OneWay}"/>
+                                            <TextBlock Grid.Column="1" Text="{Binding PercentText}" FontSize="11.5"
+                                                       FontWeight="SemiBold" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                            <TextBlock Grid.Column="2" Text="{Binding SpeedText}" Style="{StaticResource MetaText}"
+                                                       Margin="10,0,0,0" MinWidth="66" TextAlignment="Right"/>
+                                        </Grid>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Collapsed"/>
                                 <Style.Triggers>
-                                    <DataTrigger Binding="{Binding Download.Active}" Value="False">
-                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                    <DataTrigger Binding="{Binding HasDownloadJobs}" Value="False">
+                                        <Setter Property="Visibility" Value="Visible"/>
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>
-                        </Button.Style>
-                    </Button>
-                    <Button Content="启动游戏" Command="{Binding LaunchCommand}" Style="{StaticResource PrimaryButton}"
-                            Padding="18,8"
-                            Visibility="{Binding InstallSuccess, Converter={StaticResource NullToCollapsed}}"/>
-                </StackPanel>
-            </Grid>
-        </Border>
+                        </StackPanel.Style>
+                        <TextBlock Text="当前没有下载任务" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,4"/>
+                        <TextBlock Text="在「游戏下载」安装版本、在「内容中心」安装模组/整合包，或补全实例文件时，任务会出现在这里。"
+                                   FontSize="12" Foreground="{DynamicResource TextMutedBrush}"
+                                   TextWrapping="Wrap" MaxWidth="430" TextAlignment="Center"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- 选中任务的阶段流程图 -->
+            <Border Grid.Row="3" CornerRadius="10" Background="{DynamicResource PanelBrush}"
+                    BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Padding="12,8" Margin="0,10,0,0"
+                    MaxHeight="170">
+                <Border.Style>
+                    <Style TargetType="Border">
+                        <Setter Property="Visibility" Value="Visible"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding SelectedDownloadJob}" Value="{x:Null}">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding SelectedDownloadJob.Stages}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,3">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="52"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding Marker}" FontSize="12" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource TextMutedBrush}"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding Label}" FontSize="12"
+                                               TextTrimming="CharacterEllipsis"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Border>
+        </Grid>
     </Grid>
 </UserControl>

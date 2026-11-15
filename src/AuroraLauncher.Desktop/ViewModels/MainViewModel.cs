@@ -110,7 +110,23 @@ public class JavaInfoVM
     public string Display => $"Java {Version}{(string.IsNullOrEmpty(Vendor) ? "" : " · " + Vendor)}";
 }
 
-public class MainViewModel : ViewModelBase
+/// <summary>One row of the per-instance Java picker (round-62). Path is the
+/// value persisted in GameInstance.JavaPath; empty means "auto".</summary>
+public class JavaChoiceVM
+{
+    public JavaChoiceVM(string label, string path) { Label = label; Path = path; }
+    public string Label { get; }
+    public string Path { get; }
+
+    /// <summary>Round-93: the closed ComboBox renders the selected item through
+    /// SelectionBoxItemTemplate; when that template is null it falls back to
+    /// ToString(), which printed the full type name
+    /// ("AuroraLauncher.Desktop.ViewModels.JavaChoiceVM") in the instance card.
+    /// DisplayMemberPath feeds the drop-down list, not this fallback.</summary>
+    public override string ToString() => Label;
+}
+
+public partial class MainViewModel : ViewModelBase
 {
     private readonly LauncherService _svc = new();
     private readonly Logger _log = Logger.Instance;
@@ -128,7 +144,6 @@ public class MainViewModel : ViewModelBase
     private bool _darkTheme = true;
     private string _offlineName = "";
     private string _currentPageKey = "Home";
-    private UIElement? _currentPage;
     private string _contentType = "模组";
     private string? _selectedWorld;
 
@@ -146,7 +161,50 @@ public class MainViewModel : ViewModelBase
         _logFlushTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
         _logFlushTimer.Tick += (_, _) => FlushPendingLogs();
         _logFlushTimer.Start();
+
+        // Round-72: one manager for every download job. The dispatcher hook keeps
+        // Core free of WPF; jobs self-throttle their notifications.
+        _playtime = new PlaytimeTracker(LauncherConfig.Instance.RootDirectory);
+        RecoverPlaytimeSessions();
+        _jobManager = new DownloadJobManager(a => Dispatch(a));
+        _downloadsTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(250)
+        };
+        _downloadsTimer.Tick += (_, _) => RefreshDownloadAggregate();
+        _downloadsTimer.Start();
+        InitRound79();
+        InitGlass();
+        InitRound83();
+
+        // Round-82: every add/remove goes through the collection, so one handler
+        // keeps "has instances" (button label + launch guard) honest.
+        Instances.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(HasInstances));
+            OnPropertyChanged(nameof(InstanceCardHint));
+            OnPropertyChanged(nameof(LaunchButtonText));
+            RebuildPalette();
+        };
+        CancelDownloadJobCommand = new RelayCommand(o => CancelDownloadJob(o as DownloadJob));
+        CancelAllDownloadsCommand = new RelayCommand(_ =>
+        {
+            _jobManager.CancelAll();
+            RefreshDownloadAggregate(force: true);
+            Status = "已取消所有下载任务";
+        });
+        ClearFinishedDownloadsCommand = new RelayCommand(_ => ClearFinishedDownloads());
+        ResumePendingDownloadsCommand = new RelayCommand(async _ => await ResumePendingDownloadsAsync());
+        DismissPendingDownloadsCommand = new RelayCommand(_ => DismissPendingDownloads());
+        ScanPendingDownloads();
+        // Round-87: leftover .part files, surfaced only above the configured
+        // thresholds. Same worker-thread rule as the journal replay above.
+        InitRound87Commands();
+        ScanDownloadResidue();
+        // Round-88: storage cleanup (scan on demand only — no walking at startup).
+        InitRound88Commands();
         ExportDiagnosticsCommand = new RelayCommand(async _ => await ExportDiagnosticsAsync());
+        ExportLogsCommand = new RelayCommand(async _ => await ExportLogsAsync());
         InstallFromCardsCommand = new RelayCommand(async _ => await InstallFromCardsAsync());
         OpenModrinthPageCommand = new RelayCommand(_ => OpenModrinthPage());
         FirstRunRescanCommand = new RelayCommand(async _ => await DetectJavaForFirstRunAsync());
@@ -203,8 +261,10 @@ public class MainViewModel : ViewModelBase
             ModrinthProject p => p,
             _ => null
         }));
-        ImportMrpackCommand = new RelayCommand(_ => ImportMrpack());
+        ImportMrpackCommand = new RelayCommand(_ => ChooseAndImportMrpack());
         ApplySettingsCommand = new RelayCommand(_ => ApplySettings());
+        EnablePortableModeCommand = new RelayCommand(_ => EnablePortableMode());
+        ExportMrpackCommand = new RelayCommand(async _ => await ExportMrpackAsync());
         OpenRootDirectoryCommand = new RelayCommand(_ => OpenRootDirectory());
         RenameInstanceCommand = new RelayCommand(_ => RenameInstance());
         EditNotesCommand = new RelayCommand(_ => EditNotes());
@@ -222,6 +282,13 @@ public class MainViewModel : ViewModelBase
         ReloadJavaListCommand = new RelayCommand(async _ => await LoadJavaListAsync());
         InstallJava21Command = new RelayCommand(async _ => await InstallJava21Async());
         DismissCrashReportCommand = new RelayCommand(_ => DismissCrashReport());
+        ApplyCrashFixCommand = new RelayCommand(async o => await ApplyCrashFixAsync(o as CrashSolutionVM));
+        SendCrashReportCommand = new RelayCommand(async _ => await SendCrashReportAsync());
+        // Round-79: 存档备份 / Ctrl+K 全局搜索
+        BackupSavesNowCommand = new RelayCommand(async _ => await BackupSavesNowAsync());
+        OpenBackupFolderCommand = new RelayCommand(_ => OpenBackupFolder());
+        TogglePaletteCommand = new RelayCommand(_ => TogglePalette());
+        ClosePaletteCommand = new RelayCommand(_ => ClosePalette());
         OpenHelpLinkCommand = new RelayCommand(_ => OpenHelpLink());
         SearchCurseForgeCommand = new RelayCommand(async _ => await SearchCurseForgeAsync());
         OpenCurseForgeItemCommand = new RelayCommand(OpenCurseForgeItem);
@@ -231,8 +298,13 @@ public class MainViewModel : ViewModelBase
         InstallOptiFineCommand = new RelayCommand(async _ => await InstallOptiFineAsync());
         OpenOptiFineWebCommand = new RelayCommand(_ => OpenUrl(OptiFineService.WebUrl));
         PickLocalOptiFineCommand = new RelayCommand(async _ => await PickLocalOptiFineAsync());
-        CheckUpdateCommand = new RelayCommand(_ => _ = CheckForUpdateAsync());
+        CheckUpdateCommand = new RelayCommand(async _ => await CheckForUpdateAsync());
         RestartToApplyCommand = new RelayCommand(_ => RestartToApply());
+        OneClickUpdateCommand = new RelayCommand(async _ => await OneClickUpdateAsync());
+        // Round-83: 手动释放启动器自己的内存（绝不碰游戏进程）
+        DeepCleanMemoryCommand = new RelayCommand(async _ => await DeepCleanMemoryAsync());
+        // Round-84: 对账 instances.json 与 instances/<id>/（幽灵实例 / 死链）
+        ScanInstancesCommand = new RelayCommand(async _ => await ScanUnregisteredInstancesAsync());
 
         // ---- 自动更新（round-57）：启动时若已下载好更新包，先换装再继续 ----
         if (UpdateService.HasStagedUpdate())
@@ -243,12 +315,15 @@ public class MainViewModel : ViewModelBase
         }
 
         LoadAll();
+        // Round-90: the baseline must be taken from the freshly loaded config,
+        // otherwise the very first page switch would claim "unsaved changes".
+        InitRound90SettingsGuard();
         MaybeShowUpdateToast();
         RefreshMicrosoftLoginState();
         InitHelp();
         Navigate("Home");
         RefreshNetworkNote();
-        _ = ProbeNetworkOnStartupAsync();
+        EnsureNetworkProbe();
         _ = AutoCheckUpdateAsync();
         MaybeShowFirstRun();
     }
@@ -286,6 +361,58 @@ public class MainViewModel : ViewModelBase
     private bool _stagedUpdateReady;
     public bool StagedUpdateReady { get => _stagedUpdateReady; set => SetProperty(ref _stagedUpdateReady, value); }
 
+    // ---- 版本列表「一键更新」（round-62）----
+    private UpdateManifest? _availableUpdate;
+
+    public string LauncherVersionText => $"启动器 v{BuildInfo.Version} · 第 {BuildInfo.CurrentRound} 轮";
+
+    private string _updateBannerText = UpdateBannerPolicy.Text(BuildInfo.CurrentRound, null, false);
+    public string UpdateBannerText { get => _updateBannerText; set => SetProperty(ref _updateBannerText, value); }
+
+    private void RefreshUpdateBanner() =>
+        UpdateBannerText = UpdateBannerPolicy.Text(BuildInfo.CurrentRound, _availableUpdate?.Round, StagedUpdateReady);
+
+    /// <summary>Round-62: the banner button in the game-version list. If the
+    /// startup check already found a newer launcher, go straight to the
+    /// two-button dialog → download → visible updater window; otherwise check
+    /// first and report "already latest" clearly. Never a dead button.</summary>
+    private async Task OneClickUpdateAsync()
+    {
+        if (IsCheckingUpdate) return;
+        IsCheckingUpdate = true;
+        try
+        {
+            var info = _availableUpdate;
+            if (info == null || !UpdateService.IsNewer(info, BuildInfo.CurrentRound))
+            {
+                UpdateStatusText = "正在检查启动器更新...";
+                Status = UpdateStatusText;
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                info = await _update.CheckAsync(timeout.Token).ConfigureAwait(true);
+                if (info == null)
+                {
+                    _availableUpdate = null;
+                    RefreshUpdateBanner();
+                    UpdateStatusText = _update.LastCheckMessage;
+                    Status = UpdateStatusText;
+                    ShowToast(UpdateStatusText);
+                    return;
+                }
+                _availableUpdate = info;
+                RefreshUpdateBanner();
+            }
+            if (!ShowUpdateDialog(info))
+            {
+                UpdateStatusText = $"已关闭更新提醒（第 {info.Round} 轮仍可一键更新）";
+                return;
+            }
+            await DownloadUpdateAsync(info, applyImmediately: true).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException) { UpdateStatusText = "已取消更新"; }
+        catch (Exception ex) { UpdateStatusText = "更新失败: " + ex.Message; Status = UpdateStatusText; }
+        finally { IsCheckingUpdate = false; }
+    }
+
     /// <summary>Startup check (round-58): every launch checks unless the user
     /// picked mode 3. Mode 1 downloads automatically; mode 2 shows the
     /// two-button reminder; failures are silent so the check never annoys.</summary>
@@ -301,6 +428,9 @@ public class MainViewModel : ViewModelBase
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             var info = await _update.CheckAsync(timeout.Token).ConfigureAwait(true);
             var action = UpdatePolicy.Decide(mode, info != null, manual: false);
+            // Make the finding visible on the version-list banner too, even
+            // when the user dismisses the modal or mode 1 downloads silently.
+            if (info != null) { _availableUpdate = info; RefreshUpdateBanner(); }
             if (action == UpdateAction.None || info == null) return;
 
             if (action == UpdateAction.AutoDownload)
@@ -367,6 +497,8 @@ public class MainViewModel : ViewModelBase
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             var info = await _update.CheckAsync(timeout.Token).ConfigureAwait(true);
+            _availableUpdate = info;
+            RefreshUpdateBanner();
             if (info == null)
             {
                 UpdateStatusText = _update.LastCheckMessage;
@@ -421,9 +553,12 @@ public class MainViewModel : ViewModelBase
                 Status = UpdateStatusText; // main status bar follows the download too
             }), _updateCts.Token).ConfigureAwait(true);
             UpdateProgress = 100;
+            // Round-74: say whether the delta was used — the user should see the
+            // saving instead of taking it on faith.
+            var modeNote = string.IsNullOrEmpty(_update.LastDownloadMode) ? "" : $"（{_update.LastDownloadMode}）";
             if (applyImmediately)
             {
-                UpdateStatusText = "更新下载完成，即将显示安装进度窗口…";
+                UpdateStatusText = "更新下载完成" + modeNote + "，即将显示安装进度窗口…";
                 Status = UpdateStatusText;
                 ShowToast("更新下载完成，接下来会显示安装进度窗口…");
                 await Task.Delay(1200).ConfigureAwait(true);
@@ -433,7 +568,8 @@ public class MainViewModel : ViewModelBase
             else
             {
                 StagedUpdateReady = true;
-                UpdateStatusText = "新版本已就绪：点「立即重启并应用更新」，或下次启动时自动完成";
+                RefreshUpdateBanner();
+                UpdateStatusText = "新版本已就绪" + modeNote + "：点「立即重启并应用更新」，或下次启动时自动完成";
                 ShowToast("新版本已就绪：重启时会显示安装进度窗口。");
                 Status = UpdateStatusText;
             }
@@ -441,33 +577,36 @@ public class MainViewModel : ViewModelBase
         finally { _updateCts = null; IsCheckingUpdate = false; }
     }
 
-    // ---- 网络环境自动感知：启动时轻量探测官方 vs 镜像，用数据决定默认线路 ----
-    private async Task ProbeNetworkOnStartupAsync()
+    // ---- 网络环境自动感知：测速决定"优先哪条"，并允许用户强制单线路 ----
+    /// <summary>Round-85: one cached probe, shared by every caller. Never awaited
+    /// on the download path — the download path only reads
+    /// <see cref="NetworkProbe.Preference"/>.</summary>
+    private void EnsureNetworkProbe()
+    {
+        if (_probeInFlight) return;
+        _probeInFlight = true;
+        _ = ProbeNetworkAsync();
+    }
+
+    private bool _probeInFlight;
+
+    private async Task ProbeNetworkAsync()
     {
         try
         {
-            // 尊重用户显式选择：仅当仍为默认（Official）时才自动切换。
-            var probe = await NetworkProbe.ProbeAsync().ConfigureAwait(false);
-            var cfg = LauncherConfig.Instance;
-            var decided = probe.Decide(cfg.DownloadSource);
-            if (cfg.DownloadSource == DownloadSource.Official && decided == DownloadSource.BMCLAPI)
-            {
-                cfg.DownloadSource = DownloadSource.BMCLAPI;
-                cfg.NetworkNote = $"{probe}（国内网络：官方线路超时，已自动使用 BMCLAPI 镜像）";
-                cfg.Save();
-                RefreshNetworkNote();
-                Dispatch(() => Status = "网络探测：官方线路不通，已自动切换 BMCLAPI 镜像");
-                _log.Info("Net", $"Network probe: {probe}; auto-switched to BMCLAPI.");
-            }
-            else
-            {
-                cfg.NetworkNote = $"{probe}（线路保持不变）";
-                _log.Info("Net", $"Network probe: {probe}; keeping {cfg.DownloadSource}.");
-            }
+            var probe = await NetworkProbe.ProbeCachedAsync().ConfigureAwait(true);
+            if (probe == null) { _log.Warn("Net", "测速没有拿到结果，沿用当前线路"); return; }
+            RefreshNetworkNote();
+            _log.Info("Net", $"Network probe: {probe}；策略 {DownloadRoutePolicy.DisplayName(LauncherConfig.Instance.RoutePolicy)}，" +
+                             $"优先 {NetworkProbe.Preference}。");
         }
         catch (Exception ex)
         {
             _log.Warn("Net", $"Network probe failed: {ex.Message}");
+        }
+        finally
+        {
+            _probeInFlight = false;
         }
     }
 
@@ -559,29 +698,28 @@ public class MainViewModel : ViewModelBase
     {
         if (string.IsNullOrEmpty(_recommendedVersionId)) { FirstRunProgress = "推荐版本尚未获取，请稍候或跳过引导稍后安装。"; return; }
         FirstRunInstallEnabled = false;
+        DownloadJob? job = null;
         try
         {
-            _cts = new CancellationTokenSource();
             var mc = _recommendedVersionId;
             var name = $"Minecraft {mc}";
             var inst = _svc.Instances.Create(name, mc, ModLoaderType.Vanilla, null);
             Instances.Add(inst);
             SelectedInstance = inst;
-            InitStages(BuildStages(ModLoaderType.Vanilla), $"{name} 安装");
-            Navigate("Downloads");
-            FirstRunProgress = "正在安装（进度见下方流程图）…";
-            await _svc.InstallWithLoaderAsync(inst, OnDownloadProgress,
-                s => Dispatch(() => AddLog("[Install] " + s)), _cts.Token, OnInstallStage);
+            job = await BeginJobAsync("实例", $"{name} 安装", name);
+            InitStages(job, BuildStages(ModLoaderType.Vanilla), $"{name} 安装");
+            FirstRunProgress = "正在安装（进度见「下载管理」）…";
+            await _svc.InstallWithLoaderAsync(inst, job.Report,
+                s => Dispatch(() => AddLog("[Install] " + s)), job.Token, job.EnterStage);
             _svc.Instances.Update(inst);
-            CompleteStages();
-            InstallSuccess = $"实例「{inst.Name}」安装完成！";
+            FinishJob(job, null, false, $"实例「{inst.Name}」安装完成！");
             FirstRunProgress = "安装完成！";
             FinishFirstRun();
         }
-        catch (OperationCanceledException) { FirstRunProgress = "已取消。"; }
+        catch (OperationCanceledException) { FinishJob(job, null, true); FirstRunProgress = "已取消。"; }
         catch (Exception ex)
         {
-            FailStages(ex.Message);
+            FinishJob(job, ex, false);
             FirstRunProgress = "安装失败: " + ex.Message + "（可跳过引导，稍后在「游戏下载」页重试）";
         }
         finally { FirstRunInstallEnabled = true; }
@@ -592,17 +730,47 @@ public class MainViewModel : ViewModelBase
         FirstRunWizardVisible = false;
         var cfg = LauncherConfig.Instance;
         cfg.FirstRunCompleted = true;
+        // Round-83: a brand-new user has no idea what -Xmx means, and 4096 MB is
+        // wrong on a 4 GB laptop. Turn the automatic mode on exactly once, here,
+        // where we know this is a fresh install. Existing configs keep whatever
+        // they already have, so an upgrade never changes a working setup.
+        if (!cfg.AutoMemory)
+        {
+            cfg.AutoMemory = true;
+            AutoMemory = true;
+            cfg.MaxMemoryMb = EffectiveMemoryMb();
+        }
         cfg.Save();
     }
 
 
     // ---- collections ----
-    public ObservableCollection<VersionManifestEntry> Versions { get; } = new();
+    public BulkObservableCollection<VersionManifestEntry> Versions { get; } = new();
     public ObservableCollection<GameInstance> Instances { get; } = new();
+
+    /// <summary>Round-82: "no instances yet" is a normal first-run state, not an
+    /// error. The launch button reads this to relabel itself and the command
+    /// guards on it, so the button is never a dead click.</summary>
+    public bool HasInstances => Instances.Count > 0;
+
+    /// <summary>Placeholder-friendly hero text ("未选择实例" instead of an empty gap).</summary>
+    public string SelectedInstanceNameText => SelectedInstance?.Name ?? "未选择实例";
+
+    public string SelectedAccountNameText => SelectedAccount?.Username ?? "未登录";
+
+    /// <summary>Hint under the instance card, switched by the same state.</summary>
+    public string InstanceCardHint => LaunchGuardPolicy.InstanceHint(HasInstances);
+
+    /// <summary>"启动游戏" or "去下载游戏" — from the same policy that blocks the
+    /// command, so the label can never promise something the click won't do.</summary>
+    public string LaunchButtonText => LaunchGuardPolicy.ButtonText(HasInstances);
     public ObservableCollection<Account> Accounts { get; } = new();
     public ObservableCollection<ModInfo> Mods { get; } = new();
-    public ObservableCollection<string> Logs { get; } = new();
-    public ObservableCollection<ContentItemVM> ModSearchResults { get; } = new();
+    /// <summary>Round-69: bound to the Logs ListBox through <see cref="LogsView"/>.
+    /// Bulk collection so re-entering the page publishes the backlog with ONE
+    /// Reset instead of one notification per line.</summary>
+    public BulkObservableCollection<string> Logs { get; } = new();
+    public BulkObservableCollection<ContentItemVM> ModSearchResults { get; } = new();
     public ObservableCollection<string> Worlds { get; } = new();
     public ObservableCollection<StageItemVM> InstallStages { get; } = new();
 
@@ -651,26 +819,30 @@ public class MainViewModel : ViewModelBase
     /// panel pops in seconds later" while Forge metadata crawls in. A
     /// generation gate (GenerationGate, unit-tested) discards stale fetches
     /// when the user switches versions faster than the network answers.</summary>
-    public async Task LoadLoaderCardsAsync()
+    private static readonly (ModLoaderType Type, string Name, string Short)[] LoaderCardDefs =
     {
-        var mc = SelectedVersion?.Id ?? SelectedInstance?.MinecraftVersion;
-        if (string.IsNullOrWhiteSpace(mc)) return;
+        (ModLoaderType.Forge, "Forge", "FO"),
+        (ModLoaderType.NeoForge, "NeoForge", "NF"),
+        (ModLoaderType.Fabric, "Fabric", "FA"),
+        (ModLoaderType.Quilt, "Quilt", "QU"),
+    };
+
+    private long _cardsGenForFlight;
+    private CoalescingSingleFlight<string>? _loaderCardsFlight;
+
+    /// <summary>Round-64: skeletons render SYNCHRONOUSLY on every selection.
+    /// The 180 ms debounce delays ONLY the network batch — instant feedback
+    /// from round-47 must never wait. Also starts a new generation so async
+    /// results for an older selection are discarded.</summary>
+    private void ShowLoaderCardSkeletons()
+    {
         var gen = _loaderCardsGate.Begin();
-
-        var defs = new (ModLoaderType Type, string Name, string Short)[]
-        {
-            (ModLoaderType.Forge, "Forge", "FO"),
-            (ModLoaderType.NeoForge, "NeoForge", "NF"),
-            (ModLoaderType.Fabric, "Fabric", "FA"),
-            (ModLoaderType.Quilt, "Quilt", "QU"),
-        };
-
-        // 1) Show the skeleton cards NOW (no network wait): instant feedback.
+        _cardsGenForFlight = gen;
         Dispatch(() =>
         {
             _activeCardsGen = gen;
             LoaderCards.Clear();
-            foreach (var d in defs)
+            foreach (var d in LoaderCardDefs)
             {
                 var skeleton = new LoaderCardVM(d.Type, d.Name, d.Short, OnLoaderVersionPicked, gen);
                 skeleton.Versions.Add(LoaderCardVM.NoneChoice);
@@ -679,6 +851,28 @@ public class MainViewModel : ViewModelBase
                 LoaderCards.Add(skeleton);
             }
         });
+    }
+
+    /// <summary>Coalescing single-flight (round-64): in-progress requests
+    /// collapse into exactly ONE rerun using the LATEST MC version — neither
+    /// queued (N reruns) nor dropped (first choice wins). The pure contract
+    /// lives in CoalescingSingleFlight and is covered by a dedicated test.</summary>
+    public Task LoadLoaderCardsAsync()
+    {
+        var mc = SelectedVersion?.Id ?? SelectedInstance?.MinecraftVersion ?? "";
+        if (string.IsNullOrWhiteSpace(mc)) return Task.CompletedTask;
+        _loaderCardsFlight ??= new CoalescingSingleFlight<string>(LoadLoaderCardsCoreAsync);
+        return _loaderCardsFlight.RequestAsync(mc);
+    }
+
+    private async Task LoadLoaderCardsCoreAsync(string mc)
+    {
+        if (string.IsNullOrWhiteSpace(mc)) return;
+        // Called straight from the page Loaded (no selection change) →
+        // skeletons may not exist yet, show them before any network IO.
+        if (LoaderCards.Count == 0) ShowLoaderCardSkeletons();
+        var gen = _cardsGenForFlight;
+        var defs = LoaderCardDefs;
 
         // 2) Fetch all loaders in parallel; each call already hedges across routes.
         var tasks = defs.Select(async d =>
@@ -764,33 +958,32 @@ public class MainViewModel : ViewModelBase
         var loaderVersion = picked.Count == 1 && !picked[0].IsAutoPick ? picked[0].SelectedVersion : null;
         var name = string.IsNullOrWhiteSpace(NewInstanceName) ? $"{mc} ({loader})" : NewInstanceName.Trim();
 
+        DownloadJob? job = null;
         try
         {
-            IsBusy = true;
-            _cts = new CancellationTokenSource();
-            InitStages(BuildStages(loader), $"{name} 安装");
-            Status = $"正在安装 {mc} ({loader}) ...";
             var inst = _svc.Instances.Create(name, mc, loader, loaderVersion);
             Instances.Add(inst);
             SelectedInstance = inst;
-            Navigate("Downloads");
-            await _svc.InstallWithLoaderAsync(inst, OnDownloadProgress,
-                s => Dispatch(() => AddLog("[Install] " + s)), _cts.Token, OnInstallStage);
+            job = await BeginJobAsync("实例", $"{name} 安装", name);
+            InitStages(job, BuildStages(loader), $"{name} 安装");
+            Status = $"正在安装 {mc} ({loader}) ...";
+            await _svc.InstallWithLoaderAsync(inst, job.Report,
+                s => Dispatch(() => AddLog("[Install] " + s)), job.Token, job.EnterStage);
             _svc.Instances.Update(inst);
-            CompleteStages();
             // Fabric 前置（round-47）：装完 Fabric 实例即检查 Fabric API ——
             // 设置开启（默认）时告知后自动安装适配版本，关闭时弹窗询问。
             var fabricApiInstalled = false;
             if (loader == ModLoaderType.Fabric)
-                fabricApiInstalled = await EnsureFabricApiAsync(inst, _cts.Token, $"安装实例（Fabric 加载器）");
+                fabricApiInstalled = await EnsureFabricApiAsync(inst, job.Token, $"安装实例（Fabric 加载器）");
             ScanMods();
-            InstallSuccess = $"实例「{inst.Name}」安装完成！到首页点「启动游戏」即可游玩。"
+            var doneText = $"实例「{inst.Name}」安装完成！到首页点「启动游戏」即可游玩。"
                 + (fabricApiInstalled ? "（已自动安装适配的 Fabric API 前置）" : "");
+            FinishJob(job, null, false, doneText);
             Status = $"安装完成: {inst.Name}" + (fabricApiInstalled ? "（含 Fabric API 前置）" : "");
         }
-        catch (OperationCanceledException) { Status = "已取消下载（未完成的临时文件已清理）"; }
-        catch (Exception ex) { FailStages(ex.Message); Status = "安装失败: " + ex.Message; }
-        finally { IsBusy = false; Download.Active = false; }
+        catch (OperationCanceledException) { FinishJob(job, null, true); Status = "已取消下载（未完成的临时文件已清理）"; }
+        catch (Exception ex) { FinishJob(job, ex, false); Status = "安装失败: " + ex.Message; }
+        finally { RefreshDownloadAggregate(force: true); }
     }
 
     public DownloadStatus Download { get; } = new();
@@ -799,10 +992,56 @@ public class MainViewModel : ViewModelBase
     public string Status { get => _status; set => SetProperty(ref _status, value); }
     public bool IsBusy { get => _isBusy; set => SetProperty(ref _isBusy, value); }
     public string VersionFilter { get => _versionFilter; set { if (SetProperty(ref _versionFilter, value)) _ = LoadVersionsAsync(); } }
+    private DispatcherTimer? _loaderCardsDebounce;
+    private string _debounceTargetVersion = "";
+
+    /// <summary>Round-64: the debounce covers ONLY the network batch. Skeleton
+    /// cards are rendered synchronously in the setter (round-47 instant
+    /// feedback), while repeated selections collapse into one 180 ms timer.</summary>
     public VersionManifestEntry? SelectedVersion
     {
         get => _selectedVersion;
-        set { if (SetProperty(ref _selectedVersion, value)) _ = LoadLoaderCardsAsync(); }
+        set
+        {
+            if (!SetProperty(ref _selectedVersion, value)) return;
+            ShowLoaderCardSkeletons();
+            ScheduleLoaderCardRefresh();
+        }
+    }
+
+    private void ScheduleLoaderCardRefresh()
+    {
+        _loaderCardsDebounce ??= new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(180)
+        };
+        _loaderCardsDebounce.Stop();
+        _loaderCardsDebounce.Tick -= OnLoaderCardsDebounceTick;
+        _loaderCardsDebounce.Tick += OnLoaderCardsDebounceTick;
+        _debounceTargetVersion = SelectedVersion?.Id ?? "";
+        _loaderCardsDebounce.Start();
+    }
+
+    private void OnLoaderCardsDebounceTick(object? sender, EventArgs e)
+    {
+        _loaderCardsDebounce?.Stop();
+        // Within the debounce window the user may have left the page or picked
+        // another version — never fire a stale 4-route loader fetch.
+        if (!LoaderDebouncePolicy.ShouldFire(CurrentPageKey, _debounceTargetVersion,
+                SelectedVersion?.Id ?? "")) return;
+        _ = LoadLoaderCardsAsync();
+    }
+
+    /// <summary>Called on every DownloadView re-attach. If the debounce was
+    /// cancelled when the user navigated away, re-arm it so the cards never
+    /// stay at "加载中…" forever. Lightweight: no network by itself.</summary>
+    public void EnsureLoaderCardsRefresh()
+    {
+        if (CurrentPageKey != "Download") return;
+        if (LoaderCards.Count == 0) { _ = LoadLoaderCardsAsync(); return; }
+        if (LoaderCards.Any(c => c.IsLoading) &&
+            (_loaderCardsDebounce == null || !_loaderCardsDebounce.IsEnabled))
+            ScheduleLoaderCardRefresh();
     }
     public GameInstance? SelectedInstance
     {
@@ -820,23 +1059,46 @@ public class MainViewModel : ViewModelBase
                 OnPropertyChanged(nameof(SelectedInstanceNotes));
                 OnPropertyChanged(nameof(SelectedInstanceIcon));
                 OnPropertyChanged(nameof(HasSelectedInstanceIcon));
+                OnPropertyChanged(nameof(SelectedInstanceJavaPath));
+                OnPropertyChanged(nameof(InstanceJavaHint));
+                OnPropertyChanged(nameof(SelectedInstanceNameText));
+                RefreshInstanceJavaChoices();
+                // Round-79: the backup + performance cards are per-instance.
+                RefreshBackupInfo();
+                RefreshPerformanceCard();
+                // Round-83: the recommendation depends on THIS instance's mods.
+                RefreshMemoryAdvice();
+                RebuildPalette();
             }
         }
     }
-    public Account? SelectedAccount { get => _selectedAccount; set => SetProperty(ref _selectedAccount, value); }
+    public Account? SelectedAccount
+    {
+        get => _selectedAccount;
+        set
+        {
+            if (SetProperty(ref _selectedAccount, value))
+                OnPropertyChanged(nameof(SelectedAccountNameText));
+        }
+    }
     public ModInfo? SelectedMod { get => _selectedMod; set => SetProperty(ref _selectedMod, value); }
     public string MicrosoftMessage { get => _microsoftMessage; set => SetProperty(ref _microsoftMessage, value); }
     public bool DarkTheme { get => _darkTheme; set => SetProperty(ref _darkTheme, value); }
     public string OfflineName { get => _offlineName; set => SetProperty(ref _offlineName, value); }
     public string CurrentPageKey { get => _currentPageKey; set => SetProperty(ref _currentPageKey, value); }
-    public UIElement? CurrentPage { get => _currentPage; set => SetProperty(ref _currentPage, value); }
 
     private string _installTitle = "";
     /// <summary>Header of the install flow chart, e.g. "1.21 (NeoForge) 安装".</summary>
     public string InstallTitle { get => _installTitle; set => SetProperty(ref _installTitle, value); }
 
     public List<string> VersionFilterOptions => new() { "release", "snapshot", "all" };
-    public List<string> DownloadSourceOptions => new() { "官方", "BMCLAPI" };
+    /// <summary>Round-85: Auto / Official-only / Mirror-only.</summary>
+    public List<string> DownloadSourceOptions { get; } = new()
+    {
+        DownloadRoutePolicy.DisplayName(DownloadPolicy.Auto),
+        DownloadRoutePolicy.DisplayName(DownloadPolicy.Official),
+        DownloadRoutePolicy.DisplayName(DownloadPolicy.Mirror)
+    };
     public List<string> ContentTypeOptions => new() { "模组", "整合包", "数据包", "光影", "资源包" };
 
     /// <summary>Selected content kind for the Modrinth search page.</summary>
@@ -870,6 +1132,8 @@ public class MainViewModel : ViewModelBase
     // ---- commands ----
     public RelayCommand RefreshVersionsCommand { get; }
     public RelayCommand ExportDiagnosticsCommand { get; }
+    /// <summary>Round-70: 「导出日志」— one plain-text file for bug reports.</summary>
+    public RelayCommand ExportLogsCommand { get; }
     public RelayCommand InstallFromCardsCommand { get; }
     public RelayCommand OpenModrinthPageCommand { get; }
     public RelayCommand FirstRunRescanCommand { get; }
@@ -901,6 +1165,8 @@ public class MainViewModel : ViewModelBase
     public RelayCommand InstallContentCommand { get; }
     public RelayCommand ImportMrpackCommand { get; }
     public RelayCommand ApplySettingsCommand { get; }
+    public RelayCommand EnablePortableModeCommand { get; }
+    public RelayCommand ExportMrpackCommand { get; }
     public RelayCommand OpenRootDirectoryCommand { get; }
     public RelayCommand RenameInstanceCommand { get; }
     public RelayCommand EditNotesCommand { get; }
@@ -918,6 +1184,18 @@ public class MainViewModel : ViewModelBase
     public RelayCommand ReloadJavaListCommand { get; }
     public RelayCommand InstallJava21Command { get; }
     public RelayCommand DismissCrashReportCommand { get; }
+    public RelayCommand ApplyCrashFixCommand { get; }
+    public RelayCommand SendCrashReportCommand { get; }
+    /// <summary>Round-83: user-triggered release of the launcher's own caches.
+    /// Declared here (not in the partial) because the command-binding guard scans
+    /// this file for VM command properties.</summary>
+    public RelayCommand DeepCleanMemoryCommand { get; }
+    /// <summary>Round-84: reconcile the instance list with the folders on disk.</summary>
+    public RelayCommand ScanInstancesCommand { get; }
+    public RelayCommand BackupSavesNowCommand { get; }
+    public RelayCommand OpenBackupFolderCommand { get; }
+    public RelayCommand TogglePaletteCommand { get; }
+    public RelayCommand ClosePaletteCommand { get; }
     public RelayCommand OpenHelpLinkCommand { get; }
     public RelayCommand SearchCurseForgeCommand { get; }
     public RelayCommand OpenCurseForgeItemCommand { get; }
@@ -929,8 +1207,345 @@ public class MainViewModel : ViewModelBase
     public RelayCommand PickLocalOptiFineCommand { get; }
     public RelayCommand CheckUpdateCommand { get; }
     public RelayCommand RestartToApplyCommand { get; }
+    public RelayCommand OneClickUpdateCommand { get; }
 
+    // ---- round-72: multi-job download center ----
+    // Every install (instance / modpack / mod / loader / java / repair) is its own
+    // DownloadJob with its own token, stages and progress. The legacy single
+    // _cts + global Download object were the reason a second install hijacked
+    // the first one's cancellation and why the page could only describe one job.
+    private readonly DownloadJobManager _jobManager;
+    private readonly DispatcherTimer _downloadsTimer;
+
+    /// <summary>Round-77: playtime sessions. Written to disk so a launcher killed
+    /// with the game still running can be settled on the next start.</summary>
+    private readonly PlaytimeTracker _playtime;
+
+    /// <summary>Legacy single token, still used by the two flows that were not
+    /// converted to jobs (launch-time file repair and script export). Those are
+    /// short, sequential actions — they do not belong in the download center,
+    /// but they must keep a way to be cancelled.</summary>
     private CancellationTokenSource? _cts;
+    private int _seenJobVersion = -1;
+
+    /// <summary>All visible download jobs (newest first) — bound by 下载管理.</summary>
+    public ObservableCollection<DownloadJob> DownloadJobs => _jobManager.Jobs;
+
+    private int _downloadActive;
+    public int DownloadActiveCount { get => _downloadActive; private set => SetProperty(ref _downloadActive, value); }
+
+    private int _downloadQueued;
+    public int DownloadQueuedCount { get => _downloadQueued; private set => SetProperty(ref _downloadQueued, value); }
+
+    private int _downloadAggregate;
+    public int DownloadAggregatePercent { get => _downloadAggregate; private set => SetProperty(ref _downloadAggregate, value); }
+
+    private string _downloadSpeedText = "0 B/s";
+    public string DownloadSpeedText { get => _downloadSpeedText; private set => SetProperty(ref _downloadSpeedText, value); }
+
+    private string _downloadSummary = "当前没有下载任务";
+    public string DownloadSummaryText { get => _downloadSummary; private set => SetProperty(ref _downloadSummary, value); }
+
+    private bool _hasDownloadJobs;
+    public bool HasDownloadJobs { get => _hasDownloadJobs; private set => SetProperty(ref _hasDownloadJobs, value); }
+
+    private bool _canClearFinished;
+    public bool CanClearFinished { get => _canClearFinished; private set => SetProperty(ref _canClearFinished, value); }
+
+    private DownloadJob? _selectedDownloadJob;
+    /// <summary>Row selected in the download manager; its stage chart is shown below the list.</summary>
+    public DownloadJob? SelectedDownloadJob
+    {
+        get => _selectedDownloadJob;
+        set => SetProperty(ref _selectedDownloadJob, value);
+    }
+
+    // ---- round-74: resume after a crash / forced kill ----
+    private IReadOnlyList<AuroraCore.Download.PendingDownload> _pendingDownloads =
+        Array.Empty<AuroraCore.Download.PendingDownload>();
+
+    private bool _hasPendingDownloads;
+    public bool HasPendingDownloads { get => _hasPendingDownloads; private set => SetProperty(ref _hasPendingDownloads, value); }
+
+    private string _pendingDownloadsText = "";
+    public string PendingDownloadsText { get => _pendingDownloadsText; private set => SetProperty(ref _pendingDownloadsText, value); }
+
+    /// <summary>Startup scan: a killed process leaves .part files behind. Runs on
+    /// a worker thread — the journal replay touches disk and must not delay the
+    /// first frame (round-69 lesson).</summary>
+    private void ScanPendingDownloads()
+    {
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                DownloadJournal.Flush(400);
+                var list = DownloadJournal.Load(LauncherConfig.Instance.RootDirectory);
+                Dispatch(() => ApplyPendingDownloads(list));
+            }
+            catch (Exception ex)
+            {
+                Logger.Instance.Trace("Download", "扫描未完成下载失败（忽略）: " + ex.Message);
+            }
+        });
+    }
+
+    private void ApplyPendingDownloads(IReadOnlyList<AuroraCore.Download.PendingDownload> list)
+    {
+        _pendingDownloads = list;
+        HasPendingDownloads = list.Count > 0;
+        if (list.Count == 0) { PendingDownloadsText = ""; return; }
+
+        var total = list.Sum(p => p.ExpectedSize > 0 ? p.ExpectedSize : p.PartialBytes);
+        var done = list.Sum(p => p.PartialBytes);
+        var percent = total > 0 ? (int)Math.Round(done * 100.0 / total) : 0;
+        PendingDownloadsText =
+            $"检测到上次未完成的下载：{list.Count} 个文件，已下载 {JobProgressPolicy.FormatBytes(done)}" +
+            (total > done ? $" / {JobProgressPolicy.FormatBytes(total)}（{percent}%）" : "") +
+            "。继续只补下剩余部分，不会从头开始。";
+        Logger.Instance.Info("Download", $"发现 {list.Count} 个未完成下载（{JobProgressPolicy.FormatBytes(done)}），等待用户选择继续或忽略。");
+    }
+
+    /// <summary>Re-enqueues the interrupted files as ONE job. The engine resumes
+    /// from each .part via HTTP Range, so this is not a restart.</summary>
+    private async Task ResumePendingDownloadsAsync()
+    {
+        var pending = _pendingDownloads.ToList();
+        if (pending.Count == 0) { Status = "没有需要恢复的下载"; return; }
+
+        DownloadJob? job = null;
+        try
+        {
+            job = await BeginJobAsync("恢复", $"继续未完成的下载（{pending.Count} 个文件）", "");
+            job.SetStageText($"继续下载：{pending[0].FileName}" + (pending.Count > 1 ? $" 等 {pending.Count} 个文件" : ""));
+            var entries = pending.Select(p => new DownloadEntry
+            {
+                Url = p.Url,
+                Destination = p.Destination,
+                ExpectedSha1 = p.ExpectedSha1,
+                ExpectedSize = p.ExpectedSize > 0 ? p.ExpectedSize : null,
+                Required = true,
+                DisplayName = p.FileName
+            }).ToList();
+
+            var engine = new DownloadEngine();
+            await engine.DownloadAsync(entries, job.Report, job.Token);
+
+            _pendingDownloads = Array.Empty<AuroraCore.Download.PendingDownload>();
+            HasPendingDownloads = false;
+            PendingDownloadsText = "";
+            DownloadJournal.Flush(800);
+            FinishJob(job, null, false, $"已恢复并完成 {pending.Count} 个未完成的下载");
+            Status = $"已恢复并完成 {pending.Count} 个未完成的下载";
+        }
+        catch (OperationCanceledException) { FinishJob(job, null, true); Status = "已取消恢复（未完成的临时文件已清理）"; }
+        catch (Exception ex) { FinishJob(job, ex, false); Status = "恢复失败: " + ex.Message; }
+        finally { RefreshDownloadAggregate(force: true); }
+    }
+
+    /// <summary>"忽略" must also free the disk: leaving a 5 GB .part behind after
+    /// the user said "no" is worse than re-downloading it later.</summary>
+    private void DismissPendingDownloads()
+    {
+        var result = DownloadJournal.Discard(LauncherConfig.Instance.RootDirectory, deletePartials: true);
+        Logger.Instance.Info("Download", $"用户忽略未完成下载，清理 {result} 个临时文件。");
+        _pendingDownloads = Array.Empty<AuroraCore.Download.PendingDownload>();
+        HasPendingDownloads = false;
+        PendingDownloadsText = "";
+        Status = result > 0 ? $"已忽略并清理 {result} 个未完成的临时文件" : "已忽略未完成的下载";
+    }
+
+    public RelayCommand CancelDownloadJobCommand { get; }
+    public RelayCommand ResumePendingDownloadsCommand { get; } = null!;
+    public RelayCommand DismissPendingDownloadsCommand { get; } = null!;
+    public RelayCommand CancelAllDownloadsCommand { get; }
+    public RelayCommand ClearFinishedDownloadsCommand { get; }
+
+    /// <summary>Creates a job, waits for a download slot (max 3 at once) and
+    /// switches to the download manager. Throws OperationCanceledException when
+    /// the job is cancelled while queued.</summary>
+    private async Task<DownloadJob> BeginJobAsync(string kind, string title, string instance)
+    {
+        var job = _jobManager.Create(kind, title, instance ?? "");
+        SelectedDownloadJob = job;
+        if (CurrentPageKey != "Downloads") Navigate("Downloads");
+        RefreshDownloadAggregate(force: true);
+        await _jobManager.StartAsync(job);
+        RefreshDownloadAggregate(force: true);
+        Logger.Instance.Info("Download",
+            $"任务开始：{kind}「{title}」" + (string.IsNullOrWhiteSpace(instance) ? "" : $"（实例 {instance}）"));
+        return job;
+    }
+
+    /// <summary>Single exit point for a job: updates the row, releases the slot
+    /// and keeps the page banner in sync.</summary>
+    private void FinishJob(DownloadJob? job, Exception? error, bool canceled, string? successText = null)
+    {
+        if (job == null) return;
+        _jobManager.Finish(job, error, canceled, successText);
+        if (canceled) Status = "已取消下载";
+        else if (error != null)
+        {
+            InstallSuccess = null;
+            InstallError = successText == null ? error.Message : successText;
+            Status = "任务失败：" + error.Message;
+        }
+        else if (successText != null)
+        {
+            InstallError = null;
+            InstallSuccess = successText;
+        }
+        RefreshDownloadAggregate(force: true);
+    }
+
+    /// <summary>Pulls the aggregate out of the manager. Called by the timer and
+    /// after state changes — never from the per-chunk progress callback.</summary>
+    private bool _windowVisible = true;
+    private long _lastHiddenRefreshTick;
+
+    /// <summary>Round-74: while the window is in the tray nothing a user can see
+    /// changes, so the 250 ms aggregate refresh is dropped to 1 Hz. Downloads are
+    /// unaffected — only the UI numbers wait.</summary>
+    public void SetWindowVisible(bool visible)
+    {
+        _windowVisible = visible;
+        if (visible) RefreshDownloadAggregate(force: true);
+    }
+
+    private void RefreshDownloadAggregate(bool force = false)
+    {
+        if (!force && _seenJobVersion == _jobManager.Version) return;
+        if (!force && !_windowVisible)
+        {
+            var now = Environment.TickCount64;
+            if (now - _lastHiddenRefreshTick < 1000) return;
+            _lastHiddenRefreshTick = now;
+        }
+        _seenJobVersion = _jobManager.Version;
+
+        var (percent, speed, active, queued) = _jobManager.Snapshot();
+        DownloadActiveCount = active;
+        DownloadQueuedCount = queued;
+        DownloadAggregatePercent = percent;
+        DownloadSpeedText = JobProgressPolicy.FormatSpeed(speed);
+        HasDownloadJobs = _jobManager.Jobs.Count > 0;
+        CanClearFinished = _jobManager.FinishedCount > 0;
+        DownloadSummaryText = _jobManager.Jobs.Count == 0
+            ? "当前没有下载任务"
+            : queued > 0
+                ? $"{active} 个进行中 · {queued} 个排队"
+                : active > 0 ? $"{active} 个进行中" : "全部任务已结束";
+
+        // Legacy status object: the status-bar dot and any other reader.
+        Download.Active = active > 0 || queued > 0;
+        Download.Percent = percent;
+        Download.Speed = DownloadSpeedText;
+        Download.Detail = DownloadSummaryText;
+        IsBusy = active > 0 || queued > 0;
+    }
+
+    /// <summary>Round-73: called by the close guard so .part cleanup runs while
+    /// the process is still alive (a hard exit would leave temp files behind).</summary>
+    public void CancelAllDownloads()
+    {
+        _jobManager.CancelAll();
+        RefreshDownloadAggregate(force: true);
+        Logger.Instance.Info("Download", "窗口关闭：已取消所有下载任务");
+    }
+
+    /// <summary>Round-77: a session file left behind means the launcher (or the
+    /// whole machine) died while the game was running. Credit the time up to the
+    /// last heartbeat instead of losing the session.</summary>
+    private void RecoverPlaytimeSessions()
+    {
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var recovered = _playtime.RecoverOrphans(pid =>
+                {
+                    try { return !System.Diagnostics.Process.GetProcessById(pid).HasExited; }
+                    catch { return false; }
+                });
+                if (recovered.Count == 0) return;
+                foreach (var (instanceId, duration, startedAt) in recovered)
+                {
+                    var updated = _svc.Instances.AddPlaytime(instanceId, duration, startedAt.ToLocalTime());
+                    if (updated != null) Dispatch(() => RefreshInstanceRow(updated));
+                }
+                Dispatch(() => Status = $"已补记上次未结算的游玩时长（{recovered.Count} 个实例）");
+            }
+            catch (Exception ex)
+            {
+                Logger.Instance.Trace("Playtime", "恢复游玩会话失败（忽略）: " + ex.Message);
+            }
+        });
+    }
+
+    /// <summary>Replaces the row so bindings (list + details panel) pick up new
+    /// playtime numbers. AddPlaytime returns the freshly loaded copy, so the
+    /// reference differs and SetProperty fires.</summary>
+    private void RefreshInstanceRow(GameInstance updated)
+    {
+        var index = -1;
+        for (var i = 0; i < Instances.Count; i++)
+            if (Instances[i].Id == updated.Id) { index = i; break; }
+        if (index >= 0) Instances[index] = updated;
+        if (SelectedInstance?.Id == updated.Id) SelectedInstance = updated;
+    }
+
+    /// <summary>Round-77: pre-launch mod check. Returns false when the user chose
+    /// not to launch. Runs on a worker thread; the dialog is shown on the UI.</summary>
+    private async Task<bool> RunPreflightAsync(GameInstance instance, CancellationToken ct)
+    {
+        if (!LauncherConfig.Instance.CheckModsBeforeLaunch) return true;
+        if (instance.LoaderType == ModLoaderType.Vanilla) return true;
+
+        ModPreflight.Report report;
+        try
+        {
+            report = await Task.Run(() =>
+                ModPreflight.Scan(instance.Directory, instance.LoaderType,
+                    line => Dispatch(() => AddLog(line))), ct).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            Logger.Instance.Warn("Preflight", "模组预检失败（忽略，继续启动）: " + ex.Message);
+            return true;
+        }
+
+        if (!report.HasIssues) return true;
+
+        Logger.Instance.Info("Preflight", $"{instance.Name}: {report.Headline}（共 {report.IssueCount} 项）");
+        var dialog = new PreflightWindow(report, instance) { Owner = Application.Current.MainWindow };
+        dialog.ShowDialog();
+        if (dialog.Choice == PreflightChoice.Cancel)
+        {
+            Status = "已取消启动（启动前检查发现模组问题）";
+            return false;
+        }
+        if (dialog.Choice == PreflightChoice.InstallFabricApi)
+        {
+            Status = "正在安装 Fabric API 前置…";
+            await EnsureFabricApiAsync(instance, ct, "启动前检查（缺少 Fabric API）").ConfigureAwait(true);
+        }
+        return true;
+    }
+
+    private void CancelDownloadJob(DownloadJob? job)
+    {
+        if (job is not { CanCancel: true }) return;
+        _jobManager.Cancel(job);
+        RefreshDownloadAggregate(force: true);
+    }
+
+    private void ClearFinishedDownloads()
+    {
+        var removed = _jobManager.ClearFinished();
+        RefreshDownloadAggregate(force: true);
+        if (removed > 0) Status = $"已清理 {removed} 个已结束任务";
+    }
 
     // ---- methods ----
     /// <summary>UI-thread dispatch. Uses BeginInvoke so high-frequency progress
@@ -947,13 +1562,25 @@ public class MainViewModel : ViewModelBase
         foreach (var i in _svc.Instances.LoadAll()) Instances.Add(i);
         SelectedAccount = Accounts.FirstOrDefault();
         SelectedInstance = Instances.FirstOrDefault();
+        LoadSettingsFromConfig();
+    }
+
+    /// <summary>Round-90: reload only the settings fields from config. Split out of
+    /// <see cref="LoadAll"/> so "放弃修改" can restore the page without reloading
+    /// accounts/instances (that would duplicate the observable collections).</summary>
+    private void LoadSettingsFromConfig()
+    {
         var c = LauncherConfig.Instance;
         MemoryMb = c.MaxMemoryMb;
+        // Round-83: the setter above wins over whatever auto mode displayed, so
+        // recompute AFTER the stored value is in place.
+        RefreshMemoryAdvice();
         JavaPath = c.JavaPath ?? "";
-        DownloadSourceText = c.DownloadSource == DownloadSource.BMCLAPI ? "BMCLAPI" : "官方";
+        DownloadPolicyText = DownloadRoutePolicy.DisplayName(c.RoutePolicy);
         ProxyUrl = c.ProxyUrl ?? "";
         MicrosoftClientIdText = c.MicrosoftClientId ?? "";
         AutoInstallFabricApi = c.AutoInstallFabricApi;
+        CheckModsBeforeLaunch = c.CheckModsBeforeLaunch;
         UpdateModeText = UpdatePolicy.DisplayText(c.UpdateMode);
         UpdateFeedUrlText = c.UpdateFeedUrl ?? "";
         CurseForgeApiKeyText = c.CurseForgeApiKey ?? "";
@@ -961,6 +1588,8 @@ public class MainViewModel : ViewModelBase
         WindowW = c.WindowWidth; WindowH = c.WindowHeight;
         ExtraJvm = c.ExtraJvmArgs;
         RootDirectoryText = c.RootDirectory;
+        CloseActionText = CloseBehaviorPolicy.DisplayText(c.CloseAction);
+        TrayEnabled = c.MinimizeToTrayEnabled;
         DarkTheme = c.Theme != ThemePreference.Light;
     }
 
@@ -999,7 +1628,72 @@ public class MainViewModel : ViewModelBase
     }
 
     // ---- Java environment (settings) ----
-    public ObservableCollection<JavaInfoVM> JavaList { get; } = new();
+    public BulkObservableCollection<JavaInfoVM> JavaList { get; } = new();
+
+    // ---- 实例级 Java（round-62）----
+    /// <summary>Guards the TwoWay ComboBox binding: clearing/rebuilding the
+    /// choices momentarily sets SelectedValue to null, which must NOT be
+    /// written back as "auto" and silently erase the user's saved Java.</summary>
+    private bool _rebuildingJavaChoices;
+
+    /// <summary>"Auto" plus every detected runtime. Rebuilt when Java is
+    /// re-scanned (including right after a one-click Java 21 install).</summary>
+    public ObservableCollection<JavaChoiceVM> InstanceJavaChoices { get; } = new();
+
+    /// <summary>Persisted per-instance java.exe path; empty = auto. Written
+    /// through InstanceManager.Update — the one legal metadata write entry.</summary>
+    public string SelectedInstanceJavaPath
+    {
+        get => SelectedInstance?.JavaPath ?? "";
+        set
+        {
+            if (_rebuildingJavaChoices) return;
+            var inst = SelectedInstance;
+            if (inst == null) return;
+            var normalized = string.IsNullOrWhiteSpace(value) ? null : value;
+            if (string.Equals(inst.JavaPath, normalized, StringComparison.OrdinalIgnoreCase)) return;
+            inst.JavaPath = normalized;
+            _svc.Instances.Update(inst);
+            OnPropertyChanged(nameof(SelectedInstanceJavaPath));
+            OnPropertyChanged(nameof(InstanceJavaHint));
+            Status = normalized == null
+                ? $"「{inst.Name}」已改为自动选择 Java（推荐 {JavaRequirement.RecommendMajor(inst.MinecraftVersion)}）"
+                : $"「{inst.Name}」已单独指定 Java：{normalized}";
+        }
+    }
+
+    public string InstanceJavaHint
+    {
+        get
+        {
+            var inst = SelectedInstance;
+            if (inst == null) return "选择左侧实例后，可为它单独指定 Java。";
+            var current = string.IsNullOrWhiteSpace(inst.JavaPath)
+                ? "自动选择（跟随全局设置与游戏版本需求）"
+                : Path.GetFileName(Path.GetDirectoryName(Path.GetDirectoryName(inst.JavaPath)) ?? inst.JavaPath);
+            return $"当前：{current}\n{JavaRequirement.Describe(inst.MinecraftVersion)}";
+        }
+    }
+
+    private void RefreshInstanceJavaChoices()
+    {
+        var selected = SelectedInstanceJavaPath;
+        _rebuildingJavaChoices = true;
+        try
+        {
+            InstanceJavaChoices.Clear();
+            InstanceJavaChoices.Add(new JavaChoiceVM("自动选择（按游戏版本）", ""));
+            foreach (var j in JavaList)
+                InstanceJavaChoices.Add(new JavaChoiceVM($"Java {j.Major} · {j.Version} · {j.Vendor}", j.Path));
+            // A previously chosen custom path that is no longer detected must
+            // stay visible, otherwise the ComboBox would silently show "auto".
+            if (!string.IsNullOrWhiteSpace(selected) && InstanceJavaChoices.All(c => c.Path != selected))
+                InstanceJavaChoices.Add(new JavaChoiceVM("自定义路径：" + selected, selected));
+        }
+        finally { _rebuildingJavaChoices = false; }
+        OnPropertyChanged(nameof(SelectedInstanceJavaPath));
+        OnPropertyChanged(nameof(InstanceJavaHint));
+    }
 
     // ---- One-click Java 21 (round-59) ----
     private readonly JavaRuntimeService _javaRuntime = new();
@@ -1017,26 +1711,31 @@ public class MainViewModel : ViewModelBase
     /// <summary>One click: Adoptium API → background download (NetRouting +
     /// DownloadEngine) → SHA-256 verify → silent extract into our own java/
     /// dir → persist as the launcher's default Java. Idempotent, no system
-    /// changes, every failure surfaces as a clear status message.</summary>
-    public async Task InstallJava21Async()
+    /// changes, every failure surfaces as a clear status message.
+    /// Round-78: the crash card may ask for 17 (or whatever the log demanded),
+    /// so the major is a parameter; the 21 button keeps its own entry point.</summary>
+    public Task InstallJava21Async() => InstallJavaMajorAsync(JavaRuntimeService.DefaultMajor);
+
+    public async Task InstallJavaMajorAsync(int major)
     {
+        if (major < 8) major = JavaRuntimeService.DefaultMajor;
         if (IsInstallingJava) return;
         IsInstallingJava = true;
         JavaInstallProgress = 0;
-        JavaInstallStatus = "正在获取 Java 21 版本信息...";
+        JavaInstallStatus = $"正在获取 Java {major} 版本信息...";
         Status = JavaInstallStatus;
         _javaCts = new CancellationTokenSource();
         try
         {
             JavaPackage? pkg = null;
-            try { pkg = await _javaRuntime.ResolveAsync(_javaCts.Token).ConfigureAwait(true); }
+            try { pkg = await _javaRuntime.ResolveAsync(major, _javaCts.Token).ConfigureAwait(true); }
             catch (Exception ex)
             {
                 // API 暂时不可达：本地已装过就直接复用，不打扰用户。
                 var offline = _javaRuntime.FindAlreadyInstalled();
                 if (offline != null)
                 {
-                    ApplyInstalledJava(offline, true);
+                    ApplyInstalledJava(offline, true, major);
                     JavaInstallStatus = "更新源暂时不可达，已把本机已安装的 Java 设为默认";
                     return;
                 }
@@ -1044,7 +1743,7 @@ public class MainViewModel : ViewModelBase
             }
             if (pkg == null)
             {
-                JavaInstallStatus = "未找到适用于 Windows x64 的 Java 21 安装包";
+                JavaInstallStatus = $"未找到适用于 Windows x64 的 Java {major} 安装包";
                 Status = JavaInstallStatus;
                 return;
             }
@@ -1055,11 +1754,11 @@ public class MainViewModel : ViewModelBase
                 var total = p.TotalBytes > 0 ? p.TotalBytes : pkg.Size;
                 var pct = total > 0 ? Math.Clamp(p.DownloadedBytes * 100.0 / total, 0, 100) : 0;
                 JavaInstallProgress = pct;
-                JavaInstallStatus = p.Message ?? $"正在下载 Java 21 {pct:0}%";
+                JavaInstallStatus = p.Message ?? $"正在下载 Java {pkg.Major} {pct:0}%";
             }), _javaCts.Token).ConfigureAwait(true);
 
             JavaInstallProgress = 100;
-            ApplyInstalledJava(result.JavaExecutable, result.AlreadyInstalled);
+            ApplyInstalledJava(result.JavaExecutable, result.AlreadyInstalled, pkg.Major);
         }
         catch (OperationCanceledException)
         {
@@ -1079,7 +1778,7 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    private void ApplyInstalledJava(string javaExe, bool alreadyInstalled)
+    private void ApplyInstalledJava(string javaExe, bool alreadyInstalled, int major = 21)
     {
         JavaPath = javaExe;
         var c = LauncherConfig.Instance;
@@ -1087,14 +1786,19 @@ public class MainViewModel : ViewModelBase
         c.Save();
         _ = LoadJavaListAsync();
         JavaInstallStatus = alreadyInstalled
-            ? "Java 21 已安装，已设为启动器默认 Java"
-            : "Java 21 安装完成，已设为启动器默认 Java";
+            ? $"Java {major} 已安装，已设为启动器默认 Java"
+            : $"Java {major} 安装完成，已设为启动器默认 Java";
         Status = JavaInstallStatus;
         ShowToast(JavaInstallStatus);
     }
 
-    // ---- Graphical crash report card (round-60) ----
+    // ---- 崩溃诊断卡（第 60 轮起；第 78 轮升级为「诊断 + 修复」） ----
     public const string HelpUrl = "https://github.com/adagarm123/AuroraLauncher/issues";
+    /// <summary>GPU vendor driver page. NVIDIA is the most common case; the
+    /// status line tells AMD / Intel users where to go instead.</summary>
+    public const string GpuDriverUrl = "https://www.nvidia.cn/geforce/drivers/";
+    /// <summary>For Windows Update-style driver search users.</summary>
+    public const string GpuDriverHint = "已打开 NVIDIA 驱动下载页；AMD / Intel 显卡请到对应官网的「驱动下载」，或在 Windows 更新里检查可选驱动";
 
     private CrashReportVM? _lastCrashReport;
     public CrashReportVM? LastCrashReport
@@ -1107,6 +1811,17 @@ public class MainViewModel : ViewModelBase
     }
 
     public bool HasCrashReport => LastCrashReport != null;
+
+    /// <summary>Context captured on the UI thread before the background
+    /// analysis (memory / Java census / loader) — the engine itself is pure.</summary>
+    private CrashContext? _lastCrashContext;
+
+    /// <summary>Where the last diagnostics bundle landed, so "发送给作者" can
+    /// point the user at a real file instead of asking them to export again.</summary>
+    private string? _lastBundlePath;
+
+    /// <summary>Repairs already applied for this crash, quoted in the mail body.</summary>
+    private readonly List<string> _crashFixAttempts = new();
 
     private void DismissCrashReport() => LastCrashReport = null;
 
@@ -1122,25 +1837,379 @@ public class MainViewModel : ViewModelBase
         catch (Exception ex) { Status = "无法打开链接: " + ex.Message; }
     }
 
-    /// <summary>Builds a friendly crash card from the structured triage,
-    /// switches the log page to errors-only and navigates there. Replaces the
-    /// old modal "go read the console" message box.</summary>
-    private void ShowCrashCard(int exit, string instanceName)
+    /// <summary>Diagnoses a crash and fills the card. Round-78: the log scan
+    /// (regex over up to 600 lines × 25 rules) runs on a BACKGROUND thread —
+    /// the game just died and the window must stay responsive. Everything the
+    /// engine needs is snapshotted on the UI thread first.</summary>
+    private async Task ShowCrashCardAsync(int exit, string instanceName)
     {
-        var report = CrashAnalyzer.BuildReport(exit, instanceName, Logs);
-        var vm = new CrashReportVM(report.ExitCode, report.InstanceName);
+        var snapshot = Logs.ToArray();
+        var inst = SelectedInstance;
+        var ctx = BuildCrashContext(exit, instanceName, inst);
+        _lastCrashContext = ctx;
+        _crashFixAttempts.Clear();
+
+        CrashDiagnosis diagnosis;
+        try
+        {
+            var text = string.Join("\n", snapshot);
+            diagnosis = await Task.Run(() => CrashResolutionEngine.Diagnose(text, ctx)).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            AddLog("[Crash] 诊断过程出错（不影响手动排查）: " + ex.Message);
+            diagnosis = new CrashDiagnosis(Array.Empty<CrashSolution>(), "error");
+        }
+
+        var vm = new CrashReportVM(exit, instanceName, diagnosis.Signature);
         var i = 1;
-        foreach (var c in report.Causes)
-            vm.Causes.Add(new CrashCauseVM(i++, c.Title, c.Suggestion));
+        foreach (var s in diagnosis.Solutions)
+            vm.Solutions.Add(new CrashSolutionVM(s, i++));
 
         LastCrashReport = vm;
         ShowErrorsOnly = true;
         Navigate("Logs");
-        Status = report.HasCauses
-            ? $"游戏崩溃：匹配到 {report.Causes.Count} 个可能原因，已生成崩溃报告卡片"
-            : "游戏崩溃：已生成崩溃报告卡片（未匹配到已知原因）";
-        AddLog($"[Crash] 游戏异常退出（代码 {exit}），匹配 {report.Causes.Count} 条规则；卡片已显示在日志页。");
-        ShowToast("检测到游戏崩溃，日志页已生成崩溃报告");
+        Status = diagnosis.HasSolutions
+            ? $"游戏崩溃：匹配到 {diagnosis.Solutions.Count} 个原因，其中 {vm.AutoFixCount} 条可一键修复"
+            : "游戏崩溃：未匹配到预置规则，可导出诊断包发给作者";
+        AddLog($"[Crash] 游戏异常退出（代码 {exit}），命中 {diagnosis.Solutions.Count} 条规则" +
+               $"，指纹 {diagnosis.Signature}；卡片已显示在日志页。");
+        ShowToast(diagnosis.HasSolutions ? "检测到游戏崩溃，日志页已生成诊断与修复建议" : "检测到游戏崩溃，日志页可导出诊断包");
+    }
+
+    /// <summary>Everything the diagnosis needs, read on the UI thread.</summary>
+    private CrashContext BuildCrashContext(int exit, string instanceName, GameInstance? inst)
+    {
+        var physical = 0;
+        try { physical = (int)(GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 1024 / 1024); } catch { }
+
+        var majors = new List<int>();
+        try { foreach (var j in JavaList) if (j.Major > 0) majors.Add(j.Major); } catch { }
+
+        // The Java this instance will actually run with: instance override wins.
+        int? currentMajor = null;
+        try
+        {
+            var path = !string.IsNullOrWhiteSpace(inst?.JavaPath) ? inst!.JavaPath : JavaPath;
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                var match = JavaList.FirstOrDefault(j =>
+                    string.Equals(j.Path, path, StringComparison.OrdinalIgnoreCase));
+                if (match != null) currentMajor = match.Major;
+            }
+            currentMajor ??= majors.Count > 0 ? majors.OrderByDescending(m => m).First() : null;
+        }
+        catch { }
+
+        return new CrashContext
+        {
+            InstanceName = instanceName,
+            ExitCode = exit,
+            // Round-83: diagnose against the heap the game really got, not the
+            // stored number that auto mode may have overridden.
+            MaxMemoryMb = EffectiveMemoryMb(),
+            TotalPhysicalMb = physical,
+            Loader = inst?.LoaderType ?? ModLoaderType.Vanilla,
+            MinecraftVersion = inst?.MinecraftVersion ?? "",
+            InstalledJavaMajors = majors,
+            CurrentJavaMajor = currentMajor
+        };
+    }
+
+    /// <summary>
+    /// Runs ONE repair from the crash card. Safety contract (guarded by the
+    /// self-test): this method may only change launcher settings (memory / Java
+    /// path), download missing files into the instance, or open a folder / page.
+    /// It must never delete or move user data, and never touch the system
+    /// environment. Everything runs async — the crash card stays interactive.
+    /// </summary>
+    private async Task ApplyCrashFixAsync(CrashSolutionVM? item)
+    {
+        if (item == null || !item.HasAction || !item.CanApply) return;
+        var s = item.Solution;
+        var inst = SelectedInstance;
+        AddLog($"[CrashFix] {s.RuleId} → {s.Action}（{CrashFixSafety.Describe(s.Action)}）");
+        try
+        {
+            switch (s.Action)
+            {
+                case FixAction.RaiseMemory:
+                case FixAction.LowerMemory:
+                {
+                    if (!int.TryParse(s.Payload, out var target) || target < 512)
+                    {
+                        Status = "内存参数无效，请到设置页手动调整";
+                        return;
+                    }
+                    var cfg = LauncherConfig.Instance;
+                    // Round-83: with auto mode on, the effective heap is the
+                    // recommendation, not the stored number — compare and report
+                    // against what the game actually got.
+                    var before = cfg.AutoMemory ? EffectiveMemoryMb() : cfg.MaxMemoryMb;
+                    if (before == target && !cfg.AutoMemory)
+                    {
+                        item.MarkApplied($"当前已经是 {before} MB，无需修改");
+                        return;
+                    }
+                    // Auto would recompute over this number on the next launch,
+                    // turning the repair into a no-op. Pin the value instead.
+                    if (cfg.AutoMemory)
+                    {
+                        cfg.AutoMemory = false;
+                        AutoMemory = false;
+                    }
+                    cfg.MaxMemoryMb = target;
+                    cfg.MinMemoryMb = Math.Max(512, target / 2);
+                    cfg.Save();
+                    MemoryMb = target; // 设置页同步，避免下次保存把旧值写回去
+                    OnPropertyChanged(nameof(MemoryMb));
+                    RefreshMemoryAdvice();
+                    var note = $"已把最大内存从 {before} MB 调到 {target} MB（同时切换为手动分配），重新启动游戏后生效（可在设置页改回）";
+                    _crashFixAttempts.Add($"最大内存 {before} MB → {target} MB");
+                    item.MarkApplied(note);
+                    Status = note;
+                    ShowToast(note);
+                    break;
+                }
+
+                case FixAction.InstallJava:
+                {
+                    var major = int.TryParse(s.Payload, out var m) ? m : JavaRuntimeService.DefaultMajor;
+                    Navigate("Settings");
+                    Status = $"正在安装 Java {major}…（进度见设置页）";
+                    await InstallJavaMajorAsync(major).ConfigureAwait(true);
+                    var ok = JavaInstallStatus.Contains("安装完成") || JavaInstallStatus.Contains("已安装");
+                    if (ok)
+                    {
+                        AdoptJavaForSelectedInstance(JavaPath);
+                        _crashFixAttempts.Add($"安装并启用 Java {major}");
+                        item.MarkApplied(JavaInstallStatus + "；重新启动游戏即可");
+                    }
+                    else
+                    {
+                        item.MarkApplied("安装没有完成：" + JavaInstallStatus);
+                    }
+                    break;
+                }
+
+                case FixAction.UseInstalledJava:
+                {
+                    var required = int.TryParse(s.Payload, out var need) ? need : JavaRuntimeService.DefaultMajor;
+                    var pick = JavaList.Where(j => j.Major >= required)
+                        .OrderBy(j => j.Major).FirstOrDefault();
+                    if (pick == null)
+                    {
+                        Status = $"本机没有 Java {required} 或更高版本，请用「一键安装」";
+                        return;
+                    }
+                    var cfg = LauncherConfig.Instance;
+                    cfg.JavaPath = pick.Path;
+                    cfg.Save();
+                    JavaPath = pick.Path;
+                    AdoptJavaForSelectedInstance(pick.Path);
+                    _ = LoadJavaListAsync();
+                    var note = $"已切换到 Java {pick.Major}（{pick.Version}），重新启动游戏即可";
+                    _crashFixAttempts.Add($"Java 切换到 {pick.Major}");
+                    item.MarkApplied(note);
+                    Status = note;
+                    ShowToast(note);
+                    break;
+                }
+
+                case FixAction.InstallFabricApi:
+                {
+                    if (inst == null) { Status = "请先选择一个实例"; return; }
+                    if (inst.LoaderType != ModLoaderType.Fabric)
+                    {
+                        Status = "当前实例不是 Fabric，Fabric API 不适用";
+                        return;
+                    }
+                    var installed = await EnsureFabricApiAsync(inst, CancellationToken.None, "崩溃诊断修复")
+                        .ConfigureAwait(true);
+                    item.MarkApplied(installed ? "Fabric API 已下载到 mods 目录，重新启动游戏即可"
+                                               : "Fabric API 已在实例中或安装被取消");
+                    _crashFixAttempts.Add(installed ? "安装 Fabric API" : "检查 Fabric API（已存在）");
+                    break;
+                }
+
+                case FixAction.RepairFiles:
+                {
+                    Navigate("Downloads");
+                    await RepairInstanceAsync().ConfigureAwait(true);
+                    item.MarkApplied(Status ?? "已尝试补全游戏文件");
+                    _crashFixAttempts.Add("校验并补全游戏文件");
+                    break;
+                }
+
+                case FixAction.ScanMods:
+                {
+                    if (inst == null) { Status = "请先选择一个实例"; return; }
+                    Status = "正在逐个读取模组元数据…";
+                    var report = await Task.Run(() => ModPreflight.Scan(inst.Directory, inst.LoaderType))
+                        .ConfigureAwait(true);
+                    var lines = new List<string>();
+                    if (report.Missing.Count > 0)
+                        lines.Add("缺少前置：" + string.Join("、", report.Missing.Select(d => d.ModId).Distinct()));
+                    if (report.Duplicates.Count > 0) lines.Add(string.Join("；", report.Duplicates));
+                    if (report.Conflicts.Count > 0) lines.Add(string.Join("；", report.Conflicts));
+                    if (report.WrongLoader.Count > 0) lines.Add(string.Join("；", report.WrongLoader));
+                    var text = lines.Count == 0
+                        ? $"扫描了 {report.ScannedJars} 个模组：没有发现缺失前置 / 冲突 / 重复，问题可能出在模组与游戏版本的匹配上"
+                        : $"扫描了 {report.ScannedJars} 个模组：" + string.Join("；", lines);
+                    item.MarkApplied(text);
+                    Status = text;
+                    AddLog("[CrashFix] " + text);
+                    ShowToast("模组体检完成，结果见崩溃卡片");
+                    break;
+                }
+
+                case FixAction.OpenModsFolder:
+                    OpenFolder(inst == null ? null : Path.Combine(inst.Directory, "mods"));
+                    item.MarkApplied("已打开 mods 文件夹：删掉重复/冲突的模组后重新启动");
+                    break;
+
+                case FixAction.OpenShaderFolder:
+                    OpenFolder(inst == null ? null : Path.Combine(inst.Directory, "shaderpacks"));
+                    item.MarkApplied("已打开 shaderpacks：先把光影包移出去再试一次");
+                    break;
+
+                case FixAction.OpenSavesFolder:
+                    OpenFolder(inst == null ? null : Path.Combine(inst.Directory, "saves"));
+                    item.MarkApplied("已打开 saves：先把出问题的存档移出去");
+                    break;
+
+                case FixAction.OpenGameFolder:
+                    OpenFolder(inst?.Directory);
+                    item.MarkApplied("已打开实例目录");
+                    break;
+
+                case FixAction.OpenSettings:
+                    Navigate("Settings");
+                    item.MarkApplied("已切换到设置页");
+                    break;
+
+                case FixAction.OpenAccounts:
+                    Navigate("Home");
+                    Status = "请在首页重新登录微软账户，或改用离线账户";
+                    item.MarkApplied("已回到首页账户区");
+                    break;
+
+                case FixAction.OpenGpuDriver:
+                    OpenUrl(GpuDriverUrl);
+                    Status = GpuDriverHint;
+                    item.MarkApplied(GpuDriverHint);
+                    break;
+
+                case FixAction.OpenHelpPage:
+                    OpenHelpLink();
+                    item.MarkApplied("已打开求助页");
+                    break;
+
+                case FixAction.ExportBundle:
+                    await ExportDiagnosticsAsync().ConfigureAwait(true);
+                    item.MarkApplied(_lastBundlePath == null ? "未导出" : "诊断包：" + _lastBundlePath);
+                    break;
+
+                case FixAction.MailAuthor:
+                    await SendCrashReportAsync().ConfigureAwait(true);
+                    item.MarkApplied("已打开邮件窗口，请把诊断包拖进附件后发送");
+                    break;
+
+                default:
+                    Status = "这条建议需要你手动处理";
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Status = "修复失败：" + ex.Message;
+            AddLog("[CrashFix] 失败: " + ex);
+            item.MarkApplied("修复失败：" + ex.Message);
+        }
+    }
+
+    /// <summary>If the instance carries its own Java override, switching the
+    /// launcher default alone would NOT change what the game actually runs —
+    /// so the repair updates the override too (still launcher config only).</summary>
+    private void AdoptJavaForSelectedInstance(string javaExe)
+    {
+        var inst = SelectedInstance;
+        if (inst == null || string.IsNullOrWhiteSpace(inst.JavaPath)) return;
+        inst.JavaPath = javaExe;
+        _svc.Instances.Update(inst);
+        AddLog($"[CrashFix] 实例 {inst.Name} 的 Java 覆盖已同步为 {javaExe}");
+    }
+
+    /// <summary>Hands a fully prepared bug report to the user's own mail
+    /// client. Nothing is sent automatically: the user reviews it and presses
+    /// Send — the launcher never holds mail credentials.</summary>
+    public async Task SendCrashReportAsync()
+    {
+        var vm = LastCrashReport;
+        if (vm == null) { Status = "没有可发送的崩溃报告"; return; }
+
+        if (string.IsNullOrEmpty(_lastBundlePath) || !File.Exists(_lastBundlePath))
+        {
+            Status = "正在生成诊断包（已脱敏）…";
+            _lastBundlePath = await ExportCrashBundleAsync().ConfigureAwait(true);
+        }
+
+        var ctx = new SupportReport.Context
+        {
+            InstanceName = vm.InstanceName,
+            ExitCode = vm.ExitCode,
+            MinecraftVersion = SelectedInstance?.MinecraftVersion ?? "",
+            Loader = SelectedInstance == null
+                ? ""
+                : SelectedInstance.LoaderType + (string.IsNullOrWhiteSpace(SelectedInstance.LoaderVersion)
+                    ? "" : " " + SelectedInstance.LoaderVersion),
+            BundlePath = _lastBundlePath,
+            Signature = vm.Signature,
+            AttemptedFixes = _crashFixAttempts.ToArray(),
+            OsDescription = System.Runtime.InteropServices.RuntimeInformation.OSDescription,
+            JavaText = JavaList.Count == 0
+                ? "未探测到"
+                : string.Join("，", JavaList.Select(j => $"Java {j.Major}"))
+        };
+
+        var solutions = vm.Solutions.Select(s => s.Solution).ToList();
+        var mailto = SupportReport.BuildMailto(solutions, ctx);
+        try
+        {
+            Process.Start(new ProcessStartInfo(mailto) { UseShellExecute = true });
+            Status = $"已打开邮件窗口，收件人 {SupportReport.AuthorEmail}" +
+                     (_lastBundlePath == null ? "" : $"；请把诊断包拖进附件：{_lastBundlePath}");
+            ShowToast("邮件已准备好，请附上诊断包后手动发送");
+        }
+        catch (Exception ex)
+        {
+            Status = $"无法唤起邮件客户端（{ex.Message}），可手动发到 {SupportReport.AuthorEmail}";
+        }
+    }
+
+    /// <summary>Exports a bundle without a dialog (used by "发送给作者").</summary>
+    private async Task<string?> ExportCrashBundleAsync()
+    {
+        try
+        {
+            var dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "AuroraLauncher");
+            Directory.CreateDirectory(dir);
+            var zip = Path.Combine(dir, $"aurora-diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.zip");
+            var instances = _svc.Instances.LoadAll();
+            await Task.Run(() => DiagnosticsExporter.ExportAsync(zip, LauncherConfig.Instance.RootDirectory,
+                instances)).ConfigureAwait(true);
+            _lastBundlePath = zip;
+            Status = "诊断包已生成：" + zip;
+            AddLog("[Crash] 诊断包已生成：" + zip);
+            return zip;
+        }
+        catch (Exception ex)
+        {
+            Status = "诊断包生成失败：" + ex.Message;
+            AddLog("[Crash] 诊断包生成失败: " + ex);
+            return null;
+        }
     }
 
     // ---- CurseForge browse (round-60) ----
@@ -1281,19 +2350,32 @@ public class MainViewModel : ViewModelBase
         AddLog("[OptiFine] " + OptiFineStatus);
     }
 
-    public async Task LoadJavaListAsync()
+    private CoalescingSingleFlight<string>? _javaScanFlight;
+
+    /// <summary>Same coalescing contract as loader cards (round-64): a refresh
+    /// requested during a scan (e.g. right after one-click Java 21 install)
+    /// collapses into one extra pass — never two concurrent sweeps of
+    /// `java -version` processes.</summary>
+    public Task LoadJavaListAsync()
+    {
+        _javaScanFlight ??= new CoalescingSingleFlight<string>(_ => LoadJavaListCoreAsync());
+        return _javaScanFlight.RequestAsync("scan");
+    }
+
+    private async Task LoadJavaListCoreAsync()
     {
         try
         {
             var all = await _svc.FindJavaAsync().ConfigureAwait(true);
+            var items = all.DistinctBy(j => j.JavaExecutable)
+                .Select(j => new JavaInfoVM(j.Version, j.Vendor, j.JavaExecutable, j.Major)).ToList();
             Dispatch(() =>
             {
-                JavaList.Clear();
-                foreach (var j in all.DistinctBy(j => j.JavaExecutable))
-                    JavaList.Add(new JavaInfoVM(j.Version, j.Vendor, j.JavaExecutable, j.Major));
+                JavaList.Replace(items);
+                RefreshInstanceJavaChoices();
             });
         }
-        catch (Exception ex) { Status = "Java 检测失败: " + ex.Message; }
+        catch (Exception ex) { Dispatch(() => Status = "Java 检测失败: " + ex.Message); }
     }
 
     /// <summary>Selects a detected Java as the launcher's Java (persisted).</summary>
@@ -1317,59 +2399,163 @@ public class MainViewModel : ViewModelBase
         ShowToast($"启动器已更新（更新日志至第 {HelpContent.LatestChangelogRound} 轮），左侧「更新日志」页可查看本次变化。");
     }
 
-    /// <summary>One instance per page, built on first visit and reused
-    /// (round-55). Re-creating the whole XAML tree on EVERY sidebar click
-    /// blocked the UI thread — rapid navigation froze the window ("未响应").
-    /// Views are stateless wrappers around this VM and their Loaded/Unloaded
-    /// hooks are re-entrant, so reuse is safe.</summary>
-    private readonly Dictionary<string, UIElement> _pageCache = new();
+    private bool _hasNavigated;
 
+    /// <summary>Round-65: navigation changes ONLY CurrentPageKey. MainWindow
+    /// listens for it, lazily creates the page once and flips Visibility —
+    /// no visual-tree rebuild, no ContentControl.Content swap, no Loaded
+    /// storm. Repeat clicks on the active page are ignored entirely.</summary>
     public void Navigate(string? key)
     {
-        key ??= "Home";
-        CurrentPageKey = key;
+        var target = NavigationPolicy.Normalize(key);
+        if (!NavigationPolicy.ShouldNavigate(CurrentPageKey, target, _hasNavigated)) return;
+        // Round-90: leaving the settings page with unsaved edits would silently
+        // throw them away. Ask first; "取消" keeps the user where they are.
+        if (!ConfirmLeaveSettings(target)) return;
+        _hasNavigated = true;
+        CurrentPageKey = target;
+        // A pending loader-card debounce belongs to the Download page only.
+        // Pages no longer raise Loaded on re-entry, so re-arm it explicitly.
+        if (target != "Download") _loaderCardsDebounce?.Stop();
+        else
+        {
+            EnsureLoaderCardsRefresh();
+            // Round-85: measuring costs one HEAD per host and is cached for
+            // 5 minutes — fire-and-forget here so the numbers under the
+            // dropdown are current, never on the download path itself.
+            EnsureNetworkProbe();
+        }
+        // Round-69: the Logs page is the only live feed; it was frozen while
+        // hidden, so publish the backlog once the page is on screen.
+        if (target == "Logs") Dispatch(RefreshLogsOnShow);
+        // Round-87: the residue banner belongs to this page, so refresh the scan
+        // when it comes into view (cheap; the walk is cached by the OS).
+        if (target == "Downloads") ScanDownloadResidue();
         // Visiting the changelog page marks the "已更新" toast as read.
-        if (key == "Changelog" && LauncherConfig.Instance.ChangelogSeenRound < HelpContent.LatestChangelogRound)
+        if (target == "Changelog" && LauncherConfig.Instance.ChangelogSeenRound < HelpContent.LatestChangelogRound)
         {
             LauncherConfig.Instance.ChangelogSeenRound = HelpContent.LatestChangelogRound;
             LauncherConfig.Instance.Save();
         }
-        if (_pageCache.TryGetValue(key, out var cached))
-        {
-            CurrentPage = cached;
-            return;
-        }
-        UserControl page = key switch
-        {
-            "Home" => new HomeView(),
-            "Download" => new DownloadView(),
-            "Instances" => new InstancesView(),
-            "Mods" => new ModsView(),
-            "Downloads" => new DownloadsView(),
-            "Help" => new HelpView(),
-            "Settings" => new SettingsView(),
-            "Logs" => new LogsView(),
-            "Changelog" => new ChangelogView(),
-            _ => new HomeView()
-        };
-        _pageCache[key] = page;
-        CurrentPage = page;
     }
 
-    public int MemoryMb { get; set; }
+    private int _memoryMb;
+    /// <summary>Heap shown in settings. Round-83: raising the value recomputes the
+    /// over-limit warning immediately — typing 99999 must turn red WHILE typing,
+    /// not after saving.</summary>
+    public int MemoryMb
+    {
+        get => _memoryMb;
+        set
+        {
+            if (!SetProperty(ref _memoryMb, value)) return;
+            RefreshMemoryWarning();
+        }
+    }
     public string JavaPath { get; set; } = "";
-    public string DownloadSourceText { get; set; } = "官方";
+    private string _downloadPolicyText = DownloadRoutePolicy.DisplayName(DownloadPolicy.Auto);
+    /// <summary>Round-85: three-state download policy (auto / official / mirror).
+    /// Changing it updates the explanation line immediately — "强制官方" and
+    /// "自动" behave very differently when the official host is blackholed.</summary>
+    public string DownloadPolicyText
+    {
+        get => _downloadPolicyText;
+        set
+        {
+            if (!SetProperty(ref _downloadPolicyText, value)) return;
+            LauncherConfig.Instance.RoutePolicy = DownloadRoutePolicy.Parse(value);
+            RefreshNetworkNote();
+        }
+    }
+
+    /// <summary>Legacy binding name kept so older XAML/automation keeps working.</summary>
+    public string DownloadSourceText
+    {
+        get => DownloadPolicyText;
+        set => DownloadPolicyText = value;
+    }
     public string ProxyUrl { get; set; } = "";
     public string MicrosoftClientIdText { get; set; } = "";
     /// <summary>安装 Fabric 实例时自动安装适配的 Fabric API 前置（默认开启）。</summary>
     public bool AutoInstallFabricApi { get; set; } = true;
+
+    /// <summary>Round-77: 启动前检查模组依赖 / 冲突（默认开启）。</summary>
+    public bool CheckModsBeforeLaunch { get; set; } = true;
+
     public int WindowW { get; set; } = 854;
     public int WindowH { get; set; } = 480;
     public string ExtraJvm { get; set; } = "";
     public string RootDirectoryText { get; set; } = "";
 
+    // ---- round-74: portable mode + tray / close behaviour ----
+    public ObservableCollection<string> CloseActionOptions { get; } = new()
+    {
+        CloseBehaviorPolicy.DisplayText(CloseAction.Ask),
+        CloseBehaviorPolicy.DisplayText(CloseAction.Exit),
+        CloseBehaviorPolicy.DisplayText(CloseAction.MinimizeToTray)
+    };
+
+    /// <summary>Bound to the combo box; ApplySettings() persists it.</summary>
+    public string CloseActionText { get => _closeActionText; set => SetProperty(ref _closeActionText, value); }
+    private string _closeActionText = CloseBehaviorPolicy.DisplayText(CloseAction.Ask);
+
+    /// <summary>Tray icon on/off. Turning it OFF also disables "隐藏到托盘" (the
+    /// close policy falls back to ask/exit), which is what the user expects.</summary>
+    public bool TrayEnabled { get => _trayEnabled; set { if (SetProperty(ref _trayEnabled, value)) OnPropertyChanged(nameof(TrayNote)); } }
+    private bool _trayEnabled = true;
+
+    public string TrayNote => TrayEnabled
+        ? "托盘图标已启用：关闭窗口时可选择最小化到托盘，下载继续在后台进行（需重启启动器生效）。"
+        : "托盘图标已关闭：关闭窗口将直接退出（有下载时仍会先询问）。需重启启动器生效。";
+
+    public bool IsPortableMode => LauncherConfig.Instance.IsPortableMode;
+    public bool IsRootDirectoryEditable => !IsPortableMode;
+    public string PortableModeText => PortableModePolicy.Describe(
+        IsPortableMode, LauncherConfig.Instance.RootDirectory, Environment.ProcessPath);
+
+    /// <summary>Creates portable.txt beside the EXE. Data is NOT migrated — the
+    /// dialog says so explicitly and the change applies on the next start.</summary>
+    public void EnablePortableMode()
+    {
+        if (IsPortableMode) { Status = "当前已经是便携模式"; return; }
+        var exe = Environment.ProcessPath;
+        if (string.IsNullOrEmpty(exe)) { Status = "无法定位程序路径"; return; }
+
+        var answer = System.Windows.MessageBox.Show(
+            Application.Current.MainWindow,
+            "将在程序所在目录创建 portable.txt。\n\n" +
+            "下次启动后，配置、实例、缓存都会保存到程序目录，不再写入系统用户目录（适合 U 盘 / 移动硬盘）。\n\n" +
+            $"当前已有的数据仍保留在原位置：{LauncherConfig.Instance.RootDirectory}\n" +
+            "启动器不会自动移动这些文件——便携模式只改变以后的写入位置。\n\n确定创建吗？",
+            "启用便携模式", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (answer != MessageBoxResult.Yes) return;
+
+        try
+        {
+            var path = PortableModePolicy.CreateMarker(exe, "由设置页创建");
+            Logger.Instance.Info("Config", "已创建便携模式标记: " + path);
+            Status = "已创建 portable.txt，重启后进入便携模式";
+            ShowToast("已创建 portable.txt，重启启动器后生效");
+            OnPropertyChanged(nameof(PortableModeText));
+        }
+        catch (Exception ex)
+        {
+            Status = "创建 portable.txt 失败: " + ex.Message;
+            System.Windows.MessageBox.Show(Application.Current.MainWindow,
+                "无法创建 portable.txt：\n" + ex.Message + "\n\n如果启动器放在 Program Files 等受保护目录，请换到普通文件夹（如桌面或 U 盘）。",
+                "启用便携模式失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private int _versionsRunning;
+
+    /// <summary>Single-flight (round-63): page Loaded events, the refresh
+    /// button and filter changes can all ask for the manifest. Only ONE fetch
+    /// may be in flight — the rest return immediately instead of piling up
+    /// continuations on the UI thread.</summary>
     public async Task LoadVersionsAsync()
     {
+        if (Interlocked.Exchange(ref _versionsRunning, 1) != 0) return;
         try
         {
             IsBusy = true;
@@ -1379,15 +2565,28 @@ public class MainViewModel : ViewModelBase
                 : manifest.Versions.Where(v => v.Type == VersionFilter).ToList();
             if (!string.IsNullOrWhiteSpace(VersionSearchText))
                 list = list.Where(v => v.Id.Contains(VersionSearchText, StringComparison.OrdinalIgnoreCase)).ToList();
+            // ONE Reset notification instead of Clear + 103 Add events.
+            // Reset drops ListBox.SelectedItem, and Versions DOES have
+            // selection semantics — restore it by stable id (round-64).
+            var keepId = SelectedVersion?.Id;
+            var fromCache = _svc.LastManifestFromCache;
             Dispatch(() =>
             {
-                Versions.Clear();
-                foreach (var v in list) Versions.Add(v);
+                Versions.Replace(list);
+                SelectedVersion = SelectionPolicy.RestoreByKey(list, v => v.Id, keepId);
+                // Round-71: say WHY the list may be stale instead of pretending
+                // everything is fine (or showing an empty page on failure).
+                Status = fromCache
+                    ? $"网络不可用，已加载本地缓存的 {list.Count} 个版本（安装/启动仍需联网）"
+                    : $"已加载 {list.Count} 个版本";
             });
-            Status = $"已加载 {list.Count} 个版本";
         }
-        catch (Exception ex) { Status = "加载版本失败: " + ex.Message; }
-        finally { IsBusy = false; }
+        catch (Exception ex)
+        {
+            Dispatch(() => Status = "加载版本失败: " + ex.Message +
+                              "（已同时尝试官方与镜像线路，仍无法取到版本清单；请检查网络或代理设置）");
+        }
+        finally { IsBusy = false; Volatile.Write(ref _versionsRunning, 0); }
     }
 
     private DateTime _lastProgressUi = DateTime.MinValue;
@@ -1402,8 +2601,13 @@ public class MainViewModel : ViewModelBase
 
     private void RefreshNetworkNote()
     {
-        var note = LauncherConfig.Instance.NetworkNote;
-        Dispatch(() => NetworkNoteDisplay = string.IsNullOrWhiteSpace(note) ? null : "当前网络：" + note);
+        // Round-85: computed live from the probe + policy, not from a persisted
+        // string — a stored sentence goes stale the moment the network changes.
+        var policy = LauncherConfig.Instance.RoutePolicy;
+        var latest = NetworkProbe.Latest;
+        var text = DownloadRoutePolicy.Describe(policy, NetworkProbe.Preference,
+            latest?.OfficialLatency, latest?.MirrorLatency, latest != null);
+        Dispatch(() => NetworkNoteDisplay = text);
     }
 
     private void OnDownloadProgress(DownloadProgress p)
@@ -1469,6 +2673,23 @@ public class MainViewModel : ViewModelBase
             }
         }
         return s;
+    }
+
+    /// <summary>Round-72: stage flow chart that belongs to ONE job.</summary>
+    private void InitStages(DownloadJob job, IEnumerable<(string Key, string Label)> stages, string title)
+    {
+        job.SetStages(stages);
+        InstallTitle = title;
+        InstallError = null;
+        InstallSuccess = null;
+    }
+
+    /// <summary>Round-72: per-job stage callback (several jobs can run at once).</summary>
+    private void OnInstallStage(DownloadJob job, string key)
+    {
+        job.EnterStage(key);
+        var label = job.Stages.FirstOrDefault(st => st.Key == key)?.Label ?? key;
+        Status = $"正在安装… {label}";
     }
 
     private void InitStages(IEnumerable<(string Key, string Label)> stages, string title)
@@ -1564,13 +2785,29 @@ public class MainViewModel : ViewModelBase
 
     public async Task LaunchAsync()
     {
-        if (SelectedInstance == null) { Status = "请先选择实例"; return; }
-        if (SelectedAccount == null) { Status = "请先选择/添加账户"; return; }
+        // Round-82: one decision table for "can we launch at all" — the button
+        // label, the redirect target and the message all come from it.
+        var block = LaunchGuardPolicy.Decide(Instances.Count, SelectedInstance != null, SelectedAccount != null);
+        if (block != LaunchGuardPolicy.Block.None)
+        {
+            var (message, page) = LaunchGuardPolicy.Describe(block);
+            Status = message;
+            AddLog($"[Launch] 拦截（{block}）：{message}");
+            if (page != null) Navigate(page);
+            if (block == LaunchGuardPolicy.Block.NoInstances) ShowToast("还没有实例：先选一个游戏版本安装");
+            return;
+        }
         if (IsBusy) { Status = "有任务正在进行中，请等待完成或取消后再试"; return; }
+
+        // Round-77: these two outlive the try block because the playtime settlement
+        // happens in `finally` (it must run for crashes and cancels too).
+        GameInstance? instance = null;
+        var playedAt = DateTime.MinValue;
+        LaunchOutcome? runOutcome = null;
         try
         {
             IsBusy = true;
-            var instance = SelectedInstance;
+            instance = SelectedInstance;
             _cts = new CancellationTokenSource();
 
             // ---- 启动前自动扫描：文件不完整才补全并跳转下载页；完整则直接启动 ----
@@ -1592,6 +2829,42 @@ public class MainViewModel : ViewModelBase
                 Status = $"{instance.Name} 文件完整，直接启动...";
             }
 
+            // Round-92: 补全之后仍然不完整就不能装作没问题地启动。
+            // 这是「下载了整合包却只玩到原版」的成因：加载器没装上、或整合包
+            // 的模组一个都没下到，而旧代码只检查原版文件，于是判定"完整"直接放行。
+            var gate = _svc.CheckReadiness(instance);
+            if (gate.Blocks)
+            {
+                Dispatch(() => AddLog($"[Launch] {gate.Headline}：{gate.Detail}"));
+                if (!ConfirmLaunchGate(gate, instance))
+                {
+                    Status = gate.Headline + "（未启动）";
+                    return;
+                }
+            }
+
+            // Round-92: instances created before we recorded the pack expectation
+            // cannot be verified. If such an instance has a loader but no mods at
+            // all, say so — silently starting "Forge with 0 mods" is exactly the
+            // experience the user complained about.
+            if (!instance.IsModpack && instance.LoaderType != ModLoaderType.Vanilla &&
+                ModpackIntegrity.CountModJars(instance.Directory) == 0)
+            {
+                AddLog("[Launch] 提示：这个实例的 mods 文件夹是空的（0 个模组）。" +
+                       "如果它是整合包，说明当初没装完 —— 请重新导入整合包。");
+                ShowToast("这个实例没有任何模组：如果它是整合包，请重新导入");
+            }
+
+            // Round-77: 启动前模组预检（缺前置 / 冲突 / 重复 / 加载器不符）。
+            // 100ms 级别的本地扫描，能挡掉最常见的"一启动就崩"。
+            if (!await RunPreflightAsync(instance, _cts.Token).ConfigureAwait(true)) return;
+
+            // Round-79: snapshot saves BEFORE the game can touch them. Awaited on
+            // purpose — a backup that finishes after the game started protects
+            // nothing. Size-capped by SaveBackupPolicy, so this is seconds at most.
+            if (SaveBackupPolicy.ShouldRun(LauncherConfig.Instance.SaveBackup, BackupTrigger.BeforeLaunch))
+                await BackupSavesAsync(instance, BackupTrigger.BeforeLaunch, interactive: false).ConfigureAwait(true);
+
             Status = $"正在启动 {instance.Name} ...";
             var spec = await _svc.BuildLaunchSpecAsync(instance, SelectedAccount);
             Dispatch(() => AddLog("[Launch] " + spec.DisplayCommandLine));
@@ -1606,7 +2879,16 @@ public class MainViewModel : ViewModelBase
                               (instance.LoaderType != ModLoaderType.Vanilla ? $" {instance.LoaderVersion}" : "") +
                               $" · {modContext}";
 
-            var exit = await _svc.LaunchAsync(spec, line => Dispatch(() => AddLog(line)), CancellationToken.None, contextLine);
+            // Round-77: 计时从真正启动进程前开始；会话同时落盘 + 心跳，
+            // 启动器被强杀时下次启动能按最后一次心跳结算。
+            playedAt = DateTime.Now;
+            _playtime.Begin(instance.Id);
+            var launched = _svc.Instances.RecordLaunchStart(instance.Id);
+            if (launched != null) Dispatch(() => RefreshInstanceRow(launched));
+
+            var outcome = await _svc.LaunchWithStatsAsync(spec, line => Dispatch(() => AddLog(line)), CancellationToken.None, contextLine);
+            var exit = outcome.ExitCode;
+            runOutcome = outcome;
             if (exit == 0)
             {
                 LastCrashReport = null;
@@ -1620,12 +2902,40 @@ public class MainViewModel : ViewModelBase
             {
                 // Round-60: a friendly graphical card replaces the old
                 // "go read the black console" warning dialog.
-                ShowCrashCard(exit, SelectedInstance?.Name ?? "未知实例");
+                // Round-78: the card now carries diagnosis + repair actions,
+                // and the analysis runs off the UI thread.
+                await ShowCrashCardAsync(exit, SelectedInstance?.Name ?? "未知实例");
             }
         }
         catch (OperationCanceledException) { Status = "已取消（未完成的临时文件已清理）"; }
-        catch (Exception ex) { FailStages(ex.Message); Status = "启动失败: " + ex.Message; }
-        finally { IsBusy = false; }
+        catch (Exception ex) { Status = ReportLaunchFailure(ex); }
+        finally
+        {
+            // Round-77: 结束计时并写入实例元数据（无论正常退出、崩溃还是取消）。
+            var span = _playtime.End();
+            if (span > TimeSpan.Zero && instance != null && playedAt != DateTime.MinValue)
+            {
+                var updated = _svc.Instances.AddPlaytime(instance.Id, span, playedAt);
+                if (updated != null) Dispatch(() => RefreshInstanceRow(updated));
+
+                // Round-79: performance snapshot + post-exit save backup. Both are
+                // strictly after the process is gone, so nothing can be locked.
+                if (runOutcome != null)
+                {
+                    var stamp = _svc.Instances.RecordPerformance(instance.Id, runOutcome.PeakWorkingSetMb,
+                        runOutcome.Fps.Average, runOutcome.Fps.Samples, span, exitCode: runOutcome.ExitCode);
+                    if (stamp != null) Dispatch(() =>
+                    {
+                        RefreshInstanceRow(stamp);
+                        RefreshPerformanceCard();
+                    });
+                }
+
+                if (SaveBackupPolicy.ShouldRun(LauncherConfig.Instance.SaveBackup, BackupTrigger.AfterExit))
+                    await BackupSavesAsync(instance, BackupTrigger.AfterExit, interactive: false).ConfigureAwait(true);
+            }
+            IsBusy = false;
+        }
     }
 
     /// <summary>One-click diagnostics bundle for bug reports.</summary>
@@ -1644,6 +2954,7 @@ public class MainViewModel : ViewModelBase
             var instances = _svc.Instances.LoadAll();
             await Task.Run(() => DiagnosticsExporter.ExportAsync(dlg.FileName,
                 LauncherConfig.Instance.RootDirectory, instances));
+            _lastBundlePath = dlg.FileName; // 「发送给作者」直接复用这份包
             Status = $"诊断包已导出: {dlg.FileName}";
             Dispatch(() => System.Windows.MessageBox.Show(
                 Application.Current.MainWindow,
@@ -1654,6 +2965,187 @@ public class MainViewModel : ViewModelBase
         {
             Status = "诊断包导出失败: " + ex.Message;
         }
+    }
+
+    /// <summary>Round-70: exports the current log as a sanitized .txt. The log
+    /// page had no way to hand its content to a maintainer except the full
+    /// diagnostics .zip — this is the one-click version users actually asked
+    /// for. Same sanitizer as the bundle, so tokens/paths can never leak.</summary>
+    public async Task ExportLogsAsync()
+    {
+        try
+        {
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "导出日志",
+                FileName = $"aurora-log-{DateTime.Now:yyyyMMdd-HHmmss}.txt",
+                Filter = "文本文件 (*.txt)|*.txt|所有文件 (*.*)|*.*",
+                DefaultExt = ".txt",
+                AddExtension = true
+            };
+            if (dlg.ShowDialog() != true) return;
+
+            Status = "正在导出日志…";
+            var (ok, chars, message) = await DiagnosticsExporter.ExportLogTextAsync(
+                dlg.FileName, LauncherConfig.Instance.RootDirectory);
+            if (ok)
+            {
+                Status = $"日志已导出: {dlg.FileName}";
+                ShowToast($"日志已导出（{chars:n0} 字符，已脱敏）：{System.IO.Path.GetFileName(dlg.FileName)}");
+                Logger.Instance.Info("ui", $"导出日志 → {dlg.FileName}（{chars} 字符，已脱敏）");
+            }
+            else
+            {
+                Status = "导出日志失败: " + message;
+            }
+        }
+        catch (Exception ex)
+        {
+            Status = "导出日志失败: " + ex.Message;
+        }
+    }
+
+    // ---------------- round-77: 整合包导出 / 导入 ----------------
+
+    /// <summary>Exports the selected instance as a .mrpack (round-77). Mods that
+    /// Modrinth already hosts become CDN references; the rest, plus config, go
+    /// into overrides/.</summary>
+    public async Task ExportMrpackAsync()
+    {
+        var instance = SelectedInstance;
+        if (instance == null) { Status = "请先选择实例"; return; }
+        if (IsBusy) { Status = "有任务正在进行中，请稍后再导出"; return; }
+
+        var safeName = new string(instance.Name.Where(c => !Path.GetInvalidFileNameChars().Contains(c)).ToArray()).Trim();
+        var dlg = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "导出整合包",
+            FileName = (safeName.Length == 0 ? "modpack" : safeName) + ".mrpack",
+            Filter = "Modrinth 整合包 (*.mrpack)|*.mrpack",
+            DefaultExt = ".mrpack",
+            AddExtension = true
+        };
+        if (dlg.ShowDialog() != true) return;
+
+        IsBusy = true;
+        Status = "正在导出整合包…";
+        try
+        {
+            var target = dlg.FileName;
+            var result = await Task.Run(() => MrpackExporter.ExportAsync(
+                instance, target, instance.Name, null, null,
+                p => Dispatch(() => Status = p))).ConfigureAwait(true);
+
+            Status = "整合包已导出: " + result.Summary;
+            Logger.Instance.Info("Export", $"导出整合包 {dlg.FileName} —— {result.Summary}");
+
+            var unresolvedNote = result.HasUnresolved
+                ? "\n\n以下模组 Modrinth 未收录，已一并打包进 overrides（会让文件变大）：\n" +
+                  string.Join("、", result.Unresolved.Take(8)) + (result.Unresolved.Count > 8 ? " …" : "")
+                : "";
+            System.Windows.MessageBox.Show(Application.Current.MainWindow,
+                $"已导出整合包：\n{dlg.FileName}\n\n{result.Summary}{unresolvedNote}\n\n" +
+                "把这个文件发给朋友，直接拖进启动器窗口即可一键安装。",
+                "导出完成", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            Status = "导出失败: " + ex.Message;
+            Logger.Instance.Warn("Export", "导出整合包失败: " + ex.Message);
+        }
+        finally { IsBusy = false; }
+    }
+
+    private void ChooseAndImportMrpack()
+    {
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "导入整合包",
+            Filter = "Modrinth 整合包 (*.mrpack)|*.mrpack|所有文件 (*.*)|*.*",
+            CheckFileExists = true
+        };
+        if (dlg.ShowDialog() != true) return;
+        _ = ImportMrpackAsync(dlg.FileName);
+    }
+
+    /// <summary>Imports a local .mrpack: reads its target MC version + loader from
+    /// modrinth.index.json, creates a matching instance, installs the loader and
+    /// then deploys the pack (round-77).</summary>
+    public async Task ImportMrpackAsync(string path)
+    {
+        if (!File.Exists(path)) { Status = "找不到该整合包文件"; return; }
+        if (!path.EndsWith(".mrpack", StringComparison.OrdinalIgnoreCase))
+        {
+            Status = "只支持 .mrpack 格式的整合包";
+            Dispatch(() => ShowToast("只支持 .mrpack 格式的整合包"));
+            return;
+        }
+        if (IsBusy) { Status = "有任务正在进行中，请等待完成或取消后再导入"; return; }
+
+        MrpackInfo info;
+        try { info = ModManager.ReadMrpackInfo(path); }
+        catch (Exception ex)
+        {
+            Status = "整合包解析失败: " + ex.Message;
+            Dispatch(() => System.Windows.MessageBox.Show(Application.Current.MainWindow,
+                $"无法读取该整合包：\n{ex.Message}\n\n请确认它是 Modrinth 格式（内含 modrinth.index.json）。",
+                "导入失败", MessageBoxButton.OK, MessageBoxImage.Warning));
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(info.GameVersion))
+        {
+            Status = "整合包没有声明游戏版本，无法自动创建实例";
+            return;
+        }
+
+        var name = Path.GetFileNameWithoutExtension(path);
+        DownloadJob? job = null;
+        try
+        {
+            IsBusy = true;
+            var inst = _svc.Instances.Create(name, info.GameVersion, info.Loader, info.LoaderVersion);
+            Instances.Add(inst);
+            SelectedInstance = inst;
+
+            // Round-92: record WHAT the pack should contain before the first
+            // byte is downloaded. An import that dies halfway then leaves an
+            // instance the launcher can recognise as incomplete — the old code
+            // only wrote this at the very end, so a failure left a "normal"
+            // instance behind.
+            RecordModpackExpectation(inst, path, name, info);
+            Navigate("Instances");
+            Logger.Instance.Info("Import", $"导入整合包 {path}（MC {info.GameVersion} / {info.Loader}）");
+
+            job = await BeginJobAsync("整合包", $"{name}（导入）", inst.Name);
+            var stages = BuildStages(info.Loader);
+            stages.Add(("modpack", "部署整合包文件"));
+            InitStages(job, stages, $"{name}（MC {info.GameVersion} / {info.Loader}）导入");
+
+            await _svc.InstallWithLoaderAsync(inst, job.Report,
+                s => Dispatch(() => AddLog("[Install] " + s)), job.Token, job.EnterStage);
+            // Round-92: the loader step is what fills ResolvedVersionId — save it.
+            // Without this the id lived only in memory and a restart turned the
+            // instance back into "loader never installed" (silent vanilla launch).
+            _svc.Instances.Update(inst);
+            OnInstallStage(job, "modpack");
+            await _svc.ModManager.InstallMrpackAsync(path, inst.Directory, job.Report, job.Token);
+            ScanMods();
+            var packScan = ModpackIntegrity.Evaluate(inst);
+            if (packScan.IsBroken)
+                Logger.Instance.Warn("Import", $"{inst.Name}: 导入结束但模组不齐（{packScan.Describe()}）");
+            _svc.Instances.Update(inst);
+            FinishJob(job, null, false,
+                $"整合包「{name}」已导入：实例「{inst.Name}」创建完成（{info.ClientFiles} 个文件已就位）");
+            Status = $"整合包已导入: {inst.Name}";
+        }
+        catch (OperationCanceledException) { FinishJob(job, null, true); Status = "已取消导入（未完成的临时文件已清理）"; }
+        catch (Exception ex)
+        {
+            FinishJob(job, ex, false);
+            Status = "导入失败: " + ex.Message;
+            Logger.Instance.Warn("Import", "导入整合包失败: " + ex.Message);
+        }
+        finally { IsBusy = false; RefreshDownloadAggregate(force: true); }
     }
 
     public void AddOfflineAccount()
@@ -1718,40 +3210,87 @@ public class MainViewModel : ViewModelBase
         finally { IsBusy = false; }
     }
 
+    /// <summary>Round-84: "新建实例" is a NAVIGATION, not a creation.
+    ///
+    /// It used to call <c>Instances.Create(SelectedVersion?.Id ?? "1.21.1")</c>,
+    /// which produced an empty record for a version that was never installed:
+    /// a bogus entry appeared in the list, had no jar/libraries, and every launch
+    /// attempt failed. Instances now come into existence only at the end of a
+    /// real install (or an import), where the files actually exist.</summary>
     public void CreateInstance()
     {
-        var mc = SelectedVersion?.Id ?? "1.21.1";
-        var inst = _svc.Instances.Create($"{mc} (Vanilla)", mc, ModLoaderType.Vanilla, null);
-        Instances.Add(inst); SelectedInstance = inst;
-        Status = "已创建实例 " + inst.Name;
+        Status = "去「游戏下载」挑一个版本，点安装；装完会自动出现在实例列表里";
+        AddLog("[Instance] 新建实例 → 跳转游戏下载页（不再直接生成空实例）");
+        ShowToast("先选一个游戏版本安装，装完就是新实例");
+        Navigate("Download");
     }
 
-    /// <summary>Runs the (possibly slow) recursive delete off the UI thread so
-    /// the window stays responsive.</summary>
+    /// <summary>Round-84: deletes the FOLDER, and only then the record.
+    ///
+    /// Two hard requirements from the user reports:
+    /// 1. Confirmation with the real size — "删除" must mean "delete 12.4 GB from
+    ///    my disk", not "hide a row".
+    /// 2. If the folder cannot be removed (game still exiting, Explorer holding
+    ///    it, antivirus scanning), the record MUST stay and the user MUST be told.
+    ///    Removing the record while the folder survives is exactly how a folder
+    ///    becomes invisible and unremovable.
+    /// Runs off the UI thread; the recursive delete of a big instance takes seconds.</summary>
     public async Task DeleteSelectedInstanceAsync()
     {
         var removed = SelectedInstance;
         if (removed == null) { Status = "请先选择要删除的实例"; return; }
+        if (IsBusy) { Status = "有任务正在进行中，请等待完成后再删除"; return; }
+
+        var mb = await Task.Run(() => FolderSizeMb(removed.Directory)).ConfigureAwait(true);
+        var sizeText = mb > 0 ? JobProgressPolicy.FormatBytes(mb * 1024L * 1024L) : "未知";
+
+        var answer = System.Windows.MessageBox.Show(Application.Current.MainWindow,
+            $"确定要彻底删除实例「{removed.Name}」吗？\n\n" +
+            $"会删除整个文件夹（约 {sizeText}，含存档、模组、配置、日志）：\n{removed.Directory}\n\n" +
+            "此操作不可恢复。如果只是想修复游戏文件，请用「补全文件」。",
+            "彻底删除实例", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        if (answer != MessageBoxResult.Yes)
+        {
+            Status = "已取消删除";
+            return;
+        }
+
         IsBusy = true;
-        Status = $"正在删除实例 {removed.Name} ...";
+        Status = $"正在删除实例「{removed.Name}」（含文件夹）…";
+        AddLog($"[Instance] 开始彻底删除：{removed.Name}（{removed.Id}）→ {removed.Directory}");
         try
         {
-            var ok = await Task.Run(() => _svc.Instances.Delete(removed.Id));
-            if (ok)
+            var result = await Task.Run(() => _svc.Instances.DeleteChecked(removed.Id)).ConfigureAwait(true);
+            if (result.Ok)
             {
                 Instances.Remove(removed);
-                if (SelectedInstance == removed)
+                if (ReferenceEquals(SelectedInstance, removed))
                     SelectedInstance = Instances.FirstOrDefault();
-                Status = "已删除实例: " + removed.Name + "（未被引用的版本文件已自动清理）";
+                Status = "已彻底删除实例: " + removed.Name + "（文件夹 + 列表记录；未被引用的版本文件已自动清理）";
+                AddLog("[Instance] 删除完成：" + Status);
+                ShowToast("实例已彻底删除");
+                return;
             }
-            else
-            {
-                Status = "删除失败: 实例元数据中找不到 " + removed.Id;
-            }
+
+            // NOT deleted → the record stays on purpose.
+            Status = result.Describe(removed.Name);
+            AddLog("[Instance] 删除未完成：" + Status);
+            System.Windows.MessageBox.Show(Application.Current.MainWindow,
+                $"无法删除实例「{removed.Name}」的文件夹。\n\n" +
+                $"原因：{result.Message}\n\n" +
+                "列表记录已保留（不会出现“列表里没了、硬盘里还在”的幽灵实例）。\n" +
+                "请先关闭游戏 / 资源管理器窗口 / 杀毒软件扫描，然后重试。",
+                "删除失败", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         catch (Exception ex)
         {
-            Status = "删除失败: " + ex.Message + "（若游戏正在运行或有文件被占用，请先关闭后重试）";
+            // Same rule: an exception here means the folder may still exist, so
+            // nothing was removed from the list.
+            Status = "删除失败: " + ex.Message + "（列表记录已保留，请关闭占用后重试）";
+            AddLog("[Instance] 删除异常: " + ex);
+            System.Windows.MessageBox.Show(Application.Current.MainWindow,
+                "删除过程中出错，实例记录已保留：\n\n" + ex.Message,
+                "删除失败", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally { IsBusy = false; }
     }
@@ -1966,21 +3505,20 @@ public class MainViewModel : ViewModelBase
         var inst = SelectedInstance;
         if (inst == null) { Status = "请先选择实例"; return; }
         if (!_svc.NeedsRepair(inst)) { Status = $"实例 {inst.Name} 文件完整，无需补全"; return; }
+        DownloadJob? job = null;
         try
         {
-            IsBusy = true;
-            _cts = new CancellationTokenSource();
-            InitStages(BuildStages(inst.LoaderType), $"{inst.Name} 文件补全");
-            Navigate("Downloads");
-            await _svc.RepairAsync(inst, OnDownloadProgress,
-                s => Dispatch(() => AddLog("[Repair] " + s)), _cts.Token, OnInstallStage);
+            job = await BeginJobAsync("修复", $"{inst.Name} 文件补全", inst.Name);
+            InitStages(job, BuildStages(inst.LoaderType), $"{inst.Name} 文件补全");
+            await _svc.RepairAsync(inst, job.Report,
+                s => Dispatch(() => AddLog("[Repair] " + s)), job.Token, job.EnterStage);
             _svc.Instances.Update(inst);
-            CompleteStages();
+            FinishJob(job, null, false, $"实例 {inst.Name} 文件补全完成");
             Status = $"实例 {inst.Name} 文件补全完成";
         }
-        catch (OperationCanceledException) { Status = "已取消（未完成的临时文件已清理）"; }
-        catch (Exception ex) { Status = "补全失败: " + ex.Message; }
-        finally { IsBusy = false; Download.Active = false; }
+        catch (OperationCanceledException) { FinishJob(job, null, true); Status = "已取消（未完成的临时文件已清理）"; }
+        catch (Exception ex) { FinishJob(job, ex, false); Status = "补全失败: " + ex.Message; }
+        finally { RefreshDownloadAggregate(force: true); }
     }
 
     /// <summary>Folder dialog first (UI thread), then the copy-based import
@@ -2076,17 +3614,32 @@ public class MainViewModel : ViewModelBase
 
     private const int MaxLogLines = 600;      // ring capacity
     private const int LogTrimBatch = 100;     // trim in batches (amortized O(1))
+    private const int MaxPendingLogLines = 2000; // backlog kept while the page is closed
 
     private readonly System.Collections.Concurrent.ConcurrentQueue<string> _pendingLogLines = new();
     private DispatcherTimer? _logFlushTimer;
 
     /// <summary>Queues a log line for batched UI delivery.</summary>
-    private void EnqueueLog(string line) => _pendingLogLines.Enqueue(line);
+    private void EnqueueLog(string line)
+    {
+        _pendingLogLines.Enqueue(line);
+        // Bounded backlog: an install of a few thousand files while the Logs page
+        // is closed must not grow this queue without limit.
+        while (_pendingLogLines.Count > MaxPendingLogLines && _pendingLogLines.TryDequeue(out _)) { }
+    }
 
-    /// <summary>Flushes queued log lines as ONE ui update (smoothness).</summary>
+    private bool IsLogsPageActive =>
+        string.Equals(CurrentPageKey, "Logs", StringComparison.Ordinal);
+
+    /// <summary>Round-69: while the Logs page is hidden, nobody can read these
+    /// lines — so they stay queued instead of being pushed into the bound
+    /// collection. That keeps installs/downloads from paying for hundreds of
+    /// collection notifications per second that no one sees. Entering the page
+    /// publishes the backlog through <see cref="RefreshLogsOnShow"/>.</summary>
     private void FlushPendingLogs()
     {
         if (_pendingLogLines.IsEmpty) return;
+        if (!IsLogsPageActive) return;
         var batch = new List<string>(64);
         while (_pendingLogLines.TryDequeue(out var l))
         {
@@ -2097,6 +3650,19 @@ public class MainViewModel : ViewModelBase
         {
             foreach (var l in batch) AddLog(l);
         });
+    }
+
+    /// <summary>Round-69: one Reset instead of N per-line updates when the Logs
+    /// page becomes visible again. 600 lines arrive at once, but the ListBox
+    /// measures its viewport exactly once.</summary>
+    private void RefreshLogsOnShow()
+    {
+        if (_pendingLogLines.IsEmpty) return;
+        var snapshot = new List<string>(Logs);
+        while (_pendingLogLines.TryDequeue(out var l)) snapshot.Add(l);
+        if (snapshot.Count > MaxLogLines)
+            snapshot.RemoveRange(0, snapshot.Count - MaxLogLines);
+        Logs.Replace(snapshot);
     }
 
     /// <summary>Bounded ring-style log feed: trims the OLDEST lines in batches
@@ -2118,10 +3684,11 @@ public class MainViewModel : ViewModelBase
         get => _showErrorsOnly;
         set
         {
-            if (SetProperty(ref _showErrorsOnly, value))
-                LogsView.Filter = value ? ErrorsOnlyFilter : null;
-            else
-                LogsView.Filter = null;
+            // Round-69: the old code cleared the filter whenever SetProperty
+            // reported "no change", so a redundant `= true` silently dropped the
+            // filter while the toggle still read "只看错误".
+            SetProperty(ref _showErrorsOnly, value);
+            LogsView.Filter = value ? ErrorsOnlyFilter : null;
             LogsView.Refresh();
         }
     }
@@ -2327,31 +3894,28 @@ public class MainViewModel : ViewModelBase
                 "版本不适配", MessageBoxButton.YesNo, MessageBoxImage.Warning);
             if (answer != MessageBoxResult.Yes) return;
         }
+        DownloadJob? job = null;
         try
         {
-            IsBusy = true;
-            _cts = new CancellationTokenSource();
             var project = SelectedContentItem.Project;
             if (type == ContentType.Modpack) { await InstallModpackAsync(project, vh.Version); return; }
 
             var inst = SelectedInstance ?? throw new InvalidOperationException("请先选择实例");
+            job = await BeginJobAsync(ContentKind, $"{project.Title} {vh.Version.VersionNumber}", inst.Name);
             Status = $"正在下载 {project.Title} {vh.Version.VersionNumber} ...";
-            InitStages(new List<(string, string)> { ("content", $"下载 {ContentKind}：{project.Title}") },
-                $"{project.Title}（{ContentKind}）下载");
-            OnInstallStage("content");
-            Navigate("Downloads");
+            job.SetStageText($"下载 {ContentKind}：{project.Title} {vh.Version.VersionNumber}");
             await _svc.ModManager.DownloadContentAsync(project, vh.Version, type, inst.Directory,
-                type == ContentType.Datapack ? SelectedWorld : null, OnDownloadProgress, _cts.Token);
-            CompleteStages();
+                type == ContentType.Datapack ? SelectedWorld : null, job.Report, job.Token);
             if (type == ContentType.Mod)
-                await EnsureFabricApiAsync(inst, _cts.Token, $"安装模组 {project.Title}");
+                await EnsureFabricApiAsync(inst, job.Token, $"安装模组 {project.Title}");
             ScanMods();
             ShowContentDetail = false;
+            FinishJob(job, null, false, $"已安装 {project.Title} {vh.Version.VersionNumber} 到 {inst.Name}");
             Status = $"已安装 {project.Title} {vh.Version.VersionNumber} 到 {inst.Name}";
         }
-        catch (OperationCanceledException) { Status = "已取消下载（未完成的临时文件已清理）"; }
-        catch (Exception ex) { FailStages(ex.Message); Status = "安装失败: " + ex.Message; }
-        finally { IsBusy = false; Download.Active = false; }
+        catch (OperationCanceledException) { FinishJob(job, null, true); Status = "已取消下载（未完成的临时文件已清理）"; }
+        catch (Exception ex) { FinishJob(job, ex, false); Status = "安装失败: " + ex.Message; }
+        finally { RefreshDownloadAggregate(force: true); }
     }
 
     // ---- content search state (PCL-style paging / categories / detail) ----
@@ -2450,8 +4014,19 @@ public class MainViewModel : ViewModelBase
         catch (Exception ex) { _log.Warn("UI", "分类获取失败: " + ex.Message); }
     }
 
+    private int _searchRunning;
+
+    /// <summary>Single-flight (round-63): the cached page's Loaded hook used
+    /// to start a fresh Modrinth search on EVERY visit while results were
+    /// empty. Rapid switching produced several concurrent searches that all
+    /// returned to the UI thread to rebuild the result list.</summary>
     public async Task SearchContentAsync()
     {
+        if (Interlocked.Exchange(ref _searchRunning, 1) != 0)
+        {
+            Status = "正在搜索中，请稍候…";
+            return;
+        }
         try
         {
             var type = ParseContentType(ContentKind);
@@ -2471,11 +4046,7 @@ public class MainViewModel : ViewModelBase
             var items = result.Projects.Select(r => new ContentItemVM(r)).ToList();
             _searchTotalHits = result.TotalHits;
             _searchPage = Math.Min(_searchPage, TotalPages - 1);
-            Dispatch(() =>
-            {
-                ModSearchResults.Clear();
-                foreach (var i in items) ModSearchResults.Add(i);
-            });
+            Dispatch(() => ModSearchResults.Replace(items));
             HasSearched = true;
             NotifyPaging();
             Status = $"「{ContentKind}」搜索到 {result.TotalHits:N0} 个结果（第 {_searchPage + 1} 页，已按实例自动适配）";
@@ -2485,7 +4056,7 @@ public class MainViewModel : ViewModelBase
             HasSearched = true;
             Status = "Modrinth 搜索失败: " + FriendlyNetworkError(ex);
         }
-        finally { IsSearching = false; }
+        finally { IsSearching = false; Volatile.Write(ref _searchRunning, 0); }
     }
 
     /// <summary>Translates raw network failures into actionable Chinese hints.</summary>
@@ -2513,37 +4084,35 @@ public class MainViewModel : ViewModelBase
         var type = ParseContentType(ContentKind);
         if (type == ContentType.Modpack) { await InstallModpackAsync(project); return; }
 
+        DownloadJob? job = null;
         try
         {
             var inst = SelectedInstance ?? throw new InvalidOperationException("请先选择实例（用于自动适配版本）");
-            IsBusy = true;
-            _cts = new CancellationTokenSource();
+            job = await BeginJobAsync(ContentKind, $"{project.Title}（{ContentKind}）", inst.Name);
             Status = $"正在为 {inst.Name} 查找适配的{ContentKind}...";
             var loader = type == ContentType.Mod && inst.LoaderType != ModLoaderType.Vanilla
                 ? inst.LoaderType.ToString().ToLowerInvariant() : null;
-            var versions = await _svc.ModManager.GetVersionsAsync(project.ProjectId, type, inst.MinecraftVersion, loader, _cts.Token);
+            var versions = await _svc.ModManager.GetVersionsAsync(project.ProjectId, type, inst.MinecraftVersion, loader, job.Token);
             if (versions.Count == 0)
             {
-                Status = $"未找到适配 {inst.Name}（MC {inst.MinecraftVersion}{(loader != null ? " / " + inst.LoaderType : "")}）的{ContentKind}版本";
+                var reason = $"未找到适配 {inst.Name}（MC {inst.MinecraftVersion}{(loader != null ? " / " + inst.LoaderType : "")}）的{ContentKind}版本";
+                FinishJob(job, new InvalidOperationException(reason), false);
+                Status = reason;
                 return;
             }
             Status = $"正在下载 {project.Title} {versions[0].VersionNumber} ...";
-            // All content downloads surface in the download manager.
-            InitStages(new List<(string, string)> { ("content", $"下载 {ContentKind}：{project.Title}") },
-                $"{project.Title}（{ContentKind}）下载");
-            OnInstallStage("content");
-            Navigate("Downloads");
+            job.SetStageText($"下载 {ContentKind}：{project.Title} {versions[0].VersionNumber}");
             await _svc.ModManager.DownloadContentAsync(project, versions[0], type, inst.Directory,
-                type == ContentType.Datapack ? SelectedWorld : null, OnDownloadProgress, _cts.Token);
-            CompleteStages();
-            Status = $"已安装 {project.Title} {versions[0].VersionNumber} 到 {inst.Name}";
+                type == ContentType.Datapack ? SelectedWorld : null, job.Report, job.Token);
             if (type == ContentType.Mod)
-                await EnsureFabricApiAsync(inst, _cts.Token, $"安装模组 {project.Title}");
+                await EnsureFabricApiAsync(inst, job.Token, $"安装模组 {project.Title}");
             ScanMods();
+            FinishJob(job, null, false, $"已安装 {project.Title} {versions[0].VersionNumber} 到 {inst.Name}");
+            Status = $"已安装 {project.Title} {versions[0].VersionNumber} 到 {inst.Name}";
         }
-        catch (OperationCanceledException) { Status = "已取消下载（未完成的临时文件已清理）"; }
-        catch (Exception ex) { FailStages(ex.Message); Status = "安装失败: " + ex.Message; }
-        finally { IsBusy = false; Download.Active = false; }
+        catch (OperationCanceledException) { FinishJob(job, null, true); Status = "已取消下载（未完成的临时文件已清理）"; }
+        catch (Exception ex) { FinishJob(job, ex, false); Status = "安装失败: " + ex.Message; }
+        finally { RefreshDownloadAggregate(force: true); }
     }
 
     /// <summary>Fabric API's well-known Modrinth project id.</summary>
@@ -2611,10 +4180,9 @@ public class MainViewModel : ViewModelBase
     /// then extracts overrides and downloads the pack's client files.</summary>
     private async Task InstallModpackAsync(ModrinthProject project, ModrinthVersion? specific = null)
     {
+        DownloadJob? job = null;
         try
         {
-            IsBusy = true;
-            _cts = new CancellationTokenSource();
             ModrinthVersion packVer;
             if (specific != null)
             {
@@ -2623,7 +4191,7 @@ public class MainViewModel : ViewModelBase
             else
             {
                 Status = $"正在获取整合包 {project.Title} 的版本信息...";
-                var versions = await _svc.ModManager.GetVersionsAsync(project.ProjectId, ContentType.Modpack, null, null, _cts.Token);
+                var versions = await _svc.ModManager.GetVersionsAsync(project.ProjectId, ContentType.Modpack, null, null);
                 if (versions.Count == 0) { Status = "该整合包没有可用版本"; return; }
                 packVer = versions[0];
             }
@@ -2640,48 +4208,42 @@ public class MainViewModel : ViewModelBase
             if (proceed != MessageBoxResult.Yes) return;
 
             // Phase 1: show a stage list IMMEDIATELY while the .mrpack downloads.
-            InitStages(new List<(string, string)> { ("modpack", "下载整合包文件") },
+            job = await BeginJobAsync("整合包", $"{project.Title}（{packVer.FileName}）", "");
+            InitStages(job, new List<(string, string)> { ("modpack", "下载整合包文件") },
                 $"{project.Title}（{packVer.FileName}）");
-            OnInstallStage("modpack");
-            Navigate("Downloads");
+            OnInstallStage(job, "modpack");
 
             var tempDir = Path.Combine(Path.GetTempPath(), "AuroraLauncher", "mrpack");
             Directory.CreateDirectory(tempDir);
             var tempFile = Path.Combine(tempDir, project.ProjectId + ".mrpack");
             Status = $"正在下载整合包 {packVer.FileName} ...";
-            await _svc.ModManager.DownloadMrpackAsync(project, packVer, tempFile, OnDownloadProgress, _cts.Token);
+            await _svc.ModManager.DownloadMrpackAsync(project, packVer, tempFile, job.Report, job.Token);
 
             var info = ModManager.ReadMrpackInfo(tempFile);
             var inst = _svc.Instances.Create($"{project.Title}", info.GameVersion, info.Loader, info.LoaderVersion);
             Dispatch(() => { Instances.Add(inst); SelectedInstance = inst; });
+            // Round-92: same expectation-first rule as the local import path.
+            RecordModpackExpectation(inst, tempFile, project.Title, info);
 
             // Phase 2: full pipeline stages (game + loader + deploy pack files).
             var stages = BuildStages(info.Loader);
             stages.Add(("modpack", "部署整合包文件"));
-            InitStages(stages, $"{project.Title}（MC {info.GameVersion} / {info.Loader}）安装");
+            InitStages(job, stages, $"{project.Title}（MC {info.GameVersion} / {info.Loader}）安装");
 
             Status = $"正在安装整合包 {project.Title}（MC {info.GameVersion} / {info.Loader}）...";
-            await _svc.InstallWithLoaderAsync(inst, OnDownloadProgress, s => Dispatch(() => AddLog("[Install] " + s)), _cts.Token, OnInstallStage);
-            OnInstallStage("modpack");
-            await _svc.ModManager.InstallMrpackAsync(tempFile, inst.Directory, OnDownloadProgress, _cts.Token);
-            CompleteStages();
+            await _svc.InstallWithLoaderAsync(inst, job.Report, s => Dispatch(() => AddLog("[Install] " + s)), job.Token, job.EnterStage);
+            _svc.Instances.Update(inst); // Round-92: persist ResolvedVersionId
+            OnInstallStage(job, "modpack");
+            await _svc.ModManager.InstallMrpackAsync(tempFile, inst.Directory, job.Report, job.Token);
             ScanMods();
-            Status = $"整合包 {project.Title} 安装完成，已创建实例「{inst.Name}」（{info.ClientFiles} 个文件已就位，启动时自动补齐依赖）";
+            _svc.Instances.Update(inst);
+            var done = $"整合包 {project.Title} 安装完成，已创建实例「{inst.Name}」（{info.ClientFiles} 个文件已就位，启动时自动补齐依赖）";
+            FinishJob(job, null, false, done);
+            Status = done;
         }
-        catch (OperationCanceledException) { Status = "已取消下载（未完成的临时文件已清理）"; }
-        catch (Exception ex) { FailStages(ex.Message); Status = "整合包安装失败: " + ex.Message; }
-        finally { IsBusy = false; Download.Active = false; }
-    }
-
-    public void ImportMrpack()
-    {
-        var dlg = new Microsoft.Win32.OpenFileDialog { Filter = "mrpack|*.mrpack" };
-        if (dlg.ShowDialog() == true && SelectedInstance != null)
-        {
-            _svc.ModManager.ImportMrpack(dlg.FileName, SelectedInstance.Directory);
-            ScanMods();
-            Status = "已导入整合包";
-        }
+        catch (OperationCanceledException) { FinishJob(job, null, true); Status = "已取消下载（未完成的临时文件已清理）"; }
+        catch (Exception ex) { FinishJob(job, ex, false); Status = "整合包安装失败: " + ex.Message; }
+        finally { RefreshDownloadAggregate(force: true); }
     }
 
     /// <summary>Opens the storage directory in Explorer (creating it if needed).</summary>
@@ -2701,19 +4263,30 @@ public class MainViewModel : ViewModelBase
     public void ApplySettings()
     {
         var c = LauncherConfig.Instance;
-        c.MaxMemoryMb = MemoryMb;
-        c.MinMemoryMb = Math.Max(512, MemoryMb / 2);
+        // Round-83: auto mode is a flag, not a number. Keep MaxMemoryMb as the
+        // player's hand-typed value, so turning auto off restores THEIR number
+        // instead of whatever the recommendation happened to be today.
+        c.AutoMemory = AutoMemory;
+        c.ReleaseIdleMemory = ReleaseIdleMemory;
+        if (!AutoMemory)
+        {
+            c.MaxMemoryMb = MemoryMb;
+            c.MinMemoryMb = Math.Max(512, MemoryMb / 2);
+        }
         c.JavaPath = string.IsNullOrWhiteSpace(JavaPath) ? null : JavaPath;
-        c.DownloadSource = DownloadSourceText == "BMCLAPI" ? DownloadSource.BMCLAPI : DownloadSource.Official;
+        c.RoutePolicy = DownloadRoutePolicy.Parse(DownloadPolicyText);
         c.ProxyUrl = string.IsNullOrWhiteSpace(ProxyUrl) ? null : ProxyUrl;
         c.MicrosoftClientId = string.IsNullOrWhiteSpace(MicrosoftClientIdText) ? null : MicrosoftClientIdText.Trim();
         c.AutoInstallFabricApi = AutoInstallFabricApi;
+        c.CheckModsBeforeLaunch = CheckModsBeforeLaunch;
         c.UpdateMode = UpdatePolicy.FromDisplayText(UpdateModeText);
         c.UpdateFeedUrl = string.IsNullOrWhiteSpace(UpdateFeedUrlText) ? null : UpdateFeedUrlText.Trim();
         RefreshMicrosoftLoginState();
         c.WindowWidth = WindowW; c.WindowHeight = WindowH;
         c.ExtraJvmArgs = ExtraJvm;
         c.Theme = DarkTheme ? ThemePreference.Dark : ThemePreference.Light;
+        c.CloseAction = CloseBehaviorPolicy.FromDisplayText(CloseActionText);
+        c.MinimizeToTrayEnabled = TrayEnabled;
 
         // ---- storage directory change (requires restart to take effect) ----
         var newRoot = (RootDirectoryText ?? "").Trim();
@@ -2722,7 +4295,13 @@ public class MainViewModel : ViewModelBase
             try { newRoot = Path.GetFullPath(newRoot); }
             catch { Status = "存储目录不是有效路径"; return; }
         }
-        if (!string.IsNullOrWhiteSpace(newRoot) &&
+        if (IsPortableMode)
+        {
+            // Portable mode owns the path: the folder wins on every start, so a
+            // changed value here would silently revert on the next launch.
+            c.RootDirectory = LauncherConfig.Instance.RootDirectory;
+        }
+        else if (!string.IsNullOrWhiteSpace(newRoot) &&
             !string.Equals(newRoot, Path.GetFullPath(c.RootDirectory), StringComparison.OrdinalIgnoreCase))
         {
             var oldRoot = c.RootDirectory;
@@ -2732,6 +4311,7 @@ public class MainViewModel : ViewModelBase
             c.Save();
             try { File.WriteAllText(Path.Combine(oldRoot, "config.json"), JsonHelper.SerializeIndented(c)); }
             catch { /* old dir may be gone; new location config is already written */ }
+            MarkSettingsSaved(); // round-90: the baseline must follow a real save
 
             var answer = System.Windows.MessageBox.Show(
                 Application.Current.MainWindow,
@@ -2748,6 +4328,7 @@ public class MainViewModel : ViewModelBase
         }
 
         c.Save();
+        MarkSettingsSaved();
         Status = "设置已保存";
     }
 
@@ -2776,5 +4357,13 @@ public class MainViewModel : ViewModelBase
         app.Resources.MergedDictionaries.Add(new ResourceDictionary { Source = new Uri(uri) });
     }
 
-    public void CancelDownload() { _cts?.Cancel(); Status = "已取消下载"; }
+    public void CancelDownload()
+    {
+        // Round-72: cancel EVERY job, then the legacy single token if some flow
+        // still uses it (launch-time repair / script export).
+        _jobManager.CancelAll();
+        _cts?.Cancel();
+        RefreshDownloadAggregate(force: true);
+        Status = "已取消下载";
+    }
 }

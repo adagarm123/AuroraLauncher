@@ -11,3 +11,14 @@
 | [ADR-0003](ADR-0003-httpclient-lifecycle.md) | HttpClient 生命周期契约 | 已采纳（含防线测试） |
 | [ADR-0004](ADR-0004-download-resilience.md) | 下载韧性策略（四线路竞速 + 断点失效泛化 + 缓存兜底） | 已采纳 |
 | [ADR-0005](ADR-0005-diagnostics-and-redaction.md) | 诊断包与脱敏（可发送、可信任） | 已采纳（含测试） |
+| [ADR-0006](ADR-0006-crash-repair-safety.md) | 崩溃自动修复的安全边界（只碰启动器自己的东西） | 已采纳（含防线测试） |
+| [ADR-0007](ADR-0007-glass-and-performance.md) | 玻璃效果与性能边界（默认关闭，模糊只留在临时浮层） | 已采纳（含防线测试） |
+| [ADR-0008](ADR-0008-memory-policy.md) | 内存策略（自动分配硬上限 55%、清理只碰自己） | 已采纳（含防线测试） |
+| [ADR-0009](ADR-0009-instance-delete-and-reconcile.md) | 实例删除与对账（先删文件再删记录；扫描只加不删） | 已采纳（含防线测试） |
+| [ADR-0010](ADR-0010-download-route-policy.md) | 下载线路策略（自动有裕度，强制单线只对核心文件严格） | 已采纳（含防线测试） |
+| [ADR-0011](ADR-0011-download-residue-and-integrity.md) | 下载残留与完整性（无校验值 ≠ 完整；归属由引擎登记，可续传的先问） | 已采纳（含防线测试） |
+| [ADR-0012](ADR-0012-storage-cleanup-allowlist.md) | 存储清理（只写允许清单；空壳判定必须窄；牺牲离线能力的项默认不勾） | 已采纳（含防线测试） |
+| [ADR-0013](ADR-0013-settings-dirty-and-close-gate.md) | 设置脏检查与关闭闸门（快照对比；任何会丢东西的关闭路径都要确认） | 已采纳（含防线测试） |
+| [ADR-0014](ADR-0014-launch-readiness-and-modpack-expectation.md) | 启动前判定加载器与整合包（预期先落盘；加载器缺失不可覆盖；运行结果必须带退出码） | 已采纳（含防线测试） |
+| [ADR-0015](ADR-0015-command-reentry-guard.md) | 命令层防重入（门在命令里，异步默认开；禁止「火后不管」；文案随状态变） | 已采纳（含防线测试） |
+| [ADR-0016](ADR-0016-forge-installer-launcher-profiles.md) | 给官方加载器安装器补 `launcher_profiles.json`（缺→建 / 好→不动 / 坏→备份重建） | 已采纳（含实跑验证） |

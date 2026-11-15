@@ -10,13 +10,20 @@ namespace AuroraLauncher.Desktop.Views;
 public partial class UpdateApplyingWindow : Window
 {
     private readonly UpdateApplyPlan _plan;
+    private bool _initialized;
     private bool _running;
 
     public UpdateApplyingWindow(UpdateApplyPlan plan)
     {
         InitializeComponent();
         _plan = plan;
-        Loaded += async (_, _) => await RunAsync();
+        Loaded += (_, _) =>
+        {
+            // A second Loaded must never start a second file swap.
+            if (_initialized) return;
+            _initialized = true;
+            _ = RunAsync();
+        };
     }
 
     private async Task RunAsync()
@@ -28,11 +35,13 @@ public partial class UpdateApplyingWindow : Window
         Progress.Value = 8;
 
         void Report(string text, int pct) =>
-            Application.Current?.Dispatcher.Invoke(() =>
+            // Round-66: never block a worker thread on the UI thread with a
+            // synchronous Invoke; queue the stage text instead.
+            Application.Current?.Dispatcher.BeginInvoke((Action)(() =>
             {
                 StageText.Text = text;
                 Progress.Value = pct;
-            });
+            }));
 
         try
         {
