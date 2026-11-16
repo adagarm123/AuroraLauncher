@@ -5815,7 +5815,11 @@ internal static class Program
             var mods = Read("src/AuroraLauncher.Desktop/Views/ModsView.xaml");
             var pre = Read("src/AuroraLauncher.Desktop/Views/PreflightWindow.xaml");
             Assert(vm.Contains("BeginJobAsync(\"补齐\""), "补齐必须是可取消的下载任务");
-            Assert(vm.Contains("session.Record(result);") && vm.Contains("catch (Exception ex)\n                {\n                    result = new AutoFixResult"),
+            // CI checks out with CRLF while local edits are LF — never pin a
+            // guard to a literal newline sequence.
+            Assert(vm.Contains("session.Record(result);") &&
+                   System.Text.RegularExpressions.Regex.IsMatch(vm,
+                       @"catch \(Exception ex\)\s*\{\s*result = new AutoFixResult"),
                 "单项失败要记录后继续下一项");
             Assert(mods.Contains("AutoFixButtonText") && mods.Contains("SelectAllMissingCommand") &&
                    mods.Contains("OpenModsFolderCommand"), "清单卡片要有全选、进度文案与手动出口");
