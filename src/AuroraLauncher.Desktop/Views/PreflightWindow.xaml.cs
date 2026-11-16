@@ -5,7 +5,7 @@ using AuroraCore.Services;
 namespace AuroraLauncher.Desktop.Views;
 
 /// <summary>What the user chose in the pre-launch mod check.</summary>
-public enum PreflightChoice { Cancel, LaunchAnyway, InstallFabricApi }
+public enum PreflightChoice { Cancel, LaunchAnyway, InstallFabricApi, AutoFix }
 
 /// <summary>
 /// Round-77: shows the pre-launch mod findings. A MessageBox could not express
@@ -17,43 +17,62 @@ public partial class PreflightWindow : Window
 {
     public PreflightChoice Choice { get; private set; } = PreflightChoice.Cancel;
 
-    public PreflightWindow(ModPreflight.Report report, GameInstance instance)
+    private readonly List<IssueVm> _items = new();
+
+    /// <summary>Round-100: checked prerequisite ids for the auto-fix path.</summary>
+    public IReadOnlyList<string> SelectedModIds =>
+        _items.Where(i => i.CanFix && i.IsChecked).Select(i => i.ModId).ToList();
+
+    /// <summary>allowAutoFix=false on the second pass after a batch, so a
+    /// partially fixed pack cannot put the dialog into an infinite loop.</summary>
+    public PreflightWindow(ModPreflight.Report report, GameInstance instance, bool allowAutoFix = true)
     {
         InitializeComponent();
 
         HeadlineText.Text = $"{report.Headline}（共 {report.IssueCount} 项） · 实例「{instance.Name}」" +
                             $" · 已扫描 {report.ScannedJars} 个模组";
 
-        var items = new List<IssueVm>();
         foreach (var missing in report.Missing.Take(12))
-            items.Add(new IssueVm
+            _items.Add(new IssueVm
             {
                 Title = $"缺少前置：{missing.ModId}",
                 Detail = $"「{missing.RequiredBy}」需要它" +
                          (missing.Range is "*" or "" ? "" : $"（要求版本 {missing.Range}）") +
-                         $" · 来源 {missing.RequiredByFile}"
+                         $" · 来源 {missing.RequiredByFile}",
+                ModId = missing.ModId,
+                CanFix = allowAutoFix
             });
         foreach (var conflict in report.Conflicts.Take(6))
-            items.Add(new IssueVm { Title = "模组冲突", Detail = conflict });
+            _items.Add(new IssueVm { Title = "模组冲突", Detail = conflict });
         foreach (var duplicate in report.Duplicates.Take(6))
-            items.Add(new IssueVm { Title = "重复安装", Detail = duplicate });
+            _items.Add(new IssueVm { Title = "重复安装", Detail = duplicate });
         foreach (var wrong in report.WrongLoader.Take(6))
-            items.Add(new IssueVm { Title = "加载器不匹配", Detail = wrong });
+            _items.Add(new IssueVm { Title = "加载器不匹配", Detail = wrong });
 
-        IssueList.ItemsSource = items;
+        IssueList.ItemsSource = _items;
 
         var hidden = report.Missing.Count + report.Conflicts.Count + report.Duplicates.Count +
-                     report.WrongLoader.Count - items.Count;
+                     report.WrongLoader.Count - _items.Count;
         if (hidden > 0)
         {
             TruncatedText.Text = $"还有 {hidden} 项未列出（可在「日志」页导出日志查看完整扫描结果）。";
             TruncatedText.Visibility = Visibility.Visible;
         }
 
-        // Fabric API is the one prerequisite we can install unattended.
-        InstallButton.Visibility = report.FabricApiMissing ? Visibility.Visible : Visibility.Collapsed;
-        if (report.FabricApiMissing) InstallButton.IsDefault = true;
-        else Launch_Click_Default();
+        // Round-100: any missing prerequisite (not just fabric-api) can be
+        // fixed in one batch, with checkboxes and per-item feedback.
+        var canAutoFix = allowAutoFix && _items.Any(i => i.CanFix);
+        AutoFixButton.Visibility = canAutoFix ? Visibility.Visible : Visibility.Collapsed;
+        if (canAutoFix)
+        {
+            AutoFixButton.Content = $"补齐选中的 {_items.Count(i => i.CanFix && i.IsChecked)} 项并继续";
+            AutoFixButton.IsDefault = true;
+        }
+        // Fabric API is the narrow, legacy one-click path.
+        InstallButton.Visibility = !canAutoFix && report.FabricApiMissing
+            ? Visibility.Visible : Visibility.Collapsed;
+        if (!canAutoFix && report.FabricApiMissing) InstallButton.IsDefault = true;
+        else if (!canAutoFix) Launch_Click_Default();
     }
 
     private void Launch_Click_Default()
@@ -86,6 +105,13 @@ public partial class PreflightWindow : Window
         DialogResult = true;
     }
 
+    private void AutoFix_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedModIds.Count == 0) return;
+        Choice = PreflightChoice.AutoFix;
+        DialogResult = true;
+    }
+
     private void Cancel_Click(object sender, RoutedEventArgs e)
     {
         Choice = PreflightChoice.Cancel;
@@ -96,5 +122,8 @@ public partial class PreflightWindow : Window
     {
         public string Title { get; init; } = "";
         public string Detail { get; init; } = "";
+        public string ModId { get; init; } = "";
+        public bool CanFix { get; init; }
+        public bool IsChecked { get; set; } = true;
     }
 }

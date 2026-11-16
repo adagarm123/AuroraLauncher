@@ -155,6 +155,49 @@ internal static class Program
             Environment.Exit(0);
             return;
         }
+        // Round-100 read-only network smoke: resolve every missing prerequisite
+        // of a REAL instance against Modrinth. Prints the file we WOULD pick;
+        // never writes to mods/ and never downloads a jar.
+        // Usage: --auto-fix-scan <instanceDir> <Forge|Fabric|NeoForge|Quilt> <mcVersion>
+        var afIndex = Array.IndexOf(args, "--auto-fix-scan");
+        if (afIndex >= 0 && args.Length > afIndex + 3)
+        {
+            try
+            {
+                var loader = Enum.TryParse<ModLoaderType>(args[afIndex + 2], true, out var parsed)
+                    ? parsed : ModLoaderType.Forge;
+                var dir = args[afIndex + 1];
+                var mcVersion = args[afIndex + 3];
+                var report = ModPreflight.Scan(dir, loader, Console.WriteLine);
+                var plans = MissingDependencyFix.Plan(report);
+                Console.WriteLine($"[auto-fix] scanned={report.ScannedJars} missing={plans.Count} loader={loader}");
+                var mods = new ModManager(new DownloadEngine(2));
+                var ok = 0;
+                foreach (var c in plans)
+                {
+                    ModrinthProject? project = null;
+                    if (c.KnownSlug)
+                    {
+                        try { project = await mods.GetProjectDetailAsync(c.Slug); } catch { }
+                    }
+                    if (project == null)
+                    {
+                        var hits = await mods.SearchAsync(c.Slug, ContentType.Mod, null, null);
+                        project = MissingDependencyFix.PickProject(c, hits.Projects);
+                    }
+                    if (project == null) { Console.WriteLine($"  - {c.ModId}: 未找到 Modrinth 项目 ({c.Slug})"); continue; }
+                    var versions = await mods.GetVersionsAsync(project.ProjectId, ContentType.Mod, null, null);
+                    var (pick, outcome) = MissingDependencyFix.PickVersion(c, loader, mcVersion, versions);
+                    if (pick == null) Console.WriteLine($"  - {c.ModId}: {outcome}（项目 {project.Title}）");
+                    else { ok++; Console.WriteLine($"  - {c.ModId}: {project.Title} {pick.VersionNumber} -> {pick.FileName} " +
+                                                    $"sha1={pick.Sha1?[..12]}… size={pick.FileSize}"); }
+                }
+                Console.WriteLine($"[auto-fix] resolved={ok}/{plans.Count}（只解析，未下载）");
+                Environment.Exit(0);
+            }
+            catch (Exception ex) { Console.WriteLine("[auto-fix] ERROR " + ex.Message); Environment.Exit(1); }
+            return;
+        }
         // Round-98 opt-in network smoke: resolve BOTH JDK vendors from their
         // real APIs. Metadata only — never downloads the ~200 MB archive.
         if (args.Contains("--java-dist-smoke"))
@@ -5639,6 +5682,157 @@ internal static class Program
                    .Contains("_plan.Targets.Count > 0"), "没有可删项时不允许确认");
             Assert(Read("src/AuroraCore/Services/UninstallService.cs")
                    .Contains("RecycleOption.SendToRecycleBin"), "优先移入回收站而不是硬删");
+        });
+
+        // ---------------- 第 100 轮：一键补齐缺失前置 ----------------
+        Check("MissingDependencyFix：按依赖数排序、合并范围、slug 映射与空 id 过滤（第 100 轮）", () =>
+        {
+            var report = new ModPreflight.Report
+            {
+                Missing = new[]
+                {
+                    new ModDependency("kotlinforforge", "*", "Kotlin 模组", "k.jar")
+                        { Ranges = new[] { "*" }, RequiredByList = new[] { "Kotlin 模组" } },
+                    new ModDependency("mystery-api", "[4.11.0,4.99.0)", "A", "a.jar")
+                        { Ranges = new[] { "[4.11.0,4.99.0)" }, RequiredByList = new[] { "A", "B" } },
+                    new ModDependency("", "*", "坏数据", "x.jar")
+                }
+            };
+            var plans = MissingDependencyFix.Plan(report);
+            Assert(plans.Count == 2, "空 id 必须被忽略");
+            Assert(plans[0].ModId == "mystery-api", "被更多模组依赖的前置排前面");
+            Assert(plans[0].Slug == "mystery-api" && !plans[0].KnownSlug, "未知 slug 走字面 id");
+            Assert(plans[1].Slug == "kotlin-for-forge" && plans[1].KnownSlug, "已知 slug 映射");
+            Assert(plans[0].RangeText.Contains("4.11.0"), "范围要带进 UI");
+        });
+
+        Check("MissingDependencyFix：只认精确 slug / 标题，模糊命中一律拒绝（第 100 轮）", () =>
+        {
+            var c = new AutoFixCandidate("kotlinforforge", new[] { "*" },
+                new[] { "某模组" }, "kotlin-for-forge", true);
+            var unrelated = new ModrinthProject { ProjectId = "1", Slug = "other-mod", Title = "Totally Different" };
+            Assert(MissingDependencyFix.PickProject(c, new[] { unrelated }) == null,
+                "模糊搜索的第一个结果绝不能当作前置安装");
+            var fuzzyTitle = new ModrinthProject { ProjectId = "2", Slug = "wrong-slug", Title = "kotlinforforge" };
+            Assert(MissingDependencyFix.PickProject(c, new[] { unrelated, fuzzyTitle })?.ProjectId == "2",
+                "标题完全一致可以作为精确匹配的兜底");
+            var exact = new ModrinthProject { ProjectId = "3", Slug = "Kotlin-For-Forge", Title = "Kotlin for Forge" };
+            Assert(MissingDependencyFix.PickProject(c, new[] { fuzzyTitle, exact })?.ProjectId == "3",
+                "slug 精确命中优先于标题命中");
+        });
+
+        Check("MissingDependencyFix：加载器 / MC / 版本范围 / 校验值四道门（第 100 轮）", () =>
+        {
+            var c = new AutoFixCandidate("architectury-api",
+                new[] { "[4.11.0,4.99.0)" }, new[] { "A" }, "architectury-api", true);
+            ModrinthVersion V(string ver, string type, string loader, string mc, string? sha, long size) =>
+                new("id-" + ver, ver, ver, type, new[] { mc }, new[] { loader },
+                    "https://cdn.example/" + ver + ".jar", ver + ".jar", size, sha,
+                    new DateTime(2026, 1, 1).AddDays(VerDay(ver)));
+            static int VerDay(string ver) => int.TryParse(ver.Split('.')[1], out var n) ? n : 0;
+
+            var list = new[]
+            {
+                V("4.10.0", "release", "forge", "1.20.1", "aaa", 100),   // range fails
+                V("4.20.0", "release", "fabric", "1.20.1", "bbb", 100),  // loader fails
+                V("4.30.0", "release", "forge", "1.20.2", "ccc", 100),   // mc fails
+                V("4.50.0", "release", "forge", "1.20.1", null, 100),    // no checksum
+                V("4.40.0", "beta", "forge", "1.20.1", "eee", 100),
+                V("4.45.0", "release", "forge", "1.20.1", "fff", 100)
+            };
+            var (pick, outcome) = MissingDependencyFix.PickVersion(c, ModLoaderType.Forge, "1.20.1", list);
+            Assert(outcome == MissingDependencyFix.PickOutcome.Found, "应找到合规版本");
+            Assert(pick!.VersionNumber == "4.45.0", "release 优先于 beta，且范围上界 4.99.0 内取最新");
+
+            var (noHash, o2) = MissingDependencyFix.PickVersion(c, ModLoaderType.Forge, "1.20.1",
+                new[] { V("4.50.0", "release", "forge", "1.20.1", null, 100) });
+            Assert(noHash == null && o2 == MissingDependencyFix.PickOutcome.Unverifiable, "无校验值必须拒绝");
+
+            var (_, o3) = MissingDependencyFix.PickVersion(c, ModLoaderType.Forge, "1.20.1",
+                new[] { V("4.10.0", "release", "forge", "1.20.1", "aaa", 100) });
+            Assert(o3 == MissingDependencyFix.PickOutcome.NoMatchingVersion, "范围外要有明确结论");
+            Assert(MissingDependencyFix.TypeRank("beta") < MissingDependencyFix.TypeRank("alpha"), "beta 比 alpha 稳");
+        });
+
+        Check("AutoFixSession：没经过重扫就不许说已补齐（第 100 轮）", () =>
+        {
+            var c1 = new AutoFixCandidate("a", new[] { "*" }, new[] { "X" }, "a", false);
+            var c2 = new AutoFixCandidate("b", new[] { "*" }, new[] { "X" }, "b", false);
+            var c3 = new AutoFixCandidate("c", new[] { "*" }, new[] { "X" }, "c", false);
+            var s = new AutoFixSession(new[] { c1, c2, c3 });
+            s.Record(new AutoFixResult("a", "a", AutoFixStatus.Installed, "a.jar"));
+            s.Record(new AutoFixResult("b", "b", AutoFixStatus.Installed, "b.jar"));
+            s.Record(new AutoFixResult("c", "c", AutoFixStatus.NotFound));
+            var final = s.Complete(new[] { "a" });
+            Assert(final.First(r => r.ModId == "a").Status == AutoFixStatus.Installed, "重扫到的才算装好");
+            Assert(final.First(r => r.ModId == "b").Status == AutoFixStatus.NotRecognized,
+                "下载了但重扫没看到 → 不许报已安装");
+            Assert(s.InstalledCount == 1 && s.FailedCount == 2, "汇总口径以重扫后为准");
+            Assert(s.Summary.Contains("2 项需要手动处理"), "汇总要说清还有几项没成");
+        });
+
+        Check("MissingDependencyFix：七种结果都有中文说明与手动出口（第 100 轮）", () =>
+        {
+            var c = new AutoFixCandidate("some-api", new[] { "[1.0,)" }, new[] { "某模组" }, "some-api", false);
+            foreach (AutoFixStatus status in Enum.GetValues<AutoFixStatus>())
+            {
+                var line = MissingDependencyFix.Describe(
+                    new AutoFixResult(c.ModId, c.Slug, status, "f.jar", "细节"));
+                Assert(line.Length > 2 && !line.Contains("operation was canceled", StringComparison.OrdinalIgnoreCase),
+                    $"{status} 必须有中文说明");
+            }
+            var hint = MissingDependencyFix.ManualHint(c);
+            Assert(hint.Contains("打开 mods 文件夹") && hint.Contains("1.0"), "失败要给出手动路径与版本要求");
+            Assert(MissingDependencyFix.CanVerify(new ModrinthVersion("i", "1", "n", "release",
+                new[] { "1.20.1" }, new[] { "forge" }, "u", "f.jar", 100, "abc")) &&
+                !MissingDependencyFix.CanVerify(new ModrinthVersion("i2", "1", "n", "release",
+                    new[] { "1.20.1" }, new[] { "forge" }, "u", "f2.jar", 100, null)), "校验门口径");
+        });
+
+        Check("Guard: 补齐必须有校验值、成功必须重扫确认、失败不能假装成功（第 100 轮）", () =>
+        {
+            string Read(string p) => File.ReadAllText(Path.Combine(FindSourceRoot()!, p));
+            var core = Read("src/AuroraCore/Services/MissingDependencyFix.cs");
+            var vm = Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.Round100.cs");
+            var preflight = Read("src/AuroraCore/Services/ModPreflight.cs");
+            Assert(core.Contains("public static bool CanVerify(ModrinthVersion version)"), "校验值单一判定入口");
+            Assert(core.Contains("public IReadOnlyList<AutoFixResult> Complete(IReadOnlyCollection<string> presentIds)"),
+                "结论必须由重扫 ids 决定");
+            Assert(core.Contains("r.Status == AutoFixStatus.Installed && !present.Contains(r.ModId)"),
+                "没扫到就把 Installed 降级");
+            Assert(preflight.Contains("PresentIds = present"), "体检必须暴露实际识别到的 id");
+            Assert(vm.Contains("session.Complete(fresh.PresentIds)"), "VM 必须用重扫结果收口");
+            Assert(vm.Contains("fresh = new ModPreflight.Report()") &&
+                   vm.Contains("// Fail closed"), "重扫失败时不许保留成功结论");
+            Assert(vm.Contains("outcome == MissingDependencyFix.PickOutcome.Unverifiable"),
+                "无校验值要明确告诉用户，而不是静默跳过");
+        });
+
+        Check("Guard: 一键补齐走 DownloadJob、逐项失败不中断、UI 有手动出口（第 100 轮）", () =>
+        {
+            string Read(string p) => File.ReadAllText(Path.Combine(FindSourceRoot()!, p));
+            var vm = Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.Round100.cs");
+            var mods = Read("src/AuroraLauncher.Desktop/Views/ModsView.xaml");
+            var pre = Read("src/AuroraLauncher.Desktop/Views/PreflightWindow.xaml");
+            Assert(vm.Contains("BeginJobAsync(\"补齐\""), "补齐必须是可取消的下载任务");
+            Assert(vm.Contains("session.Record(result);") && vm.Contains("catch (Exception ex)\n                {\n                    result = new AutoFixResult"),
+                "单项失败要记录后继续下一项");
+            Assert(mods.Contains("AutoFixButtonText") && mods.Contains("SelectAllMissingCommand") &&
+                   mods.Contains("OpenModsFolderCommand"), "清单卡片要有全选、进度文案与手动出口");
+            Assert(pre.Contains("AutoFix_Click"), "启动前检查也要有补齐入口");
+        });
+
+        Check("Guard: 启动前检查可勾选补齐，二次弹窗不得循环补齐（第 100 轮）", () =>
+        {
+            string Read(string p) => File.ReadAllText(Path.Combine(FindSourceRoot()!, p));
+            var code = Read("src/AuroraLauncher.Desktop/Views/PreflightWindow.xaml.cs");
+            var xaml = Read("src/AuroraLauncher.Desktop/Views/PreflightWindow.xaml");
+            var vm = Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.cs");
+            Assert(code.Contains("PreflightChoice.AutoFix") && xaml.Contains("IsChecked=\"{Binding IsChecked}\""),
+                "勾选要真能传到 VM");
+            Assert(code.Contains("SelectedModIds"), "补齐范围来自勾选，不能整批强装");
+            Assert(vm.Contains("SetMissingFromReport(report)"), "清单要用本次扫描结果，不用过期缓存");
+            Assert(vm.Contains("RunPreflightAsync(instance, ct, allowAutoFix: false)"), "补齐后重扫不能再弹同一个按钮");
         });
 
         Console.WriteLine($"\n=== Result: {_passed} passed, {_failed} failed, {_skipped} skipped ===");        Environment.Exit(_failed == 0 ? 0 : 1);

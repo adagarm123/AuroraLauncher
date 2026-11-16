@@ -31,6 +31,20 @@
                             <Border CornerRadius="7" Background="{DynamicResource PanelAltBrush}" Padding="10,8" Margin="0,0,0,6">
                                 <StackPanel>
                                     <TextBlock Text="{Binding Title}" FontSize="12.5" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                                    <!-- Round-100: missing prerequisites can be ticked for one-click repair -->
+                                    <CheckBox Content="自动补齐这一项" IsChecked="{Binding IsChecked}"
+                                              FontSize="11" Margin="16,3,0,0">
+                                        <CheckBox.Style>
+                                            <Style TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding CanFix}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </CheckBox.Style>
+                                    </CheckBox>
                                     <TextBlock Text="{Binding Detail}" FontSize="11.5" TextWrapping="Wrap"
                                                Foreground="{DynamicResource TextMutedBrush}" Margin="0,3,0,0"/>
                                 </StackPanel>
@@ -46,6 +60,8 @@
         <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
             <Button Content="取消启动" Click="Cancel_Click" Padding="16,7" Margin="0,0,8,0" IsCancel="True"/>
             <Button Content="仍然启动" Click="Launch_Click" Padding="16,7" Margin="0,0,8,0"/>
+            <Button x:Name="AutoFixButton" Content="补齐选中项并继续" Click="AutoFix_Click"
+                    Style="{StaticResource PrimaryButton}" Padding="16,7" Margin="0,0,8,0"/>
             <Button x:Name="InstallButton" Content="安装 Fabric API 并继续" Click="Install_Click"
                     Style="{StaticResource PrimaryButton}" Padding="16,7"/>
         </StackPanel>

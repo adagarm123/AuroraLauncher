@@ -48,6 +48,11 @@ public static class ModPreflight
         /// <summary>Fabric API is missing and at least one mod needs it.</summary>
         public bool FabricApiMissing { get; init; }
 
+        /// <summary>Round-100: every id the scan can actually see (own ids +
+        /// <c>provides</c>). The auto-fix uses this as the ONLY proof that a
+        /// downloaded prerequisite is really installed.</summary>
+        public IReadOnlyList<string> PresentIds { get; init; } = Array.Empty<string>();
+
         public bool HasIssues => Missing.Count > 0 || Conflicts.Count > 0 ||
                                  Duplicates.Count > 0 || WrongLoader.Count > 0;
 
@@ -161,7 +166,8 @@ public static class ModPreflight
             Conflicts = conflicts,
             Duplicates = duplicates,
             WrongLoader = wrongLoader,
-            FabricApiMissing = fabricApiRelevant
+            FabricApiMissing = fabricApiRelevant,
+            PresentIds = present.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList()
         };
 
         log?.Invoke($"[Preflight] 扫描 {report.ScannedJars} 个模组：缺少前置 {mergedMissing.Count}（原始 {missing.Count} 条）· " +

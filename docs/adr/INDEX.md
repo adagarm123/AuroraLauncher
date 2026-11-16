@@ -27,3 +27,4 @@
 | [ADR-0019](ADR-0019-progress-honesty-and-loader-aware-preflight.md) | 进度诚实与加载器感知体检（未完不成 100%、黑盒不确定态、停滞看门狗；跨加载器元数据与依赖过滤） | 已采纳（含防线测试） |
 | [ADR-0020](ADR-0020-installer-resilience-and-jdk-vendors.md) | 安装器下载韧性与 JDK 发行版可插拔（镜像优先、心跳、失败状态诚实、Zulu 白名单） | 已采纳（含防线测试） |
 | [ADR-0021](ADR-0021-content-state-and-uninstall-safety.md) | 内容中心状态同源与安全卸载（列表驱动文案、空状态三态、白名单 + 两次确认 + 回收站） | 已采纳（含防线测试） |
+| [ADR-0022](ADR-0022-missing-dependency-auto-fix.md) | 缺失前置一键补齐（精确匹配、四道版本门、无校验值不下载、重扫才算装好、逐项降级） | 已采纳（含防线测试） |

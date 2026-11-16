@@ -18,12 +18,21 @@ public static class HelpContent
     /// <summary>Round number of the newest entry in <see cref="Changelog"/> —
     /// bump together with the changelog entry; drives the one-time "已更新"
     /// startup toast (dismissed permanently once the user opens the page).</summary>
-    public const int LatestChangelogRound = 99;
+    public const int LatestChangelogRound = 100;
     /// <summary>更新日志（说人话版本：无技术名词、用户视角）——独立页面
     /// 「更新日志」使用；模板见 docs/release-notes-template.md。
     /// 每轮发布时在此置顶新增一条。</summary>
     public static IEnumerable<HelpTopicVM> Changelog() => new[]
     {
+        new HelpTopicVM
+        {
+            Category = "更新日志", Glyph = "\uE777", Title = "【第 100 轮更新】缺失前置可以一键补齐了",
+            Summary = "勾选缺的前置，自动找适配版本并下载；逐项结果与手动出口都写清楚",
+            Body = "1) 内容中心 → 本地管理里多了一张「缺失前置 · 可一键补齐」卡片：体检发现的每个前置一行，默认勾选，可全选 / 清空 / 重新扫描 / 打开 mods 文件夹 / 一键补齐。启动前的检查窗口也能直接「补齐选中的 N 项并继续」，补齐后会重新扫描再决定继续启动；还有问题会再弹一次检查窗，但不会再给同一个自动补齐按钮，不会陷入死循环。\n\n" +
+                   "2) 只装查得准、验得过的前置：Modrinth 项目必须 slug 完全一致或标题完全一致，模糊搜索的第一个结果绝不当作前置安装；版本要同时符合当前加载器、MC 版本和模组声明的版本范围；文件必须有 SHA-1 校验值，没有就明确告诉你「为安全起见没有自动下载」。\n\n" +
+                   "3) 下载完不算装好：整批结束后会重新扫一遍 mods 文件夹，只有真的看见那个前置才写「已补齐」；下载成功但重扫没认出来的，会如实写成未识别。其中一项失败不会拖垮整批，每条结果都有中文原因，失败项还会告诉你去哪找、要什么版本范围。补齐过程在「下载管理」里能看到进度和阶段，随时可以取消。\n\n" +
+                   "小提示：某些前置只在 CurseForge 或作者自己的网站上发布，Modrinth 找不到属正常情况；这时按卡片上的提示手动放进 mods 文件夹即可。"
+        },
         new HelpTopicVM
         {
             Category = "更新日志", Glyph = "\uE777", Title = "【第 99 轮更新】内容中心不再白屏，新增缓存展示 / 引导便携 / 一键卸载",

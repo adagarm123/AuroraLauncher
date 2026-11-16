@@ -1,6 +1,6 @@
 # 更新日志（CHANGELOG）
 
-> 完整历史变更记录：**第 1–2 轮交付说明 + 第 3 轮至第 98 轮逐轮补充**（末轮始终为当前版本的前一轮）。
+> 完整历史变更记录：**第 1–2 轮交付说明 + 第 3 轮至第 99 轮逐轮补充**（末轮始终为当前版本的前一轮）。
 > 本文件由 `README.md` 的历史章节整体搬迁而来，正文保持原样（未改写、未删减）。
 >
 > - **最新一轮**始终放在 [README](README.md) 的「最新一轮的更新内容」章节。
@@ -2067,3 +2067,38 @@ BattleArmory TACZ  loader=Forge  resolved=(null)                      mods=0 →
 - 发布：EXE + 97→98 补丁 + 签名清单（见文末）；云端 Release 由 Actions 同一次 workflow 编译/签名/上传/部署
 
 **配套**：`BuildInfo.CurrentRound` → 98、应用内更新日志置顶第 98 轮、第 97 轮归档进 CHANGELOG、新增 ADR-0020。
+
+## 更新补充（第 99 轮：内容中心不再白屏，以及缓存 / 便携 / 卸载三件套）
+
+### 第 99 轮：内容中心不再白屏，以及缓存 / 便携 / 卸载三件套（2026-11-15）
+
+**先更正诊断：不是高度塌陷，也不是「过滤空了没写空状态」**
+
+代码里本来就有空状态面板。真正的三个原因：
+
+1. **状态栏是自由文本，不是绑定**。`SelectContentKindCommand` 对 `CurseForge / OptiFine / 本地管理` 这三个非 Modrinth 分类直接 `return`，完全不改 `Status`；于是切到这些分类后顶栏仍挂着上一次「「光影包」搜索到 141 个结果」，而右侧主内容区已被 DataTrigger 收起 —— 141 是**上一次搜索的残留文本**，不是当前列表的条数。
+2. **详情浮层残留**。`SearchContentCommand` 和首次进入的自动搜索都不重置 `ShowContentDetail`，而详情浮层是一块纯 `PanelBrush` 的 Border；它残留 `true` 时会盖住列表、空状态与分页栏，看起来就是一整片底色白板。
+3. **子导航那块淡紫是鼠标悬停**，和第 96 轮主导航是同一个坑。`TextMatchConverter` 本来就只认 `ContentKind`（单一数据源），但 active 与 hover 视觉上无法区分。
+
+**改法（状态同源 + 空状态三态 + 防御性渲染）**
+
+- 新增 `ContentStatusText`：直接读 `ModSearchResults.Count` 与 `_searchTotalHits`，文案形如「本页 0 项 · 共 141 个结果」；非 Modrinth 分类返回「内容中心 · CurseForge」；页面内也加了一条同源横幅。切分类时统一清掉残留 `Status`、`ShowContentDetail`、搜索错误。
+- 空状态三态：**尚未搜索 / 搜索失败（红色 + 重试搜索）/ 本页为空**；后者在 `TotalHits > 0` 时解释「页码越界或筛选过严」并给「回到第一页」。结果区 `MinHeight="200"` 防止常驻页面 Visibility 切换后 Measure 得 0。
+- 8 个子导航都加 `BorderThickness + BorderBrush`，只由 `ContentKind` 通过 `PageActiveBorderConverter` 生成，Guard 锁死「每个 Background 都绑 ContentKind、不得依赖 IsSelected/焦点、同时只能有一个 active」。
+
+**三个新功能**
+
+- **展示缓存文件夹**：设置 → 存储列出 6 处缓存（`cache/icons`、`cache/installers`、版本清单、续传台账、`update/`、`logs/`）的完整路径、占用与文件数，可刷新、逐条打开；纯只读，不删任何东西。`--cache-scan` 在真实数据根实跑：合计 **26.0 MB**，其中加载器安装器缓存 25.7 MB。
+- **引导里选便携模式**：首次启动第 1 步新增勾选「把所有文件都存到启动器 EXE 所在目录」，勾了就调用 `PortableModePolicy.CreateMarker` 写 `portable.txt`，重启后配置 / 实例 / 缓存 / Java 全部写入程序目录；已有数据不自动搬移，结果在步骤 2 可见。设置页原有的按钮改为复用同一个静默核心。
+- **一键卸载（安全优先）**：`UninstallPolicy` 是 fail-closed 白名单 —— 只认数据根下启动器自己拥有的目录 / 文件，未知条目一律进「将保留」；`CacheFolderPolicy.IsSafeRoot` 拒绝驱动器根、系统目录、桌面 / 文档 / 下载。确认窗口逐条列出完整路径，单独询问「删除存档」「删除 Java」（**默认都保留**），要求勾选不可恢复确认，VM 再弹一次「最后确认」。执行时优先移入回收站，运行中的 EXE 用 `MoveFileEx(DELAY_UNTIL_REBOOT)` 在重启后删除。**本轮没有在真机执行卸载**（危险操作），只做纯策略单测与静态 Guard。
+
+**验证**
+
+- `--unit` **154/154**、`--all` **161/161**（新增 5 项：缓存清单与安全目录、卸载白名单与保留策略、3 条静态防线）
+- **机制防线 42 条**；交互元素 119 → **130**（设置 3 + 引导 1 + 卸载窗 5 + 内容中心 2）
+- `--cache-scan` 只读冒烟在真实数据根通过；文档轮动 / 三份基线 / ADR-0021 同步
+- 发布：EXE + 98→99 补丁 + 签名清单（见文末）
+
+**仍需你实测**：切换「光影包 → CurseForge → 模组」确认状态栏与列表一致；以及卸载窗口在真机上的路径清单是否符合预期（切勿在没备份时确认）。
+
+**配套**：`BuildInfo.CurrentRound` → 99、应用内更新日志置顶第 99 轮、第 98 轮归档进 CHANGELOG、新增 ADR-0021。

@@ -227,6 +227,11 @@ public partial class MainViewModel : ViewModelBase
         ImportLauncherCommand = new RelayCommand(async _ => await ImportLauncherAsync());
         ScanModsCommand = new RelayCommand(_ => ScanMods());
         ToggleModCommand = new RelayCommand(_ => ToggleMod());
+        // Round-100: missing-prerequisite checklist (one job, per-item verdict).
+        RefreshMissingDepsCommand = new RelayCommand(_ => RefreshMissingDeps());
+        SelectAllMissingCommand = new RelayCommand(_ => SelectAllMissing());
+        ClearMissingSelectionCommand = new RelayCommand(_ => ClearMissingSelection());
+        AutoFixMissingCommand = new RelayCommand(async _ => await RunAutoFixAsync(), _ => CanAutoFix);
         SearchContentCommand = new RelayCommand(async _ => { _searchPage = 0; await SearchContentAsync(); });
         ResetContentCommand = new RelayCommand(async _ => await ResetContentAsync());
         OpenContentDetailCommand = new RelayCommand(async o => await OpenContentDetailAsync(o as ContentItemVM));
@@ -1219,6 +1224,10 @@ public partial class MainViewModel : ViewModelBase
     public RelayCommand ImportLauncherCommand { get; }
     public RelayCommand ScanModsCommand { get; }
     public RelayCommand ToggleModCommand { get; }
+    public RelayCommand RefreshMissingDepsCommand { get; }
+    public RelayCommand SelectAllMissingCommand { get; }
+    public RelayCommand ClearMissingSelectionCommand { get; }
+    public RelayCommand AutoFixMissingCommand { get; }
     public RelayCommand SearchContentCommand { get; }
     public RelayCommand ResetContentCommand { get; }
     public RelayCommand SelectContentKindCommand { get; }
@@ -1691,7 +1700,8 @@ public partial class MainViewModel : ViewModelBase
 
     /// <summary>Round-77: pre-launch mod check. Returns false when the user chose
     /// not to launch. Runs on a worker thread; the dialog is shown on the UI.</summary>
-    private async Task<bool> RunPreflightAsync(GameInstance instance, CancellationToken ct)
+    private async Task<bool> RunPreflightAsync(GameInstance instance, CancellationToken ct,
+        bool allowAutoFix = true)
     {
         if (!LauncherConfig.Instance.CheckModsBeforeLaunch) return true;
         if (instance.LoaderType == ModLoaderType.Vanilla) return true;
@@ -1713,12 +1723,22 @@ public partial class MainViewModel : ViewModelBase
         if (!report.HasIssues) return true;
 
         Logger.Instance.Info("Preflight", $"{instance.Name}: {report.Headline}（共 {report.IssueCount} 项）");
-        var dialog = new PreflightWindow(report, instance) { Owner = Application.Current.MainWindow };
+        var dialog = new PreflightWindow(report, instance, allowAutoFix) { Owner = Application.Current.MainWindow };
         dialog.ShowDialog();
         if (dialog.Choice == PreflightChoice.Cancel)
         {
             Status = "已取消启动（启动前检查发现模组问题）";
             return false;
+        }
+        if (dialog.Choice == PreflightChoice.AutoFix)
+        {
+            // Round-100: seed the checklist from THIS scan (a background
+            // refresh may not have finished), run one cancellable job, then
+            // re-scan. allowAutoFix=false prevents a dialog loop when part of
+            // the batch could not be fixed.
+            SetMissingFromReport(report);
+            await RunAutoFixAsync(instance, dialog.SelectedModIds).ConfigureAwait(true);
+            return await RunPreflightAsync(instance, ct, allowAutoFix: false).ConfigureAwait(true);
         }
         if (dialog.Choice == PreflightChoice.InstallFabricApi)
         {
@@ -3795,6 +3815,9 @@ public partial class MainViewModel : ViewModelBase
                 Mods.Clear();
                 foreach (var m in list) Mods.Add(m);
             });
+            // Round-100: the missing-dependency checklist shares this refresh
+            // path, so switching instances / importing a mod updates both.
+            RefreshMissingDeps();
         }
         catch (Exception ex) { Status = "扫描 Mod 失败: " + ex.Message; }
     }
