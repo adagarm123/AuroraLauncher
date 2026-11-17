@@ -112,7 +112,7 @@ public static class UninstallPolicy
         if (!plan.DeleteJava) keeps.Add("启动器管理的 Java（java/）");
         return $"即将移除 {plan.Targets.Count} 项启动器文件/目录。\n\n" +
                (keeps.Count > 0 ? "将保留：" + string.Join("、", keeps) + "\n\n" : "存档与 Java 也会一并删除。\n\n") +
-               "文件会先尝试移入回收站；程序文件本身需要重启后才会消失。\n" +
-               "任何不属于启动器的文件都不会被删除。";
+               "文件会先尝试移入回收站；启动器本体会在退出后由一个临时清理进程立即删除，无需重启。\n" +
+               "注册表只清理下面的勾选范围内、明确属于 AuroraLauncher 的项；其它文件与注册表项一律不碰。";
     }
 }

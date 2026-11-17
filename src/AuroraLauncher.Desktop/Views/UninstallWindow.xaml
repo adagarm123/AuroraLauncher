@@ -19,7 +19,11 @@
             <CheckBox x:Name="DeleteSavesBox" Content="同时删除游戏存档与实例（instances/、backups/）"
                       Margin="0,4,0,4" Checked="OnOptionsChanged" Unchecked="OnOptionsChanged"/>
             <CheckBox x:Name="DeleteJavaBox" Content="同时删除启动器管理的 Java（java/）"
-                      Margin="0,4,0,14" Checked="OnOptionsChanged" Unchecked="OnOptionsChanged"/>
+                      Margin="0,4,0,4" Checked="OnOptionsChanged" Unchecked="OnOptionsChanged"/>
+            <CheckBox x:Name="RemoveRegistryBox" Content="同时清理启动器的注册表残留（只删明确属于 AuroraLauncher 的项）"
+                      IsChecked="True" Margin="0,0,0,4"/>
+            <TextBlock x:Name="RegistryHintText" FontSize="11.5" TextWrapping="Wrap" Margin="18,0,0,14"
+                       Foreground="{DynamicResource TextMutedBrush}"/>
 
             <TextBlock Text="将删除以下项目（完整路径，逐条列出）：" FontWeight="SemiBold" FontSize="12.5" Margin="0,0,0,6"/>
             <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="10" MaxHeight="190">

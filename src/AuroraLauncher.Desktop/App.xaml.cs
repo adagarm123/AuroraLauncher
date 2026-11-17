@@ -21,6 +21,20 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // Round-102: a temporary COPY of this EXE runs headless after uninstall.
+        // It waits for the launcher to exit, then removes the launcher body and
+        // any files Windows kept locked. No window, no config load, no services.
+        if (UninstallCleanupArgs.TryParse(e.Args, out var cleanupManifest) && cleanupManifest != null)
+        {
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            _ = Task.Run(async () =>
+            {
+                await UninstallService.RunCleanupHelperAsync(cleanupManifest).ConfigureAwait(false);
+                Environment.Exit(0);
+            });
+            return;
+        }
+
         if (UpdateApplyArgs.TryParse(e.Args, out var plan) && plan != null)
         {
             var host = new UpdateApplyingWindow(plan);

@@ -18,12 +18,20 @@ public static class HelpContent
     /// <summary>Round number of the newest entry in <see cref="Changelog"/> —
     /// bump together with the changelog entry; drives the one-time "已更新"
     /// startup toast (dismissed permanently once the user opens the page).</summary>
-    public const int LatestChangelogRound = 101;
+    public const int LatestChangelogRound = 102;
     /// <summary>更新日志（说人话版本：无技术名词、用户视角）——独立页面
     /// 「更新日志」使用；模板见 docs/release-notes-template.md。
     /// 每轮发布时在此置顶新增一条。</summary>
     public static IEnumerable<HelpTopicVM> Changelog() => new[]
     {
+        new HelpTopicVM
+        {
+            Category = "更新日志", Glyph = "\uE777", Title = "【第 102 轮更新】卸载后本体立即删除，注册表残留也一起清",
+            Summary = "不再等重启；卸载窗可勾选清理只属于启动器的注册表项",
+            Body = "1) 以前卸载完还能在文件夹里看到启动器本体，因为 Windows 锁着正在运行的 EXE，旧做法只是标记「下次重启再删」。现在卸载时会先在临时目录放一份启动器副本，它等主程序真正退出后马上把原来的 EXE 和任何还没删掉的文件清掉，不用重启。这个临时进程只能删清理清单里、并且再次通过启动器白名单校验的路径，不会误删你的其它文件。只有它启动失败时才会退回「重启后删除」，并明确告诉你。\n\n" +
+                   "2) 卸载窗口新增「同时清理启动器的注册表残留」勾选，默认勾上。窗口会先只读检查并显示检测到的项目；实际清理只针对 HKCU 下 5 类明确属于 AuroraLauncher 的位置——专属设置键、文件关联、卸载登记、应用路径，以及指向本启动器的开机启动值。名字和路径对不上的一律不删；不会碰 HKLM，也不会碰 Java 或其它软件的注册表项。\n\n" +
+                   "提醒：卸载仍然是不可逆操作，游戏存档和 Java 默认保留，请按窗口里的完整路径清单确认后再点。"
+        },
         new HelpTopicVM
         {
             Category = "更新日志", Glyph = "\uE777", Title = "【第 101 轮更新】更新进度看得见、随时可取消，引导先问文件放哪儿",

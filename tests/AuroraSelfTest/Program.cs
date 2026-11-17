@@ -5923,6 +5923,100 @@ internal static class Program
                 "选择必须走策略判定，不能只看旧勾选");
         });
 
+        // ---------------- 第 102 轮：卸载残留修复 ----------------
+        Check("UninstallRegistryPolicy：只认专属键与可验证的自启动值（第 102 轮）", () =>
+        {
+            Assert(UninstallRegistryPolicy.IsAllowedKey(UninstallRegistryPolicy.AppKey) &&
+                   UninstallRegistryPolicy.IsAllowedKey(UninstallRegistryPolicy.RunKey) &&
+                   !UninstallRegistryPolicy.IsAllowedKey(@"Software\Microsoft\Windows\CurrentVersion\Run\OtherApp") &&
+                   !UninstallRegistryPolicy.IsAllowedKey(@"SOFTWARE\JavaSoft\Java Runtime Environment"),
+                "注册表白名单必须精确，Java / 其它软件绝不碰");
+            var exe = @"C:\Tools\Aurora\AuroraLauncher.exe";
+            Assert(UninstallRegistryPolicy.IsAllowedValue(UninstallRegistryPolicy.RunKey,
+                       UninstallRegistryPolicy.RunValueName, $"\"{exe}\" --minimized", exe),
+                "指向本启动器的 Run 值可以清");
+            Assert(!UninstallRegistryPolicy.IsAllowedValue(UninstallRegistryPolicy.RunKey,
+                       UninstallRegistryPolicy.RunValueName, @"C:\Other\app.exe", exe) &&
+                   !UninstallRegistryPolicy.IsAllowedValue(UninstallRegistryPolicy.RunKey,
+                       "SomeOtherApp", exe, exe), "同名 Run 之外的东西一律不动");
+            Assert(UninstallRegistryPolicy.IsVerifiedKey(UninstallRegistryPolicy.UninstallKey,
+                       "Aurora Launcher", "", exe) &&
+                   !UninstallRegistryPolicy.IsVerifiedKey(UninstallRegistryPolicy.UninstallKey,
+                       "Some Random Tool", "", exe) &&
+                   !UninstallRegistryPolicy.IsVerifiedKey(UninstallRegistryPolicy.AppPathsKey,
+                       "Aurora Launcher", @"C:\Other\tool.exe", exe), "卸载登记项必须名字和路径都像我们");
+            Assert(UninstallRegistryPolicy.Candidates.Count == 5 &&
+                   UninstallRegistryPolicy.Describe(UninstallRegistryPolicy.Candidates[0]).Contains("注册表"),
+                "候选清单固定 5 项且有中文说明");
+        });
+
+        Check("卸载清理进程：命令行往返、路径白名单与 JSON 清单（第 102 轮）", () =>
+        {
+            var manifestPath = Path.Combine(Path.GetTempPath(), "aurora-uninstall-guard-" + Guid.NewGuid().ToString("N") + ".json");
+            var line = UninstallCleanupArgs.Build(manifestPath);
+            Assert(UninstallCleanupArgs.TryParse(new[] { "--uninstall-cleanup", manifestPath }, out var parsed) &&
+                   parsed == manifestPath && line.Contains(UninstallCleanupArgs.Switch), "命令行参数要能往返");
+            Assert(!UninstallCleanupArgs.TryParse(new[] { "--uninstall-cleanup" }, out _), "缺参数不能误判");
+
+            var root = Path.Combine(Path.GetTempPath(), "aurora-uninstall-guard-root-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path.Combine(root, "cache"));
+            File.WriteAllText(Path.Combine(root, "config.json"), "{}");
+            try
+            {
+                Assert(UninstallService.IsCleanupPathAllowed(Path.Combine(root, "cache"), root), "启动器自己的缓存目录可清");
+                Assert(UninstallService.IsCleanupPathAllowed(Path.Combine(root, "config.json"), root), "配置文件可清");
+                Assert(!UninstallService.IsCleanupPathAllowed(@"C:\Windows\System32", root), "系统目录绝不可清");
+                Assert(!UninstallService.IsCleanupPathAllowed(Path.Combine(Path.GetTempPath(), "someone-else.txt"), root),
+                    "数据根之外的文件不可清");
+
+                var manifest = new UninstallCleanupManifest { ParentPid = 4242, ExePath = @"C:\A\AuroraLauncher.exe", Root = root };
+                manifest.Paths.Add(Path.Combine(root, "cache"));
+                manifest.Save(manifestPath);
+                var back = UninstallCleanupManifest.Load(manifestPath);
+                Assert(back?.ParentPid == 4242 && back.Paths.Count == 1 && back.ExePath.EndsWith("AuroraLauncher.exe"),
+                    "清单要能完整往返");
+            }
+            finally
+            {
+                try { File.Delete(manifestPath); } catch { }
+                try { Directory.Delete(root, true); } catch { }
+            }
+        });
+
+        Check("Guard: 卸载后立即删本体、失败的旧做法不再当正常结局（第 102 轮）", () =>
+        {
+            string Read(string p) => File.ReadAllText(Path.Combine(FindSourceRoot()!, p));
+            var service = Read("src/AuroraCore/Services/UninstallService.cs").Replace("\r\n", "\n");
+            var app = Read("src/AuroraLauncher.Desktop/App.xaml.cs").Replace("\r\n", "\n");
+            var vm = Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.Round99.cs").Replace("\r\n", "\n");
+            Assert(service.Contains("PrepareAndStartHelper") && service.Contains("RunCleanupHelperAsync") &&
+                   service.Contains("WaitForParentAsync"), "临时进程必须等父进程退出再删 EXE");
+            Assert(service.Contains("IsCleanupPathAllowed(path, manifest.Root)"), "清理进程二次校验路径");
+            Assert(app.Contains("UninstallCleanupArgs.TryParse") && app.Contains("OnExplicitShutdown"),
+                "无窗口清理模式要在任何窗口创建之前接管");
+            Assert(vm.Contains("tryDeferExe: false") && vm.Contains("helperStarted"),
+                "不再默认把重启后删除当作正常结局");
+            Assert(Read("src/AuroraCore/Services/UninstallPolicy.cs")
+                       .Contains("无需重启"), "用户提示要与实际行为一致");
+        });
+
+        Check("Guard: 注册表清理默认勾选但只能走白名单服务（第 102 轮）", () =>
+        {
+            string Read(string p) => File.ReadAllText(Path.Combine(FindSourceRoot()!, p));
+            var x = Read("src/AuroraLauncher.Desktop/Views/UninstallWindow.xaml");
+            var cs = Read("src/AuroraLauncher.Desktop/Views/UninstallWindow.xaml.cs").Replace("\r\n", "\n");
+            var vm = Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.Round99.cs").Replace("\r\n", "\n");
+            var reg = Read("src/AuroraCore/Services/UninstallRegistryService.cs").Replace("\r\n", "\n");
+            Assert(x.Contains("RemoveRegistryBox") && x.Contains("IsChecked=\"True\""),
+                "注册表清理默认勾选，但只删白名单项");
+            Assert(cs.Contains("UninstallRegistryService.Scan(exe ?? \"\")"), "弹窗要显示真实检测到的项");
+            Assert(cs.Contains("_plan.Targets.Count > 0"), "没有可删文件时仍不许确认");
+            Assert(vm.Contains("Execute(plan, dlg.ResultRemoveRegistry"), "用户勾选要真的传到执行层");
+            Assert(reg.Contains("UninstallRegistryPolicy.IsAllowedKey(t.Key)"), "删除前再过一次白名单");
+            Assert(reg.Contains("Registry.CurrentUser") && !reg.Contains("Registry.LocalMachine"),
+                "只动当前用户，绝不写 HKLM");
+        });
+
         Console.WriteLine($"\n=== Result: {_passed} passed, {_failed} failed, {_skipped} skipped ===");        Environment.Exit(_failed == 0 ? 0 : 1);
     }
 }

@@ -16,6 +16,9 @@ public partial class UninstallWindow : Window
 
     public UninstallPlan ResultPlan => _plan;
 
+    /// <summary>Round-102: registry cleanup is opt-out, but strictly allowlisted.</summary>
+    public bool ResultRemoveRegistry => RemoveRegistryBox.IsChecked == true;
+
     public UninstallWindow(string root, string? exe, bool portable, IReadOnlyList<string> entries)
     {
         InitializeComponent();
@@ -25,6 +28,10 @@ public partial class UninstallWindow : Window
         _entries = entries;
         _plan = UninstallPolicy.BuildPlan(
             new UninstallRequest(root, exe, portable, false, false, entries));
+        var regEntries = UninstallRegistryService.Scan(exe ?? "");
+        RegistryHintText.Text = regEntries.Count == 0
+            ? "当前未检测到属于启动器的注册表项。"
+            : "检测到 " + regEntries.Count + " 项：" + string.Join("、", regEntries.Select(r => r.Display));
         Rebuild();
     }
 

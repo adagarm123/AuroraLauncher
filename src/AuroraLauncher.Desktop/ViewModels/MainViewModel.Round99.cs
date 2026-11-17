@@ -143,9 +143,21 @@ public partial class MainViewModel
             "最后确认", MessageBoxButton.YesNo, MessageBoxImage.Warning);
         if (answer != MessageBoxResult.Yes) { Status = "已取消卸载"; return; }
 
-        var result = UninstallService.Execute(plan);
+        // Round-102: do NOT mark the EXE for reboot deletion up front — the
+        // helper below will remove it immediately after we exit.
+        var result = UninstallService.Execute(plan, dlg.ResultRemoveRegistry, tryDeferExe: false);
+        // Windows keeps the running EXE mapped. A temporary copy waits for us
+        // to exit, then deletes the body immediately — no reboot needed.
+        var (helperStarted, helperError) = UninstallService.PrepareAndStartHelper(plan);
+        var deferredFallback = helperStarted ? false : UninstallService.DeferExeUntilReboot(plan.ExePath);
         var msg = $"已移除 {result.Removed} 项，失败 {result.Failed} 项。" +
-                  (result.ExeDeferred ? "\n启动器 EXE 会在下次重启后自动删除。" : "") +
+                  (result.RegistryRemoved > 0 || result.RegistryFailed > 0
+                      ? $"\n注册表：清理 {result.RegistryRemoved} 项，失败 {result.RegistryFailed} 项。"
+                      : "") +
+                  (helperStarted
+                      ? "\n启动器本体会在退出后立刻删除（无需重启）。"
+                      : "\n自动删除本体失败：" + helperError +
+                        (deferredFallback ? "已改为重启后删除。" : "请手动删除启动器 EXE。")) +
                   (result.Failures.Count > 0 ? "\n\n失败明细：\n" + string.Join("\n", result.Failures.Take(5)) : "") +
                   "\n\n被移入回收站的文件可以恢复。启动器即将退出。";
         System.Windows.MessageBox.Show(Application.Current.MainWindow, msg,
