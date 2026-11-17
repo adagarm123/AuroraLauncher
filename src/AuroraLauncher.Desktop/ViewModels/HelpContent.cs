@@ -18,12 +18,21 @@ public static class HelpContent
     /// <summary>Round number of the newest entry in <see cref="Changelog"/> —
     /// bump together with the changelog entry; drives the one-time "已更新"
     /// startup toast (dismissed permanently once the user opens the page).</summary>
-    public const int LatestChangelogRound = 100;
+    public const int LatestChangelogRound = 101;
     /// <summary>更新日志（说人话版本：无技术名词、用户视角）——独立页面
     /// 「更新日志」使用；模板见 docs/release-notes-template.md。
     /// 每轮发布时在此置顶新增一条。</summary>
     public static IEnumerable<HelpTopicVM> Changelog() => new[]
     {
+        new HelpTopicVM
+        {
+            Category = "更新日志", Glyph = "\uE777", Title = "【第 101 轮更新】更新进度看得见、随时可取消，引导先问文件放哪儿",
+            Summary = "自动更新弹窗显示进度与取消；首次引导新增独立的存放位置步骤",
+            Body = "1) 以前自动更新只有设置页里一条进度条，选了「自动下载」时甚至只有一句提示，看起来像卡住了，也没有取消。现在只要开始下载更新，就会弹出一个专门的窗口：显示第几轮、百分比、已下载多少 MB、当前速度，和设置页用的是同一份进度数据。窗口里的「取消下载」是真的会停下来，直接关掉窗口也一样。\n\n" +
+                   "取消后会把这次没下完的更新包清掉，不会留下半个文件；如果你之前已经有「已就绪」的更新包，本次取消不会把它删掉。下载完成后这个窗口自动关闭，随后进入安装进度窗口。安装阶段仍然不能取消——那时正在替换启动器本体，强行关掉可能损坏文件，窗口里现在会直接说明这一点。\n\n" +
+                   "2) 首次启动的引导改成 4 步。新增的第 2 步专门问「启动器的文件放在哪里？」——这一步发生在任何游戏文件下载之前。两个互斥选项：系统默认位置，或者全部放在启动器 EXE 所在目录（便携模式）。每个选项下面都会显示真实路径和含义：选便携后拷走整个文件夹就能换电脑。\n\n" +
+                   "选择会在进入下一步时生效；如果选了便携，会创建 portable.txt，并在安装页显示结果。重启后才会切换存储位置，已有文件不会自动搬移。如果直接跳过引导，不会写任何标记，一切保持默认。"
+        },
         new HelpTopicVM
         {
             Category = "更新日志", Glyph = "\uE777", Title = "【第 100 轮更新】缺失前置可以一键补齐了",

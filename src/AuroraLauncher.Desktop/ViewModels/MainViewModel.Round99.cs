@@ -70,13 +70,22 @@ public partial class MainViewModel
     /// worked (the wizard never silently drops a choice).</summary>
     public void OnFirstRunNext()
     {
-        if (FirstRunPortable && !IsPortableMode)
+        // Round-101: this command now belongs to the DEDICATED storage step
+        // (step 2/4), which is before the first download. The Java step uses
+        // FirstRunJavaNextCommand and no longer applies anything.
+        var choice = FirstRunStoragePolicy.FromPortable(FirstRunPortable);
+        if (FirstRunStoragePolicy.ShouldCreateMarker(choice, IsPortableMode))
         {
             var (ok, message) = EnablePortableModeCore("首次启动引导");
             FirstRunPortableNote = (ok ? "✓ " : "✗ ") + message;
             if (ok) ShowToast("已启用便携模式，重启启动器后生效");
         }
-        FirstRunStep = Math.Min(1, FirstRunStep + 1);
+        else
+        {
+            FirstRunPortableNote = FirstRunStoragePolicy.Note(false, IsPortableMode,
+                Environment.ProcessPath ?? "");
+        }
+        FirstRunStep = 2;
     }
 
     /// <summary>Silent, reusable core. The settings-page button keeps its own

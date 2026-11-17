@@ -211,7 +211,9 @@ public partial class MainViewModel : ViewModelBase
         OpenModrinthPageCommand = new RelayCommand(_ => OpenModrinthPage());
         FirstRunRescanCommand = new RelayCommand(async _ => await DetectJavaForFirstRunAsync());
         FirstRunOpenJavaSiteCommand = new RelayCommand(_ => OpenJavaDownloadSite());
-        FirstRunNextCommand = new RelayCommand(_ => OnFirstRunNext());
+        CancelUpdateCommand = new RelayCommand(_ => CancelUpdate(), _ => CanCancelUpdate);
+        FirstRunJavaNextCommand = new RelayCommand(_ => GoToFirstRunStorageStep());
+        FirstRunNextCommand = new RelayCommand(_ => ApplyFirstRunStorageChoice());
         FirstRunInstallCommand = new RelayCommand(async _ => await InstallRecommendedAsync());
         FirstRunSkipCommand = new RelayCommand(_ => FinishFirstRun());
         FirstRunDoneCommand = new RelayCommand(_ => FinishFirstRun());
@@ -548,12 +550,12 @@ public partial class MainViewModel : ViewModelBase
 
     private async Task DownloadUpdateAsync(UpdateManifest info, bool applyImmediately)
     {
+        // Round-101: remember whether a usable update was ALREADY staged, so
+        // cancelling this download never destroys the user's previous one.
+        var hadStagedBefore = UpdateService.HasStagedUpdate();
         _updateCts = new CancellationTokenSource();
         IsCheckingUpdate = true;
-        UpdateProgressIndeterminate = false;
-        UpdateProgress = 0;
-        UpdateStatusText = "正在下载更新...";
-        Status = "正在下载启动器更新...";
+        PrepareUpdateWindow(info);
         try
         {
             await _update.DownloadStagedAsync(info, p => Dispatch(() =>
@@ -568,10 +570,11 @@ public partial class MainViewModel : ViewModelBase
                 var speed = p.SpeedBytesPerSec >= mb
                     ? $"{p.SpeedBytesPerSec / mb:0.0} MB/s"
                     : $"{p.SpeedBytesPerSec / 1024.0:0} KB/s";
-                UpdateStatusText = $"正在下载更新 {pct:0}%（{size} · {speed}）";
+                UpdateStatusText = UpdateUiPolicy.DescribeProgress((int)pct, size, speed);
                 Status = UpdateStatusText; // main status bar follows the download too
             }), _updateCts.Token).ConfigureAwait(true);
             UpdateProgress = 100;
+            CloseUpdateWindow();
             // Round-74: say whether the delta was used — the user should see the
             // saving instead of taking it on faith.
             var modeNote = string.IsNullOrEmpty(_update.LastDownloadMode) ? "" : $"（{_update.LastDownloadMode}）";
@@ -593,7 +596,26 @@ public partial class MainViewModel : ViewModelBase
                 Status = UpdateStatusText;
             }
         }
-        finally { _updateCts = null; IsCheckingUpdate = false; }
+        catch (OperationCanceledException)
+        {
+            if (!hadStagedBefore) UpdateService.CancelStagedDownload();
+            UpdateStatusText = UpdateUiPolicy.DescribeCanceled(hadStagedBefore);
+            Status = UpdateStatusText;
+            UpdateProgressIndeterminate = false;
+            ShowToast(UpdateStatusText);
+        }
+        catch (Exception ex)
+        {
+            UpdateStatusText = "更新失败: " + ex.Message;
+            Status = UpdateStatusText;
+            AddLog("[Update] 下载失败: " + ex.Message);
+        }
+        finally
+        {
+            CloseUpdateWindow();
+            _updateCts = null;
+            IsCheckingUpdate = false;
+        }
     }
 
     // ---- 网络环境自动感知：测速决定"优先哪条"，并允许用户强制单线路 ----
@@ -641,6 +663,7 @@ public partial class MainViewModel : ViewModelBase
                 OnPropertyChanged(nameof(FirstRunStep0Visible));
                 OnPropertyChanged(nameof(FirstRunStep1Visible));
                 OnPropertyChanged(nameof(FirstRunStep2Visible));
+                OnPropertyChanged(nameof(FirstRunStep3Visible));
             }
         }
     }
@@ -746,6 +769,7 @@ public partial class MainViewModel : ViewModelBase
 
     private void FinishFirstRun()
     {
+        FirstRunStep = 3;
         FirstRunWizardVisible = false;
         var cfg = LauncherConfig.Instance;
         cfg.FirstRunCompleted = true;
@@ -1210,6 +1234,7 @@ public partial class MainViewModel : ViewModelBase
     public RelayCommand OpenModrinthPageCommand { get; }
     public RelayCommand FirstRunRescanCommand { get; }
     public RelayCommand FirstRunOpenJavaSiteCommand { get; }
+    public RelayCommand FirstRunJavaNextCommand { get; }
     public RelayCommand FirstRunNextCommand { get; }
     public RelayCommand FirstRunInstallCommand { get; }
     public RelayCommand FirstRunSkipCommand { get; }

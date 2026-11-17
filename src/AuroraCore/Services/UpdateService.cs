@@ -227,6 +227,17 @@ public sealed class UpdateService
     public static string PatchPath => Path.Combine(LauncherConfig.Instance.RootDirectory, "update", "AuroraLauncher.patch");
     public static string MergedPath => Path.Combine(LauncherConfig.Instance.RootDirectory, "update", "AuroraLauncher.merged.exe");
 
+    /// <summary>Round-101: clean up after a user-cancelled download. Only the
+    /// caller knows whether a *previous* ready update existed, so it decides
+    /// when to call this — never delete someone else's staged build.</summary>
+    public static void CancelStagedDownload()
+    {
+        TryDelete(PatchPath);
+        TryDelete(MergedPath);
+        TryDelete(StagedExePath);
+        TryDelete(StagedInfoPath);
+    }
+
     public async Task DownloadStagedAsync(UpdateManifest manifest, Action<DownloadProgress>? progress, CancellationToken ct)
     {
         PathEx.EnsureDirectory(Path.GetDirectoryName(StagedExePath)!);

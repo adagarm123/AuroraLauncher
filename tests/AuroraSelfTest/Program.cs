@@ -5668,7 +5668,8 @@ internal static class Program
             var root = FindSourceRoot()!;
             string Read(string f) => File.ReadAllText(Path.Combine(root, f));
             var wizard = Read("src/AuroraLauncher.Desktop/MainWindow.xaml");
-            Assert(wizard.Contains("IsChecked=\"{Binding FirstRunPortable}\""), "引导里有便携模式勾选");
+            Assert(wizard.Contains("IsChecked=\"{Binding FirstRunUseExeDir}\"") ||
+                   wizard.Contains("IsChecked=\"{Binding FirstRunPortable}\""), "引导里有便携模式选项");
             Assert(wizard.Contains("FirstRunPortableNote"), "结果要在下一步可见");
             Assert(Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.Round99.cs")
                    .Contains("EnablePortableModeCore(\"首次启动引导\")"), "勾选后要真的创建标记");
@@ -5837,6 +5838,89 @@ internal static class Program
             Assert(code.Contains("SelectedModIds"), "补齐范围来自勾选，不能整批强装");
             Assert(vm.Contains("SetMissingFromReport(report)"), "清单要用本次扫描结果，不用过期缓存");
             Assert(vm.Contains("RunPreflightAsync(instance, ct, allowAutoFix: false)"), "补齐后重扫不能再弹同一个按钮");
+        });
+
+        // ---------------- 第 101 轮：更新可见可取消 + 引导存放选择 ----------------
+        Check("UpdateUiPolicy：下载进度文案、取消可用性与取消后的暂存说明（第 101 轮）", () =>
+        {
+            Assert(UpdateUiPolicy.DownloadTitle(101).Contains("101") &&
+                   UpdateUiPolicy.DownloadTitle(101).Contains("正在下载"), "标题要说清是哪一轮");
+            var text = UpdateUiPolicy.DescribeProgress(42, "27.5 / 65.4 MB", "3.2 MB/s");
+            Assert(text.Contains("42") && text.Contains("65.4 MB") && text.Contains("3.2 MB/s"),
+                "进度要同时给百分比、体积与速度");
+            Assert(UpdateUiPolicy.CanCancel(true, false) &&
+                   !UpdateUiPolicy.CanCancel(true, true) &&
+                   !UpdateUiPolicy.CanCancel(false, false), "只在下载进行中且未请求取消时可点");
+            Assert(UpdateUiPolicy.DescribeCanceled(false).Contains("不会安装半个文件"),
+                "取消要说明没留下半成品");
+            Assert(UpdateUiPolicy.DescribeCanceled(true).Contains("仍保留"),
+                "之前已就绪的更新不能被本次取消带走");
+            Assert(UpdateUiPolicy.ApplyStageHint.Contains("安装阶段不可取消"),
+                "换装阶段必须解释为什么不能取消");
+        });
+
+        Check("FirstRunStoragePolicy：下载前先选位置，路径与标记判定正确（第 101 轮）", () =>
+        {
+            Assert(FirstRunStoragePolicy.FromPortable(false) == FirstRunStorageChoice.AppData &&
+                   FirstRunStoragePolicy.FromPortable(true) == FirstRunStorageChoice.BesideExe,
+                "勾选状态与选择一一对应");
+            var exe = @"C:\Tools\Aurora\AuroraLauncher.exe";
+            var appData = @"C:\Users\me\AppData\Roaming\AuroraLauncher";
+            Assert(FirstRunStoragePolicy.Root(FirstRunStorageChoice.BesideExe, appData, exe)
+                       .Equals(@"C:\Tools\Aurora", StringComparison.OrdinalIgnoreCase), "便携根是 EXE 所在目录");
+            Assert(FirstRunStoragePolicy.Root(FirstRunStorageChoice.AppData, appData, exe) == appData,
+                "默认选择不动现有数据根");
+            Assert(FirstRunStoragePolicy.Describe(FirstRunStorageChoice.BesideExe, appData, exe)
+                       .Contains(@"C:\Tools\Aurora"), "要把真实路径给用户看");
+            Assert(FirstRunStoragePolicy.ShouldCreateMarker(FirstRunStorageChoice.BesideExe, false) &&
+                   !FirstRunStoragePolicy.ShouldCreateMarker(FirstRunStorageChoice.BesideExe, true) &&
+                   !FirstRunStoragePolicy.ShouldCreateMarker(FirstRunStorageChoice.AppData, false),
+                "只有显式选便携且尚未便携时才写标记");
+            Assert(FirstRunStoragePolicy.Note(true, false, exe).Contains("重启后生效"), "告知何时生效");
+            Assert(FirstRunStoragePolicy.IsDownloadStep(2) && !FirstRunStoragePolicy.IsDownloadStep(1),
+                "存放选择步骤(1)必须排在下载步骤(2)之前");
+        });
+
+        Check("Guard: 更新下载窗口必须真显示进度、可取消且不误删旧更新（第 101 轮）", () =>
+        {
+            string Read(string p) => File.ReadAllText(Path.Combine(FindSourceRoot()!, p));
+            var vm = Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.cs").Replace("\r\n", "\n");
+            var x = Read("src/AuroraLauncher.Desktop/Views/UpdateDownloadWindow.xaml");
+            var cs = Read("src/AuroraLauncher.Desktop/Views/UpdateDownloadWindow.xaml.cs");
+            Assert(x.Contains("Value=\"{Binding UpdateProgress}\"") &&
+                   x.Contains("IsIndeterminate=\"{Binding UpdateProgressIndeterminate}\"") &&
+                   x.Contains("Text=\"{Binding UpdateStatusText}\""), "三处都要绑同一进度状态");
+            Assert(x.Contains("Command=\"{Binding CancelUpdateCommand}\"") &&
+                   cs.Contains("_vm.CancelUpdate()"), "取消按钮真接令牌，不能是摆设");
+            Assert(vm.Contains("PrepareUpdateWindow(info)") && vm.Contains("CloseUpdateWindow()"),
+                "下载全过程要有窗口的打开与关闭");
+            Assert(vm.Contains("UpdateUiPolicy.DescribeProgress((int)pct, size, speed)"),
+                "窗口文案与单测共用同一策略");
+            Assert(vm.Contains("var hadStagedBefore = UpdateService.HasStagedUpdate()") &&
+                   vm.Contains("if (!hadStagedBefore) UpdateService.CancelStagedDownload()"),
+                "取消时不能删掉之前已就绪的更新包");
+            Assert(Read("src/AuroraCore/Services/UpdateService.cs").Contains("public static void CancelStagedDownload()"),
+                "清理半成品要有单一入口");
+        });
+
+        Check("Guard: 首次引导在下载前独立询问文件位置且选择真生效（第 101 轮）", () =>
+        {
+            string Read(string p) => File.ReadAllText(Path.Combine(FindSourceRoot()!, p));
+            var wiz = Read("src/AuroraLauncher.Desktop/MainWindow.xaml");
+            var vm = Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.cs").Replace("\r\n", "\n");
+            var r101 = Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.Round101.cs");
+            Assert(wiz.Contains("步骤 2 / 4 · 启动器的文件放在哪里？") &&
+                   wiz.Contains("这一步在游戏文件下载之前"), "存放选择要在下载前单独成步");
+            Assert(wiz.Contains("FirstRunUseAppData") && wiz.Contains("FirstRunUseExeDir") &&
+                   wiz.Contains("FirstRunStorageSummary"), "两个互斥选项 + 实际路径解释");
+            Assert(wiz.Contains("FirstRunJavaNextCommand") && wiz.Contains("FirstRunNextCommand"),
+                "Java 步不再顺手应用，存储步才应用");
+            Assert(vm.Contains("public RelayCommand FirstRunJavaNextCommand"), "Java 步必须有独立的下一步命令");
+            Assert(r101.Contains("FirstRunStep3Visible => FirstRunStep == 3") &&
+                   r101.Contains("GoToFirstRunStorageStep()"), "安装与完成步骤要顺延");
+            Assert(Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.Round99.cs")
+                       .Contains("FirstRunStoragePolicy.ShouldCreateMarker(choice, IsPortableMode)"),
+                "选择必须走策略判定，不能只看旧勾选");
         });
 
         Console.WriteLine($"\n=== Result: {_passed} passed, {_failed} failed, {_skipped} skipped ===");        Environment.Exit(_failed == 0 ? 0 : 1);

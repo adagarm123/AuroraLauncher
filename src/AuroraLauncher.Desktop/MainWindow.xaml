@@ -328,25 +328,40 @@
 
                         <!-- 步骤 1/3：Java 环境 -->
                         <StackPanel Visibility="{Binding FirstRunStep0Visible, Converter={StaticResource BoolToVis}}">
-                            <TextBlock Text="步骤 1 / 3 · 检查 Java 环境" FontWeight="SemiBold" FontSize="15" Margin="0,0,0,10"/>
+                            <TextBlock Text="步骤 1 / 4 · 检查 Java 环境" FontWeight="SemiBold" FontSize="15" Margin="0,0,0,10"/>
                             <TextBlock Text="{Binding FirstRunJavaStatus}" TextWrapping="Wrap" FontSize="13"
                                        Foreground="{DynamicResource TextMutedBrush}" Margin="0,0,0,14"/>
-                            <CheckBox Content="把所有文件都存到启动器 EXE 所在目录（便携模式，适合 U 盘 / 移动硬盘）"
-                                      IsChecked="{Binding FirstRunPortable}" Margin="0,0,0,8" FontWeight="SemiBold"/>
-                            <TextBlock Text="{Binding FirstRunPortableHint}" TextWrapping="Wrap" FontSize="12"
-                                       Foreground="{DynamicResource TextMutedBrush}" Margin="0,0,0,12"/>
                             <StackPanel Orientation="Horizontal">
                                 <Button Content="重新检测" Command="{Binding FirstRunRescanCommand}" Padding="14,6" Margin="0,0,10,0"/>
                                 <Button Content="打开 Java 下载页（Adoptium）" Command="{Binding FirstRunOpenJavaSiteCommand}" Padding="14,6"
                                         Style="{StaticResource GhostButton}"/>
-                                <Button Content="下一步" Command="{Binding FirstRunNextCommand}" Padding="18,6"
+                                <Button Content="下一步" Command="{Binding FirstRunJavaNextCommand}" Padding="18,6"
                                         Style="{StaticResource PrimaryButton}" HorizontalAlignment="Right" Margin="10,0,0,0"/>
                             </StackPanel>
                         </StackPanel>
 
-                        <!-- 步骤 2/3：推荐版本一键安装 -->
+                        <!-- 步骤 2/4（第 101 轮）：下载任何文件之前，先决定文件放哪儿 -->
                         <StackPanel Visibility="{Binding FirstRunStep1Visible, Converter={StaticResource BoolToVis}}">
-                            <TextBlock Text="步骤 2 / 3 · 安装推荐版本" FontWeight="SemiBold" FontSize="15" Margin="0,0,0,10"/>
+                            <TextBlock Text="步骤 2 / 4 · 启动器的文件放在哪里？" FontWeight="SemiBold" FontSize="15" Margin="0,0,0,10"/>
+                            <TextBlock Text="这一步在游戏文件下载之前。选定后会在进入下一步时生效；以后仍可在「设置 → 存储」里更改。"
+                                       TextWrapping="Wrap" FontSize="12.5" Foreground="{DynamicResource TextMutedBrush}" Margin="0,0,0,12"/>
+                            <RadioButton GroupName="FirstRunStorage" Content="系统默认位置（推荐）"
+                                         IsChecked="{Binding FirstRunUseAppData}" Margin="0,0,0,6" FontWeight="SemiBold"/>
+                            <RadioButton GroupName="FirstRunStorage" Content="全部放在启动器 EXE 所在目录（便携模式）"
+                                         IsChecked="{Binding FirstRunUseExeDir}" Margin="0,0,0,8" FontWeight="SemiBold"/>
+                            <TextBlock Text="{Binding FirstRunStorageSummary}" TextWrapping="Wrap" FontSize="11.5"
+                                       Foreground="{DynamicResource TextMutedBrush}" Margin="18,0,0,6"/>
+                            <TextBlock Text="{Binding FirstRunPortableHint}" TextWrapping="Wrap" FontSize="11"
+                                       Foreground="{DynamicResource TextMutedBrush}" Margin="18,0,0,10"/>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button Content="下一步：安装游戏" Command="{Binding FirstRunNextCommand}" Padding="18,6"
+                                        Style="{StaticResource PrimaryButton}"/>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- 步骤 3/4：推荐版本一键安装 -->
+                        <StackPanel Visibility="{Binding FirstRunStep2Visible, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="步骤 3 / 4 · 安装推荐版本" FontWeight="SemiBold" FontSize="15" Margin="0,0,0,10"/>
                             <TextBlock Text="{Binding FirstRunRecommendation}" TextWrapping="Wrap" FontSize="13"
                                        Foreground="{DynamicResource TextMutedBrush}" Margin="0,0,0,14"/>
                             <TextBlock Text="{Binding FirstRunProgress}" TextWrapping="Wrap" FontSize="12.5"
@@ -363,8 +378,8 @@
                             </StackPanel>
                         </StackPanel>
 
-                        <!-- 步骤 3/3：完成 -->
-                        <StackPanel Visibility="{Binding FirstRunStep2Visible, Converter={StaticResource BoolToVis}}">
+                        <!-- 步骤 4/4：完成 -->
+                        <StackPanel Visibility="{Binding FirstRunStep3Visible, Converter={StaticResource BoolToVis}}">
                             <TextBlock Text="就绪！" FontWeight="SemiBold" FontSize="15" Margin="0,0,0,10"/>
                             <TextBlock Text="推荐版本已安装完成。选择实例后点击「启动游戏」即可游玩；更多版本与 Mod 请到「游戏下载」「内容中心」。"
                                        TextWrapping="Wrap" FontSize="13" Foreground="{DynamicResource TextMutedBrush}" Margin="0,0,0,14"/>
