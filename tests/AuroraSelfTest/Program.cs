@@ -6017,6 +6017,60 @@ internal static class Program
                 "只动当前用户，绝不写 HKLM");
         });
 
+        // ---------------- 第 103 轮：启动可见反馈 + 恢复下载换线路 ----------------
+        Check("LauncherConfig：退役镜像域名与 client jar 路径都能反解回官方（第 103 轮）", () =>
+        {
+            var legacy = "https://bmclapi.bangbang93.com/v1/packages/0123456789abcdef/26.1.2.jar";
+            var official = LauncherConfig.ToOfficialUrl(legacy);
+            Assert(official == "https://piston-data.mojang.com/v1/packages/0123456789abcdef/26.1.2.jar",
+                "旧域名 + v1/packages 必须可反解，否则恢复下载永远没有备用线路：" + official);
+            var current = "https://bmclapi2.bangbang93.com/v1/packages/abc/1.21.10.jar";
+            Assert(LauncherConfig.ToOfficialUrl(current) == "https://piston-data.mojang.com/v1/packages/abc/1.21.10.jar",
+                "当前镜像域名的 client jar 也要能回官方");
+            Assert(LauncherConfig.ToOfficialUrl("https://piston-data.mojang.com/v1/packages/a/b.jar")
+                       .StartsWith("https://piston-data.mojang.com"), "官方 URL 原样返回");
+            Assert(LauncherConfig.ToOfficialUrl("https://bmclapi.bangbang93.com/maven/unknown/x.jar")
+                       .Contains("bmclapi"), "无法判定的 maven 路径不猜测");
+            Assert(LauncherConfig.ToOfficialUrl("https://bmclapi.bangbang93.com/maven/net/fabricmc/fabric-loader/0.1/x.jar")
+                       .StartsWith("https://maven.fabricmc.net/"), "可判定的 maven 组路径仍要反解");
+        });
+
+        Check("ResumeDownloadPolicy：恢复下载先把旧域名归一，再按当前线路选择（第 103 轮）", () =>
+        {
+            var legacy = "https://bmclapi.bangbang93.com/v1/packages/hash/26.1.2.jar";
+            Assert(ResumeDownloadPolicy.UsesLegacyMirror(legacy) &&
+                   !ResumeDownloadPolicy.UsesLegacyMirror("https://piston-data.mojang.com/v1/packages/hash/26.1.2.jar"),
+                "要能识别清单里的退役域名");
+            var official = ResumeDownloadPolicy.ChooseUrl(legacy, DownloadPolicy.Official, false);
+            Assert(official.StartsWith("https://piston-data.mojang.com"), "强制官方时归一到官方");
+            var mirror = ResumeDownloadPolicy.ChooseUrl(legacy, DownloadPolicy.Mirror, false);
+            Assert(mirror.StartsWith("https://bmclapi2.bangbang93.com") && !mirror.Contains("bmclapi.bangbang93.com/"),
+                "强制镜像时用当前域名，不再沿用退役域名：" + mirror);
+            var auto = ResumeDownloadPolicy.ChooseUrl(legacy, DownloadPolicy.Auto, false);
+            Assert(auto.StartsWith("https://piston-data.mojang.com"), "自动模式默认官方并保留引擎换线路能力");
+            Assert(DownloadEngine.AlternateRouteUrl(legacy) != null,
+                "引擎对旧域名也必须能给出另一条线路");
+        });
+
+        Check("Guard: 启动被拦截必须可见，未登录也要补齐缺文件（第 103 轮）", () =>
+        {
+            string Read(string p) => File.ReadAllText(Path.Combine(FindSourceRoot()!, p));
+            var vm = Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.cs").Replace("\r\n", "\n");
+            var policy = Read("src/AuroraCore/Services/LaunchGuardPolicy.cs").Replace("\r\n", "\n");
+            Assert(policy.Contains("Block.NoAccount") && policy.Contains("请先选择/添加账户"),
+                "账户仍是启动前置条件");
+            Assert(vm.Contains("if (block == LaunchGuardPolicy.Block.NoInstances)") &&
+                   vm.Contains("ShowToast(\"还没有实例：已打开"), "没有实例要有可见提示");
+            Assert(vm.Contains("ShowToast(message + \"（输入框可直接添加离线账户）\")"),
+                "未登录不能只改一行状态栏");
+            Assert(vm.Contains("if (!IsBusy && pendingInstance != null)") &&
+                   vm.Contains("_svc.NeedsRepair(pendingInstance)") &&
+                   vm.Contains("RunRepairJobAsync(pendingInstance)"),
+                "未登录但缺文件时仍触发补齐，兑现首页提示");
+            Assert(vm.Contains("ResumeDownloadPolicy.ChooseUrl(p.Url, routePolicy, preferMirror)"),
+                "恢复下载必须走归一策略");
+        });
+
         Console.WriteLine($"\n=== Result: {_passed} passed, {_failed} failed, {_skipped} skipped ===");        Environment.Exit(_failed == 0 ? 0 : 1);
     }
 }

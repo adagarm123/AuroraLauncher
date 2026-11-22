@@ -218,53 +218,64 @@ public sealed class LauncherConfig
     {
         if (string.IsNullOrEmpty(url)) return url;
         if (!url.Contains("bmclapi", StringComparison.OrdinalIgnoreCase)) return url;
-        foreach (var host in new[] { "https://bmclapi2.bangbang93.com", "https://bmclapi.cn" })
+        foreach (var host in MirrorHostsForReverseMapping)
         {
             if (!url.StartsWith(host, StringComparison.OrdinalIgnoreCase)) continue;
-            var rest = url[host.Length..];
-            if (rest.StartsWith("/mc/", StringComparison.OrdinalIgnoreCase))
-                return "https://piston-meta.mojang.com" + rest;
-            if (rest.StartsWith("/assets/", StringComparison.OrdinalIgnoreCase))
-                return "https://resources.download.minecraft.net" + rest["/assets".Length..];
-            if (rest.StartsWith("/fabric-meta/", StringComparison.OrdinalIgnoreCase))
-                return "https://meta.fabricmc.net" + rest["/fabric-meta".Length..];
-            if (rest.StartsWith("/quilt-meta/", StringComparison.OrdinalIgnoreCase))
-                return "https://meta.quiltmc.org" + rest["/quilt-meta".Length..];
-
-            // Round-86: a bare "/maven/…" is ambiguous, but the GROUP PATH tells
-            // us the upstream — that is not a guess. Without this, a 404 from the
-            // mirror on a Forge/NeoForge/Fabric maven file could not be retried
-            // against the official host (the round-85 cross-route switch needs a
-            // reversible URL), which is exactly the installer 404 in the report.
-            if (rest.StartsWith("/maven/", StringComparison.OrdinalIgnoreCase))
-            {
-                // The repository segment ("releases/", "repository/release/")
-                // survives the mirror rewrite, so strip it before looking at the
-                // group id and put it back afterwards.
-                var path = rest["/maven/".Length..];
-                var repoPrefix = "";
-                foreach (var candidate in new[] { "repository/release/", "repository/releases/", "releases/" })
-                {
-                    if (!path.StartsWith(candidate, StringComparison.OrdinalIgnoreCase)) continue;
-                    repoPrefix = path[..candidate.Length];
-                    path = path[candidate.Length..];
-                    break;
-                }
-
-                string? upstream = null;
-                if (path.StartsWith("net/minecraftforge/", StringComparison.OrdinalIgnoreCase))
-                    upstream = "https://maven.minecraftforge.net/";
-                else if (path.StartsWith("net/neoforged/", StringComparison.OrdinalIgnoreCase))
-                    upstream = "https://maven.neoforged.net/";
-                else if (path.StartsWith("net/fabricmc/", StringComparison.OrdinalIgnoreCase))
-                    upstream = "https://maven.fabricmc.net/";
-                else if (path.StartsWith("org/quiltmc/", StringComparison.OrdinalIgnoreCase))
-                    upstream = "https://maven.quiltmc.org/";
-
-                if (upstream != null) return upstream + repoPrefix + path;
-            }
+            var mapped = MapMirrorPathToOfficial(url[host.Length..]);
+            if (mapped != null) return mapped;
         }
-        return url; // ambiguous (/maven, /v1/packages) — do not guess
+        return url; // truly ambiguous — do not guess
+    }
+
+    /// <summary>All mirror domains we have ever produced or accepted. The old
+    /// <c>bmclapi.bangbang93.com</c> host is still sitting in download journals
+    /// of older installs (the round-103 screenshot); without it here, a failed
+    /// resume had no alternate route and "retry" failed forever.</summary>
+    public static readonly string[] MirrorHostsForReverseMapping =
+    {
+        "https://bmclapi2.bangbang93.com", "https://bmclapi.cn", "https://bmclapi.bangbang93.com"
+    };
+
+    private static string? MapMirrorPathToOfficial(string rest)
+    {
+        // Round-103: client jars are NOT ambiguous — /v1/packages/<hash>/<file>
+        // always maps to Mojang's piston-data host. Leaving it unmapped was why
+        // a stalled 26.1.2.jar could never fall back to the official route.
+        if (rest.StartsWith("/v1/packages/", StringComparison.OrdinalIgnoreCase))
+            return "https://piston-data.mojang.com" + rest;
+        if (rest.StartsWith("/mc/", StringComparison.OrdinalIgnoreCase))
+            return "https://piston-meta.mojang.com" + rest;
+        if (rest.StartsWith("/assets/", StringComparison.OrdinalIgnoreCase))
+            return "https://resources.download.minecraft.net" + rest["/assets".Length..];
+        if (rest.StartsWith("/fabric-meta/", StringComparison.OrdinalIgnoreCase))
+            return "https://meta.fabricmc.net" + rest["/fabric-meta".Length..];
+        if (rest.StartsWith("/quilt-meta/", StringComparison.OrdinalIgnoreCase))
+            return "https://meta.quiltmc.org" + rest["/quilt-meta".Length..];
+
+        // Round-86: a bare "/maven/…" is ambiguous, but the GROUP PATH tells
+        // us the upstream — that is not a guess.
+        if (rest.StartsWith("/maven/", StringComparison.OrdinalIgnoreCase))
+        {
+            var path = rest["/maven/".Length..];
+            var repoPrefix = "";
+            foreach (var candidate in new[] { "repository/release/", "repository/releases/", "releases/" })
+            {
+                if (!path.StartsWith(candidate, StringComparison.OrdinalIgnoreCase)) continue;
+                repoPrefix = path[..candidate.Length];
+                path = path[candidate.Length..];
+                break;
+            }
+
+            if (path.StartsWith("net/minecraftforge/", StringComparison.OrdinalIgnoreCase))
+                return "https://maven.minecraftforge.net/" + repoPrefix + path;
+            if (path.StartsWith("net/neoforged/", StringComparison.OrdinalIgnoreCase))
+                return "https://maven.neoforged.net/" + repoPrefix + path;
+            if (path.StartsWith("net/fabricmc/", StringComparison.OrdinalIgnoreCase))
+                return "https://maven.fabricmc.net/" + repoPrefix + path;
+            if (path.StartsWith("org/quiltmc/", StringComparison.OrdinalIgnoreCase))
+                return "https://maven.quiltmc.org/" + repoPrefix + path;
+        }
+        return null;
     }
 
     public string RewriteUrl(string url)
@@ -284,6 +295,8 @@ public sealed class LauncherConfig
     /// <see cref="ToOfficialUrl"/> and healed by <see cref="HealLegacyMirrorHost"/>,
     /// but it must never be PRODUCED again.</summary>
     public const string LegacyMirrorHost = "bmclapi.cn";
+    /// <summary>Round-103: another old domain found in real download journals.</summary>
+    public const string LegacyMirrorHost2 = "bmclapi.bangbang93.com";
     public const string MirrorHost = "bmclapi2.bangbang93.com";
 
     /// <summary>Replaces the dead mirror domain in every persisted string field.
@@ -302,8 +315,12 @@ public sealed class LauncherConfig
             {
                 var value = (string?)prop.GetValue(cfg);
                 if (string.IsNullOrEmpty(value)) continue;
-                if (!value.Contains(LegacyMirrorHost, StringComparison.OrdinalIgnoreCase)) continue;
-                prop.SetValue(cfg, value.Replace(LegacyMirrorHost, MirrorHost, StringComparison.OrdinalIgnoreCase));
+                if (!value.Contains(LegacyMirrorHost, StringComparison.OrdinalIgnoreCase) &&
+                    !value.Contains(LegacyMirrorHost2, StringComparison.OrdinalIgnoreCase)) continue;
+                var healed = value
+                    .Replace(LegacyMirrorHost2, MirrorHost, StringComparison.OrdinalIgnoreCase)
+                    .Replace(LegacyMirrorHost, MirrorHost, StringComparison.OrdinalIgnoreCase);
+                prop.SetValue(cfg, healed);
                 changed = true;
             }
             catch { /* a read-only or throwing property must not break startup */ }

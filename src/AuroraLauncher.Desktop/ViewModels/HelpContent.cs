@@ -18,12 +18,20 @@ public static class HelpContent
     /// <summary>Round number of the newest entry in <see cref="Changelog"/> —
     /// bump together with the changelog entry; drives the one-time "已更新"
     /// startup toast (dismissed permanently once the user opens the page).</summary>
-    public const int LatestChangelogRound = 102;
+    public const int LatestChangelogRound = 103;
     /// <summary>更新日志（说人话版本：无技术名词、用户视角）——独立页面
     /// 「更新日志」使用；模板见 docs/release-notes-template.md。
     /// 每轮发布时在此置顶新增一条。</summary>
     public static IEnumerable<HelpTopicVM> Changelog() => new[]
     {
+        new HelpTopicVM
+        {
+            Category = "更新日志", Glyph = "\uE777", Title = "【第 103 轮更新】启动被拦截会明确提示，下载重试不再卡在旧镜像",
+            Summary = "未登录也能先补齐文件；退役镜像地址会被纠正",
+            Body = "1) 点「启动游戏」没反应，是因为当前没有账户，启动被拦住了，但旧版本只把原因写在一行状态文字里——正好被上面的红色下载失败横幅挡住。现在无实例、未选实例、未登录三种情况都会弹出可见提示。未登录时也会照常检查游戏文件：缺文件就先把补齐任务跑起来，下载完再添加账户启动；首页那句「未安装所选实例时会自动触发下载安装」终于说到做到。\n\n" +
+                   "2) 下载管理里「继续未完成的下载」反复失败，是因为老版本把下载地址记成了一个已经退役的 BMCLAPI 域名（bmclapi.bangbang93.com）。引擎本来会自动换线路，却认不出这个旧域名，也无法把 26.1.2.jar 这种 client jar 地址映射回官方，于是每次重试都在同一个死地址上撞墙。\n\n" +
+                   "现在旧域名会被识别并纠正，client jar 的 /v1/packages 路径能正确回到官方源；恢复下载会先把记录里的旧地址归一，再按你当前设置的下载线路重新选择。点「重试」即可从已经下载的 25.9 MB 继续，不用从头再来。"
+        },
         new HelpTopicVM
         {
             Category = "更新日志", Glyph = "\uE777", Title = "【第 102 轮更新】卸载后本体立即删除，注册表残留也一起清",

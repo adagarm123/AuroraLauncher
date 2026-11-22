@@ -1422,9 +1422,14 @@ public partial class MainViewModel : ViewModelBase
         {
             job = await BeginJobAsync("恢复", $"继续未完成的下载（{pending.Count} 个文件）", "");
             job.SetStageText($"继续下载：{pending[0].FileName}" + (pending.Count > 1 ? $" 等 {pending.Count} 个文件" : ""));
+            // Round-103: journals from older builds still point at retired
+            // mirror hosts. Retrying that URL verbatim never succeeds — map it
+            // back to official first, then apply the user's CURRENT route.
+            var routePolicy = LauncherConfig.Instance.RoutePolicy;
+            var preferMirror = NetworkProbe.Preference == RoutePreference.Mirror;
             var entries = pending.Select(p => new DownloadEntry
             {
-                Url = p.Url,
+                Url = ResumeDownloadPolicy.ChooseUrl(p.Url, routePolicy, preferMirror),
                 Destination = p.Destination,
                 ExpectedSha1 = p.ExpectedSha1,
                 ExpectedSize = p.ExpectedSize > 0 ? p.ExpectedSize : null,
@@ -3064,7 +3069,39 @@ public partial class MainViewModel : ViewModelBase
             Status = message;
             AddLog($"[Launch] 拦截（{block}）：{message}");
             if (page != null) Navigate(page);
-            if (block == LaunchGuardPolicy.Block.NoInstances) ShowToast("还没有实例：先选一个游戏版本安装");
+
+            // Round-103: a status-bar line under a red download banner is
+            // effectively invisible. Every blocked launch now speaks up.
+            if (block == LaunchGuardPolicy.Block.NoInstances)
+            {
+                ShowToast("还没有实例：已打开「游戏下载」，选一个版本即可一键安装");
+                return;
+            }
+            if (block == LaunchGuardPolicy.Block.NoSelection)
+            {
+                ShowToast(message);
+                return;
+            }
+
+            // No account: still do the useful part. The user's files may be
+            // incomplete, and "未安装所选实例时会自动触发下载安装" is a promise
+            // we made on the home card — it must not depend on being logged in.
+            ShowToast(message + "（输入框可直接添加离线账户）");
+            var pendingInstance = SelectedInstance;
+            if (!IsBusy && pendingInstance != null)
+            {
+                try
+                {
+                    var pendingMissing = _svc.DescribeMissing(pendingInstance);
+                    if (_svc.NeedsRepair(pendingInstance))
+                    {
+                        AddLog("[Repair] 未登录但文件不全，先触发补齐：" + pendingMissing);
+                        ShowToast("缺少游戏文件，正在自动补齐；完成后添加账户即可启动");
+                        await RunRepairJobAsync(pendingInstance).ConfigureAwait(true);
+                    }
+                }
+                catch (Exception ex) { AddLog("[Repair] 拦截阶段补齐失败: " + ex.Message); }
+            }
             return;
         }
         if (IsBusy) { Status = "有任务正在进行中，请等待完成或取消后再试"; return; }

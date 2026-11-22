@@ -30,3 +30,4 @@
 | [ADR-0022](ADR-0022-missing-dependency-auto-fix.md) | 缺失前置一键补齐（精确匹配、四道版本门、无校验值不下载、重扫才算装好、逐项降级） | 已采纳（含防线测试） |
 | [ADR-0023](ADR-0023-update-progress-and-first-run-storage.md) | 更新进度可见可取消 + 首次引导下载前选择文件位置（同源进度、真取消令牌、旧暂存保护、四步引导） | 已采纳（含防线测试） |
 | [ADR-0024](ADR-0024-uninstall-no-residue.md) | 卸载残留根治（临时清理进程立即删 EXE、路径二次校验、HKCU 注册表白名单、诚实回退） | 已采纳（含防线测试） |
+| [ADR-0025](ADR-0025-launch-feedback-and-resume-routes.md) | 启动拦截可见性 + 恢复下载线路归一（未登录也补齐、旧 BMCLAPI 域名可反解、client jar 路径映射） | 已采纳（含防线测试） |
