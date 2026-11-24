@@ -90,6 +90,17 @@
                 <TextBlock Text="下载管理" Style="{StaticResource PageTitle}"/>
                 <TextBlock Text="同时查看并管理不同实例、整合包、模组与修复任务；每个任务独立进度、独立取消。"
                            Style="{StaticResource PageSubtitle}"/>
+                <!-- Round-104: Java 与启动器更新也是下载，入口收拢到这里 -->
+                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                    <Button Content="下载 Java 21" Command="{Binding InstallJava21Command}"
+                            Padding="14,6" Margin="0,0,8,0" ToolTip="从 Temurin / Azul 官方源下载并安装 Java 21，进下载管理队列"/>
+                    <Button Content="检查启动器更新" Command="{Binding CheckUpdateCommand}"
+                            Padding="14,6" Margin="0,0,8,0" ToolTip="检查新版本；下载过程会显示进度并可取消"/>
+                    <Button Content="立即应用已下载更新" Command="{Binding RestartToApplyCommand}"
+                            Padding="14,6" Style="{StaticResource PrimaryButton}"
+                            Visibility="{Binding StagedUpdateReady, Converter={StaticResource BoolToVis}}"
+                            ToolTip="新版本已下载完成，重启后显示安装进度窗口"/>
+                </StackPanel>
             </StackPanel>
 
             <StackPanel Grid.Row="1">

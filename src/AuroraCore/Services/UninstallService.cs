@@ -153,7 +153,16 @@ public static class UninstallService
     public static async Task RunCleanupHelperAsync(string manifestPath)
     {
         var manifest = UninstallCleanupManifest.Load(manifestPath);
-        if (manifest == null) { TryScheduleSelfDelete(Environment.ProcessPath); return; }
+        if (manifest == null || !UninstallCleanupArgs.IsPlausibleExePath(manifest.ExePath) ||
+            !UninstallCleanupArgs.IsPlausibleHelperPath(manifest.HelperPath) ||
+            !CacheFolderPolicy.IsSafeRoot(manifest.Root))
+        {
+            // A malformed / tampered manifest must never turn the helper into
+            // an arbitrary file deleter. Only drop the trusted copy itself.
+            Logger.Instance.Warn("Uninstall", "清理清单未通过校验，拒绝删除任何文件: " + manifestPath);
+            TryScheduleSelfDelete(Environment.ProcessPath);
+            return;
+        }
 
         try
         {

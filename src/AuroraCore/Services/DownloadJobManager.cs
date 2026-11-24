@@ -22,6 +22,19 @@ public static class JobProgressPolicy
         return (int)Math.Round(Math.Clamp(value, 0, 1) * 100, MidpointRounding.AwayFromZero);
     }
 
+    /// <summary>Round-104: real progress of a download batch. The engine
+    /// accumulates bytes LIVE across all files; CompletedFiles only flips when
+    /// a whole file lands. With one file, the old file-count fraction stayed at
+    /// 0% until the very last byte, which looked like a hung download.</summary>
+    public static double FractionFor(int totalFiles, int completedFiles, long totalBytes, long downloadedBytes)
+    {
+        if (totalBytes > 0)
+            return Math.Clamp((double)downloadedBytes / totalBytes, 0, 1);
+        if (totalFiles > 0)
+            return Math.Clamp((double)completedFiles / totalFiles, 0, 1);
+        return 0;
+    }
+
     /// <summary>Aggregate across jobs.
     ///
     /// Percent: average of the jobs that are still interesting (queued, running
@@ -34,6 +47,7 @@ public static class JobProgressPolicy
     {
         var percentSum = 0;
         var counted = 0;
+        var completedOnly = 0;
         var speed = 0.0;
         var active = 0;
         var queued = 0;
@@ -67,19 +81,25 @@ public static class JobProgressPolicy
                     percentSum += j.Percent;
                     counted++;
                     break;
-                default: // Done / Failed
-                    percentSum += j.Percent;
-                    counted++;
+                // Round-104: finished rows are history. They must not pull the
+                // average of a NEW active job up to 52% when only one of two
+                // things is actually downloading.
+                case JobState.Done:
+                    completedOnly++;
+                    break;
+                default:
                     break;
             }
         }
-        var percent = counted == 0 ? 0 : (int)Math.Round((double)percentSum / counted);
+        // No jobs at all => 0%, never 100% (Display(0, finished:true) used to
+        // produce a full bar above "当前没有下载任务").
+        if (counted == 0)
+            return (completedOnly > 0 && !hasFailed ? 100 : 0, speed, active, queued);
+
+        var percent = (int)Math.Round((double)percentSum / counted, MidpointRounding.AwayFromZero);
         // Round-97: a live job (running OR preparing OR queued) can never make
         // the summary read 100 %, even if every stage is technically "past".
-        var anyPending = active > 0 || queued > 0;
-        // Any failed row in this session keeps the summary out of "complete"
-        // territory; the UI also paints it red via HasFailedJobs.
-        return (ProgressDisplayPolicy.Display(Math.Clamp(percent, 0, 100), !anyPending && !hasFailed),
+        return (ProgressDisplayPolicy.Display(Math.Clamp(percent, 0, 100), false),
                 speed, active, queued);
     }
 
@@ -183,6 +203,7 @@ public sealed class DownloadJobManager
         }
         // Round-96: repair jobs stay visibly 准备中 until their first real
         // stage arrives, instead of flipping to 下载中 with an empty list.
+        job.SlotHeld = true;
         if (markRunning) job.MarkRunning();
         Version++;
     }
@@ -190,32 +211,34 @@ public sealed class DownloadJobManager
     /// <summary>Called exactly once per started job (success, failure or cancel).</summary>
     public void Finish(DownloadJob job, Exception? error = null, bool canceled = false, string? message = null)
     {
-        // Round-96: a keepPreparing job also occupies a slot, so it must be
-        // released here too (the try/catch around Release tolerates the case
-        // where a job was finished before it ever took a slot).
-        var wasStarted = !job.IsFinished && job.State is JobState.Running or JobState.Preparing;
         if (canceled) job.MarkCanceled();
         else if (error != null) job.MarkFailed(Humanize(error));
         else job.MarkDone(message);
 
-        if (wasStarted)
-        {
-            try { _slots.Release(); } catch { }
-        }
+        ReleaseSlot(job);
         Version++;
+    }
+
+    /// <summary>Round-104: ONE idempotent release path for every exit. The
+    /// watchdog may have already failed the job, or the user may have cancelled
+    /// it while Preparing — neither may leak a slot.</summary>
+    public void ReleaseSlot(DownloadJob job)
+    {
+        lock (_gate)
+        {
+            if (!job.SlotHeld) return;
+            job.SlotHeld = false;
+            try { _slots.Release(); } catch { /* never took a slot */ }
+        }
     }
 
     /// <summary>Marks the job cancelled immediately (the UI must react on click,
     /// not when the engine's exception reaches the flow) and frees its slot.</summary>
     public void Cancel(DownloadJob job)
     {
-        var wasRunning = job.State == JobState.Running;
         job.Cancel();
         if (!job.IsFinished) job.MarkCanceled();
-        if (wasRunning)
-        {
-            try { _slots.Release(); } catch { }
-        }
+        ReleaseSlot(job);
         Version++;
     }
 

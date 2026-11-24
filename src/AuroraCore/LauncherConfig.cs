@@ -12,7 +12,13 @@ namespace AuroraCore;
 public sealed class LauncherConfig
 {
     private static LauncherConfig? _instance;
-    public static LauncherConfig Instance => _instance ??= Load();
+    private static readonly object InstanceGate = new();
+    /// <summary>Round-104: Load() creates directories and writes config.json.
+    /// A lazy race at startup could run it twice and clobber settings.</summary>
+    public static LauncherConfig Instance
+    {
+        get { lock (InstanceGate) return _instance ??= Load(); }
+    }
 
     public string RootDirectory { get; set; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AuroraLauncher");
@@ -386,7 +392,14 @@ public sealed class LauncherConfig
 
         EnsureDirectories();
         var path = string.IsNullOrEmpty(ConfigPath) ? Path.Combine(RootDirectory, "config.json") : ConfigPath;
-        File.WriteAllText(path, JsonHelper.SerializeIndented(this));
+        // Round-104: a killed write used to leave an empty config.json and the
+        // next launch fell back to defaults ("设置全没了"). Write-then-atomic-
+        // move, keeping the previous copy as a recoverable backup.
+        var backup = path + ".bak-last";
+        var temp = path + ".tmp";
+        try { if (File.Exists(path)) File.Copy(path, backup, overwrite: true); } catch { }
+        File.WriteAllText(temp, JsonHelper.SerializeIndented(this));
+        File.Move(temp, path, overwrite: true);
         HttpClientFactory.Instance.ConfigureProxy(ProxyUrl);
     }
 

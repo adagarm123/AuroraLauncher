@@ -227,6 +227,19 @@ public sealed class UpdateService
     public static string PatchPath => Path.Combine(LauncherConfig.Instance.RootDirectory, "update", "AuroraLauncher.patch");
     public static string MergedPath => Path.Combine(LauncherConfig.Instance.RootDirectory, "update", "AuroraLauncher.merged.exe");
 
+    /// <summary>Round-104: build the next update into a temp file and only
+    /// replace the previously verified staged EXE after the new one passes its
+    /// SHA-256 check. Otherwise a failed download destroys a ready update.</summary>
+    public static string StagingTempPath => Path.Combine(LauncherConfig.Instance.RootDirectory,
+        "update", "AuroraLauncher.staging.exe");
+
+    private static void CommitStaged()
+    {
+        if (!File.Exists(StagingTempPath)) return;
+        TryDelete(StagedExePath);
+        File.Move(StagingTempPath, StagedExePath, overwrite: true);
+    }
+
     /// <summary>Round-101: clean up after a user-cancelled download. Only the
     /// caller knows whether a *previous* ready update existed, so it decides
     /// when to call this — never delete someone else's staged build.</summary>
@@ -234,8 +247,18 @@ public sealed class UpdateService
     {
         TryDelete(PatchPath);
         TryDelete(MergedPath);
+        TryDelete(StagingTempPath);
         TryDelete(StagedExePath);
         TryDelete(StagedInfoPath);
+    }
+
+    /// <summary>Round-104: cancellation must not destroy an update that was
+    /// already verified and ready before this attempt started.</summary>
+    public static void CancelStagingOnly()
+    {
+        TryDelete(PatchPath);
+        TryDelete(MergedPath);
+        TryDelete(StagingTempPath);
     }
 
     public async Task DownloadStagedAsync(UpdateManifest manifest, Action<DownloadProgress>? progress, CancellationToken ct)
@@ -247,6 +270,7 @@ public sealed class UpdateService
         if (ShouldUsePatch(manifest, BuildInfo.CurrentRound) &&
             await TryDownloadAndApplyPatchAsync(manifest, progress, ct).ConfigureAwait(false))
         {
+            CommitStaged();
             WriteStagedInfo(manifest);
             return;
         }
@@ -257,21 +281,22 @@ public sealed class UpdateService
             new DownloadEntry
             {
                 Url = manifest.Url,
-                Destination = StagedExePath,
+                Destination = StagingTempPath,
                 ExpectedSize = manifest.Size,
                 Required = true,
                 DisplayName = "启动器更新包"
             }
         }, progress, ct).ConfigureAwait(false);
 
-        var actual = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(StagedExePath, ct).ConfigureAwait(false)));
+        var actual = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(StagingTempPath, ct).ConfigureAwait(false)));
         if (!string.IsNullOrWhiteSpace(manifest.Sha256) &&
             !string.Equals(actual, manifest.Sha256.Trim().Replace("-", ""), StringComparison.OrdinalIgnoreCase))
         {
-            TryDelete(StagedExePath);
-            throw new IOException("更新包校验失败（SHA-256 不匹配），已删除下载文件。");
+            TryDelete(StagingTempPath);
+            throw new IOException("更新包校验失败（SHA-256 不匹配），已删除本次下载文件。");
         }
 
+        CommitStaged();
         WriteStagedInfo(manifest);
     }
 
@@ -318,8 +343,7 @@ public sealed class UpdateService
                 if (!string.IsNullOrWhiteSpace(manifest.Sha256) &&
                     !string.Equals(mergedHash, manifest.Sha256.Trim().Replace("-", ""), StringComparison.OrdinalIgnoreCase))
                     throw new IOException("合并结果与清单 SHA-256 不一致（补丁与当前版本不匹配）。");
-                TryDelete(StagedExePath);
-                File.Move(mergedPath, StagedExePath, overwrite: true);
+                File.Move(mergedPath, StagingTempPath, overwrite: true);
             }, ct).ConfigureAwait(false);
 
             LastDownloadMode = $"增量更新（补丁 {FormatMb(manifest.PatchSize)}，比完整包 {FormatMb(manifest.Size)} 少下 " +

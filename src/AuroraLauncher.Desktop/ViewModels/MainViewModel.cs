@@ -441,6 +441,10 @@ public partial class MainViewModel : ViewModelBase
     {
         var mode = LauncherConfig.Instance.UpdateMode;
         if (!UpdatePolicy.ShouldCheckOnStartup(mode)) return;
+        // Round-104: without this gate the startup auto-download and the
+        // user's manual "一键更新" can write the same staged EXE concurrently.
+        if (IsCheckingUpdate) return;
+        IsCheckingUpdate = true;
         try
         {
             // Let the main window finish loading (and the first-run wizard
@@ -468,6 +472,7 @@ public partial class MainViewModel : ViewModelBase
         {
             AddLog("[Update] 启动检查失败（不影响使用）: " + ex.Message);
         }
+        finally { IsCheckingUpdate = false; }
     }
 
     /// <summary>Shows the startup reminder. Returns true ONLY when the user
@@ -556,8 +561,13 @@ public partial class MainViewModel : ViewModelBase
         _updateCts = new CancellationTokenSource();
         IsCheckingUpdate = true;
         PrepareUpdateWindow(info);
+        DownloadJob? updateJob = null;
         try
         {
+            // Round-104: launcher updates live in the download manager too —
+            // same queue, same cancel semantics, same progress bar.
+            updateJob = await BeginJobAsync("更新", $"启动器更新（第 {info.Round} 轮）", "");
+            updateJob.SetStageText("正在下载更新包…");
             await _update.DownloadStagedAsync(info, p => Dispatch(() =>
             {
                 var total = p.TotalBytes > 0 ? p.TotalBytes : info.Size;
@@ -572,8 +582,10 @@ public partial class MainViewModel : ViewModelBase
                     : $"{p.SpeedBytesPerSec / 1024.0:0} KB/s";
                 UpdateStatusText = UpdateUiPolicy.DescribeProgress((int)pct, size, speed);
                 Status = UpdateStatusText; // main status bar follows the download too
+                updateJob.Report(p);
             }), _updateCts.Token).ConfigureAwait(true);
             UpdateProgress = 100;
+            FinishJob(updateJob, null, false, "启动器更新包已下载");
             CloseUpdateWindow();
             // Round-74: say whether the delta was used — the user should see the
             // saving instead of taking it on faith.
@@ -598,7 +610,9 @@ public partial class MainViewModel : ViewModelBase
         }
         catch (OperationCanceledException)
         {
-            if (!hadStagedBefore) UpdateService.CancelStagedDownload();
+            FinishJob(updateJob, null, true);
+            if (hadStagedBefore) UpdateService.CancelStagingOnly();
+            else UpdateService.CancelStagedDownload();
             UpdateStatusText = UpdateUiPolicy.DescribeCanceled(hadStagedBefore);
             Status = UpdateStatusText;
             UpdateProgressIndeterminate = false;
@@ -606,6 +620,7 @@ public partial class MainViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
+            FinishJob(updateJob, ex, false, "启动器更新下载失败");
             UpdateStatusText = "更新失败: " + ex.Message;
             Status = UpdateStatusText;
             AddLog("[Update] 下载失败: " + ex.Message);
@@ -613,7 +628,11 @@ public partial class MainViewModel : ViewModelBase
         finally
         {
             CloseUpdateWindow();
+            var cts = _updateCts;
             _updateCts = null;
+            // Round-104: CTS holds registrations / a wait handle. Leaking one
+            // per update check is a slow resource bleed.
+            cts?.Dispose();
             IsCheckingUpdate = false;
         }
     }
@@ -1503,6 +1522,9 @@ public partial class MainViewModel : ViewModelBase
         // restate a verdict that has already been delivered.
         var alreadyFinished = job.IsFinished;
         if (!alreadyFinished) _jobManager.Finish(job, error, canceled, successText);
+        // Round-104: the watchdog may have marked this job Failed already.
+        // Its semaphore slot still has to be returned or the queue deadlocks.
+        else _jobManager.ReleaseSlot(job);
         if (!alreadyFinished)
         {
             if (canceled) Status = "已取消下载";
@@ -1837,7 +1859,7 @@ public partial class MainViewModel : ViewModelBase
         RootDirectoryText = c.RootDirectory;
         CloseActionText = CloseBehaviorPolicy.DisplayText(c.CloseAction);
         TrayEnabled = c.MinimizeToTrayEnabled;
-        DarkTheme = c.Theme != ThemePreference.Light;
+        DarkTheme = ThemePolicy.Resolve(c.Theme, ThemePolicy.SystemPrefersLight()) == ThemePreference.Dark;
     }
 
     private void SaveAccounts() => _svc.Auth.SaveAccounts(Accounts.ToList());
@@ -2024,16 +2046,40 @@ public partial class MainViewModel : ViewModelBase
             }
 
             JavaInstallStatus = $"准备下载 {pkg.ReleaseName}（{pkg.Vendor}）...";
-            var result = await _javaRuntime.InstallAsync(pkg, p => Dispatch(() =>
+            // Round-104: Java downloads are downloads. Put them in the same
+            // manager so the download page shows real progress and a cancel.
+            DownloadJob? javaJob = null;
+            try
             {
-                var total = p.TotalBytes > 0 ? p.TotalBytes : pkg.Size;
-                var pct = total > 0 ? Math.Clamp(p.DownloadedBytes * 100.0 / total, 0, 100) : 0;
-                JavaInstallProgress = pct;
-                JavaInstallStatus = p.Message ?? $"正在下载 Java {pkg.Major} {pct:0}%";
-            }), _javaCts.Token).ConfigureAwait(true);
+                javaJob = await BeginJobAsync("Java", $"安装 Java {pkg.Major}（{distName}）", "");
+                javaJob.SetStageText("正在下载 JDK…");
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(_javaCts.Token, javaJob.Token);
+                var result = await _javaRuntime.InstallAsync(pkg, p => Dispatch(() =>
+                {
+                    var total = p.TotalBytes > 0 ? p.TotalBytes : pkg.Size;
+                    var pct = total > 0 ? Math.Clamp(p.DownloadedBytes * 100.0 / total, 0, 100) : 0;
+                    JavaInstallProgress = pct;
+                    JavaInstallStatus = p.Message ?? $"正在下载 Java {pkg.Major} {pct:0}%";
+                    javaJob.Report(p);
+                }), linked.Token).ConfigureAwait(true);
 
-            JavaInstallProgress = 100;
-            ApplyInstalledJava(result.JavaExecutable, result.AlreadyInstalled, pkg.Major);
+                JavaInstallProgress = 100;
+                FinishJob(javaJob, null, false, $"Java {pkg.Major} 已安装并设为默认");
+                ApplyInstalledJava(result.JavaExecutable, result.AlreadyInstalled, pkg.Major);
+            }
+            catch (OperationCanceledException)
+            {
+                FinishJob(javaJob, null, true);
+                JavaInstallStatus = "已取消 Java 安装";
+                Status = JavaInstallStatus;
+            }
+            catch (Exception ex)
+            {
+                FinishJob(javaJob, ex, false, "Java 安装失败");
+                JavaInstallStatus = "Java 安装失败: " + ex.Message;
+                Status = JavaInstallStatus;
+                AddLog("[Java] " + JavaInstallStatus);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -4711,6 +4757,18 @@ public partial class MainViewModel : ViewModelBase
     }
 
     public string RootDirectory => LauncherConfig.Instance.RootDirectory;
+
+    /// <summary>Round-104: react to Windows theme changes while the app is
+    /// running, but only if the user chose "跟随系统".</summary>
+    public void ApplySystemThemeIfNeeded()
+    {
+        if (LauncherConfig.Instance.Theme != ThemePreference.System) return;
+        var dark = ThemePolicy.Resolve(ThemePreference.System, ThemePolicy.SystemPrefersLight()) == ThemePreference.Dark;
+        if (dark == DarkTheme) return;
+        DarkTheme = dark;
+        OnPropertyChanged(nameof(DarkTheme));
+        ApplyTheme();
+    }
 
     public void ApplyTheme()
     {

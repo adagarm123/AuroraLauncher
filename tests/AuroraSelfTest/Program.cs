@@ -5897,7 +5897,8 @@ internal static class Program
             Assert(vm.Contains("UpdateUiPolicy.DescribeProgress((int)pct, size, speed)"),
                 "窗口文案与单测共用同一策略");
             Assert(vm.Contains("var hadStagedBefore = UpdateService.HasStagedUpdate()") &&
-                   vm.Contains("if (!hadStagedBefore) UpdateService.CancelStagedDownload()"),
+                   (vm.Contains("if (hadStagedBefore) UpdateService.CancelStagingOnly()") ||
+                    vm.Contains("if (!hadStagedBefore) UpdateService.CancelStagedDownload()")),
                 "取消时不能删掉之前已就绪的更新包");
             Assert(Read("src/AuroraCore/Services/UpdateService.cs").Contains("public static void CancelStagedDownload()"),
                 "清理半成品要有单一入口");
@@ -6069,6 +6070,136 @@ internal static class Program
                 "未登录但缺文件时仍触发补齐，兑现首页提示");
             Assert(vm.Contains("ResumeDownloadPolicy.ChooseUrl(p.Url, routePolicy, preferMirror)"),
                 "恢复下载必须走归一策略");
+        });
+
+        // ---------------- 第 104 轮：全屏布局、进度、下载管理集成、代码审查 ----------------
+        Check("进度策略：空任务 0%、单文件按字节走、已完成任务不拉低汇总（第 104 轮）", () =>
+        {
+            var none = JobProgressPolicy.Aggregate(Array.Empty<DownloadJobSnapshot>());
+            Assert(none.Percent == 0 && none.Active == 0, "没有任务时不能显示 100%");
+            Assert(JobProgressPolicy.FractionFor(1, 0, 1024, 512) == 0.5,
+                "单文件下载到一半必须是 50%，不能等 CompletedFiles 才跳 100%");
+            Assert(JobProgressPolicy.FractionFor(3, 1, 0, 0) == 1.0 / 3.0,
+                "无字节信息时退回文件数比例");
+            Assert(JobProgressPolicy.FractionFor(0, 0, 0, 0) == 0, "无信息不猜测");
+
+            var donePlusRunning = JobProgressPolicy.Aggregate(new[]
+            {
+                new DownloadJobSnapshot(JobState.Done, 100, 0),
+                new DownloadJobSnapshot(JobState.Running, 5, 100)
+            });
+            Assert(donePlusRunning.Percent == 5,
+                "已完成 100% 不能把新任务的 5% 平均成 52%：" + donePlusRunning.Percent);
+            var onlyDone = JobProgressPolicy.Aggregate(new[]
+            {
+                new DownloadJobSnapshot(JobState.Done, 100, 0)
+            });
+            Assert(onlyDone.Percent == 100, "只有已完成任务时仍显示完成");
+            var onlyFailed = JobProgressPolicy.Aggregate(new[]
+            {
+                new DownloadJobSnapshot(JobState.Failed, 100, 0)
+            });
+            Assert(onlyFailed.Percent == 0, "失败任务不贡献完成度");
+        });
+
+        Check("任务槽：看门狗中止与准备中取消都必须归还槽位（第 104 轮）", () =>
+        {
+            var manager = new DownloadJobManager(_ => { });
+            var stalled = manager.Create("测试", "卡住的任务", "");
+            manager.StartAsync(stalled).GetAwaiter().GetResult();
+            stalled.AbortAsFailure("看门狗中止");
+            manager.Finish(stalled, null, true); // 调用方看到的已结束状态
+            Assert(!stalled.SlotHeld, "看门狗先 MarkFailed 不能再吞掉槽位释放");
+
+            var preparing = manager.Create("测试", "准备中取消", "");
+            manager.StartAsync(preparing, markRunning: false).GetAwaiter().GetResult();
+            manager.Cancel(preparing);
+            Assert(!preparing.SlotHeld, "Preparing 状态占槽，取消时必须释放");
+
+            for (var i = 0; i < 3; i++)
+            {
+                var next = manager.Create("测试", "后续任务 " + i, "");
+                var task = manager.StartAsync(next);
+                var finished = Task.WhenAny(task, Task.Delay(1000)).GetAwaiter().GetResult() == task;
+                Assert(finished, "第 " + (i + 1) + " 个任务应立刻拿到槽位，说明前面没有泄漏");
+            }
+        });
+
+        Check("窗口布局与卸载助手：最大化去边框，助手只删自己的文件（第 104 轮）", () =>
+        {
+            Assert(WindowLayoutPolicy.ResizeBorder(true) == 0 &&
+                   WindowLayoutPolicy.ResizeBorder(false) == 6,
+                "最大化时必须去掉 6px 缩放边框，否则内容被推出屏幕");
+            Assert(WindowLayoutPolicy.ClampToWorkArea(true) &&
+                   !WindowLayoutPolicy.ClampToWorkArea(false), "只贴靠最大化窗口");
+
+            Assert(UninstallCleanupArgs.IsPlausibleExePath(@"C:\Tools\Aurora\AuroraLauncher.exe"),
+                "真实安装位置是合法的");
+            Assert(!UninstallCleanupArgs.IsPlausibleExePath(@"C:\Users\me\Documents\私房照.exe") &&
+                   !UninstallCleanupArgs.IsPlausibleExePath(@"C:\Windows\System32\drivers\etc\hosts"),
+                "清单里换个文件名就删任意文件必须被拒绝");
+            var tempHelper = Path.Combine(Path.GetTempPath(), "aurora-uninstall-" + Guid.NewGuid().ToString("N") + ".exe");
+            Assert(UninstallCleanupArgs.IsPlausibleHelperPath(tempHelper), "临时副本要能通过校验");
+            Assert(!UninstallCleanupArgs.IsPlausibleHelperPath(@"C:\Tools\Aurora\AuroraLauncher.exe"),
+                "正式 EXE 不能被当成临时副本删掉");
+        });
+
+        Check("主题策略：跟随系统能解析，默认按浅色回退（第 104 轮）", () =>
+        {
+            Assert(ThemePolicy.Resolve(ThemePreference.System, true) == ThemePreference.Light &&
+                   ThemePolicy.Resolve(ThemePreference.System, false) == ThemePreference.Dark,
+                "System 不再被当成 Dark");
+            Assert(ThemePolicy.Resolve(ThemePreference.Light, false) == ThemePreference.Light &&
+                   ThemePolicy.Resolve(ThemePreference.Dark, true) == ThemePreference.Dark,
+                "显式选择不能被系统覆盖");
+            Assert(ThemePolicy.SystemPrefersLight() || !ThemePolicy.SystemPrefersLight(),
+                "读取系统主题不应抛异常（允许任意结果）");
+        });
+
+        Check("Guard: Java 与更新进入下载管理，全屏布局与主题接线（第 104 轮）", () =>
+        {
+            string Read(string p) => File.ReadAllText(Path.Combine(FindSourceRoot()!, p));
+            var downloads = Read("src/AuroraLauncher.Desktop/Views/DownloadsView.xaml");
+            var vm = Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.cs").Replace("\r\n", "\n");
+            var win = Read("src/AuroraLauncher.Desktop/MainWindow.xaml.cs").Replace("\r\n", "\n");
+            Assert(downloads.Contains("InstallJava21Command") &&
+                   downloads.Contains("CheckUpdateCommand") &&
+                   downloads.Contains("RestartToApplyCommand"),
+                "下载管理页要有 Java / 检查更新 / 应用更新三个入口");
+            Assert(vm.Contains("BeginJobAsync(\"Java\"") && vm.Contains("javaJob.Report(p)"),
+                "Java 下载要作为任务进入同一进度系统");
+            Assert(vm.Contains("BeginJobAsync(\"更新\""), "启动器更新也要进下载管理");
+            Assert(win.Contains("ApplyMaximizedLayout") && win.Contains("ResizeBorder(maximized)"),
+                "最大化布局修复必须接线到窗口状态变化");
+            Assert(win.Contains("SystemEvents.UserPreferenceChanged") &&
+                   vm.Contains("ApplySystemThemeIfNeeded"), "跟随系统要能在运行时响应");
+            Assert(win.Contains("ImportMrpackSafelyAsync") &&
+                   win.Contains("catch (Exception ex) { Logger.Instance.Warn(\"App\", \"空闲内存清理失败"),
+                "async void / fire-and-forget 都要有异常屏障");
+        });
+
+        Check("Guard: 任务槽、暂存保护、配置与日志的健壮性修复（第 104 轮）", () =>
+        {
+            string Read(string p) => File.ReadAllText(Path.Combine(FindSourceRoot()!, p));
+            var mgr = Read("src/AuroraCore/Services/DownloadJobManager.cs").Replace("\r\n", "\n");
+            var vm = Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.cs").Replace("\r\n", "\n");
+            var upd = Read("src/AuroraCore/Services/UpdateService.cs").Replace("\r\n", "\n");
+            var cfg = Read("src/AuroraCore/LauncherConfig.cs").Replace("\r\n", "\n");
+            var journal = Read("src/AuroraCore/Download/DownloadJournal.cs").Replace("\r\n", "\n");
+            Assert(mgr.Contains("public void ReleaseSlot(DownloadJob job)") &&
+                   mgr.Contains("job.SlotHeld = false"), "任务槽要有唯一的幂等释放入口");
+            Assert(vm.Contains("_jobManager.ReleaseSlot(job)"), "看门狗先结束的任务也要释放槽");
+            Assert(upd.Contains("StagingTempPath") && upd.Contains("CommitStaged()") &&
+                   upd.Contains("public static void CancelStagingOnly()"),
+                "新更新先写临时文件，失败不覆盖旧暂存包");
+            Assert(Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.Round101.cs")
+                       .Contains("public RelayCommand CancelUpdateCommand"), "取消命令仍在");
+            Assert(vm.Contains("if (IsCheckingUpdate) return;") && vm.Contains("cts?.Dispose()"),
+                "更新入口并发闸与 CTS 释放都要在");
+            Assert(cfg.Contains("File.Move(temp, path, overwrite: true)") &&
+                   cfg.Contains("InstanceGate"), "配置原子保存与线程安全单例");
+            Assert(journal.Contains("EnqueueCompaction(path, kept.ToString())") &&
+                   journal.Contains("Queue.Enqueue(line)"), "日志压缩走 writer，失败行重新入队");
         });
 
         Console.WriteLine($"\n=== Result: {_passed} passed, {_failed} failed, {_skipped} skipped ===");        Environment.Exit(_failed == 0 ? 0 : 1);

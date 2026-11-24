@@ -53,6 +53,12 @@ public sealed class DownloadJob : INotifyPropertyChanged
 
     public CancellationToken Token => _cts.Token;
 
+    /// <summary>Round-104: whether this job currently owns one of the
+    /// DownloadJobManager slots. Managed by the manager, NOT derived from
+    /// State — a watchdog can mark a job Failed before the caller reaches
+    /// Finish(), and losing the slot there deadlocks the whole queue.</summary>
+    public bool SlotHeld { get; internal set; }
+
     public DateTime StartedAtUtc { get; } = DateTime.UtcNow;
     public DateTime? FinishedAtUtc { get; private set; }
 
@@ -64,6 +70,9 @@ public sealed class DownloadJob : INotifyPropertyChanged
 
     private int _stageIndex = -1;
     private int _stageCount;
+    /// <summary>Round-104: a plain string snapshot, safe to read from the
+    /// download thread. Never index the UI-owned Stages collection there.</summary>
+    private string _stageLabel = "";
 
     public void SetStages(IEnumerable<(string Key, string Label)> stages)
     {
@@ -74,6 +83,8 @@ public sealed class DownloadJob : INotifyPropertyChanged
         {
             Stages.Clear();
             foreach (var (key, label) in list) Stages.Add(new JobStage(key, label));
+            _stageLabel = _stageIndex >= 0 && _stageIndex < Stages.Count
+                ? Stages[_stageIndex].Label : "";
             Raise(nameof(Stages));
             PushNow();
         });
@@ -105,6 +116,7 @@ public sealed class DownloadJob : INotifyPropertyChanged
                 else if (i == idx) { st.State = "Running"; st.PercentText = null; }
                 else { st.State = "Pending"; st.PercentText = null; }
             }
+            _stageLabel = idx >= 0 && idx < Stages.Count ? Stages[idx].Label : "";
             PushNow();
         });
     }
@@ -255,17 +267,16 @@ public sealed class DownloadJob : INotifyPropertyChanged
                 LastFileCompletedUtc = DateTime.UtcNow;
             }
         }
-        var stageFrac = p.TotalFiles > 0
-            ? Math.Clamp((double)p.CompletedFiles / p.TotalFiles, 0, 1)
-            : 0;
+        var stageFrac = JobProgressPolicy.FractionFor(
+            p.TotalFiles, p.CompletedFiles, p.TotalBytes, p.DownloadedBytes);
         var percent = JobProgressPolicy.PercentFor(_stageIndex, _stageCount, stageFrac);
 
         _percent = ProgressDisplayPolicy.Display(percent, IsFinished);
         _speed = p.SpeedBytesPerSec;
         var detail = p.Message ?? p.Current?.DisplayName ?? "";
         _detail = detail;
-        _stageText = _stageIndex >= 0 && _stageIndex < Stages.Count
-            ? $"{Stages[_stageIndex].Label} {(p.TotalFiles > 0 ? $"{p.CompletedFiles}/{p.TotalFiles}" : "")}".Trim()
+        _stageText = _stageLabel.Length > 0
+            ? $"{_stageLabel} {(p.TotalFiles > 0 ? $"{p.CompletedFiles}/{p.TotalFiles}" : "")}".Trim()
             : "下载中";
 
         RequestPush();

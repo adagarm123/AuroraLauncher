@@ -18,12 +18,21 @@ public static class HelpContent
     /// <summary>Round number of the newest entry in <see cref="Changelog"/> —
     /// bump together with the changelog entry; drives the one-time "已更新"
     /// startup toast (dismissed permanently once the user opens the page).</summary>
-    public const int LatestChangelogRound = 103;
+    public const int LatestChangelogRound = 104;
     /// <summary>更新日志（说人话版本：无技术名词、用户视角）——独立页面
     /// 「更新日志」使用；模板见 docs/release-notes-template.md。
     /// 每轮发布时在此置顶新增一条。</summary>
     public static IEnumerable<HelpTopicVM> Changelog() => new[]
     {
+        new HelpTopicVM
+        {
+            Category = "更新日志", Glyph = "\uE777", Title = "【第 104 轮更新】全屏不溢出、进度说实话，Java 和启动器更新进下载管理",
+            Summary = "修好 100% 空进度与单任务 0%，顺手排查并修掉多处隐藏缺陷",
+            Body = "1) 最大化后界面超出屏幕，是因为无边框窗口还留着 6 像素缩放边框；现在最大化时去掉它并贴靠工作区。\n\n" +
+                   "2) 下载管理没有任务时显示 100%，现在是 0%；只有一个文件时进度不再一直停在 0%——旧版只看「已完成文件数」，单文件要到最后一字节才跳 100%，现在按已经下载的字节实时计算。\n\n" +
+                   "3) 下载管理页新增三个入口：「下载 Java 21」「检查启动器更新」，以及下载完成后才出现的「立即应用已下载更新」。Java 与启动器更新现在都作为真正的下载任务进入队列，能看到独立进度，也能取消。\n\n" +
+                   "4) 这轮还做了一次全代码排查，修掉了：看门狗中止任务后任务槽不释放导致队列卡死；卸载清理助手可能被篡改的清单诱导删错文件；自动更新与手动更新并发写坏更新包；下载日志压缩与写入互相打架；配置写入被强杀后损坏；「跟随系统」主题实际不跟随；以及两个可能让启动器直接崩溃的异步异常。详情见 ADR-0026。"
+        },
         new HelpTopicVM
         {
             Category = "更新日志", Glyph = "\uE777", Title = "【第 103 轮更新】启动被拦截会明确提示，下载重试不再卡在旧镜像",

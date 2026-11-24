@@ -43,6 +43,10 @@ public static class DownloadJournal
     private static ManualResetEventSlim? _signal;
     private static Thread? _writer;
     private static volatile string? _path;
+    // Round-104: compaction must go through the SAME writer thread as appends,
+    // otherwise a startup rewrite races an in-flight download record.
+    private static string? _compactionPath;
+    private static string? _compactionText;
     /// <summary>Lines queued but not yet on disk. <see cref="Flush"/> waits on
     /// this, NOT on the queue: the writer may have dequeued without writing.</summary>
     private static int _pending;
@@ -180,7 +184,7 @@ public static class DownloadJournal
                     .Append(pending.ExpectedSize).Append('\t')
                     .Append(Clean(pending.ExpectedSha1 ?? "")).Append('\n');
             }
-            File.WriteAllText(path, kept.ToString(), new System.Text.UTF8Encoding(false));
+            EnqueueCompaction(path, kept.ToString());
         }
         catch { /* best effort */ }
         return ordered;
@@ -209,6 +213,17 @@ public static class DownloadJournal
 
     private static string Clean(string value) => value.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ').Trim();
 
+    private static void EnqueueCompaction(string path, string text)
+    {
+        lock (Sync)
+        {
+            _compactionPath = path;
+            _compactionText = text;
+        }
+        EnsureWriter();
+        _signal?.Set();
+    }
+
     private static void EnsureWriter()
     {
         if (_writer != null) return;
@@ -226,6 +241,8 @@ public static class DownloadJournal
         var signal = _signal!;
         while (true)
         {
+            var batch = new System.Text.StringBuilder();
+            var lines = 0;
             try
             {
                 signal.Wait(250);
@@ -233,8 +250,30 @@ public static class DownloadJournal
                 if (Queue.IsEmpty) continue;
 
                 var path = _path ??= PathFor(LauncherConfig.Instance.RootDirectory);
-                var batch = new System.Text.StringBuilder();
-                var lines = 0;
+
+                // Compaction runs first, under the same lock as appends: write
+                // a fresh file and atomically replace, never truncate in place.
+                string? compactPath;
+                string? compactText;
+                lock (Sync)
+                {
+                    compactPath = _compactionPath;
+                    compactText = _compactionText;
+                    _compactionPath = null;
+                    _compactionText = null;
+                }
+                if (compactPath != null && compactText != null)
+                {
+                    try
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(compactPath)!);
+                        var tmp = compactPath + ".compact.tmp";
+                        File.WriteAllText(tmp, compactText, new System.Text.UTF8Encoding(false));
+                        File.Move(tmp, compactPath, overwrite: true);
+                    }
+                    catch { /* keep the old journal; nothing was truncated */ }
+                }
+
                 while (Queue.TryDequeue(out var line)) { batch.Append(line).Append('\n'); lines++; }
                 if (batch.Length == 0) continue;
 
@@ -250,9 +289,11 @@ public static class DownloadJournal
             }
             catch
             {
-                // A failed append must never kill the writer or the app — but it
-                // must not leave Flush() waiting forever either.
-                Interlocked.Exchange(ref _pending, 0);
+                // Round-104: the batch was already dequeued. Put every line
+                // BACK, otherwise a transient file lock silently loses crash
+                // recovery data and Flush() wrongly reports success.
+                foreach (var line in batch.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                    Queue.Enqueue(line);
                 Thread.Sleep(250);
             }
         }

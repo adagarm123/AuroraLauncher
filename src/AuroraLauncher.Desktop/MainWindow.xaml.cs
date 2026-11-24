@@ -5,7 +5,9 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
+using System.Windows.Shell;
 using System.Windows.Threading;
+using Microsoft.Win32;
 using AuroraCore;
 using AuroraCore.Services;
 using AuroraCore.Utils;
@@ -60,6 +62,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        Loaded += (_, _) => ApplyMaximizedLayout();
         DataContext = new MainViewModel();
         // Sync the actual WPF theme resources with the persisted preference.
         if (DataContext is MainViewModel vm)
@@ -71,6 +74,11 @@ public partial class MainWindow : Window
             // request of the view model. SourceInitialized guarantees a handle.
             vm.GlassModeChanged += (_, mode) => ApplyGlass(mode);
             SourceInitialized += (_, _) => ApplyGlass(vm.CurrentGlassMode);
+            // Round-104: "跟随系统" must actually follow the OS at runtime.
+            SystemEvents.UserPreferenceChanged += (_, e) =>
+            {
+                if (e.Category == UserPreferenceCategory.VisualStyle) vm.ApplySystemThemeIfNeeded();
+            };
             // The VM navigates to Home in its constructor, before we could
             // subscribe — activate the initial page explicitly.
             ActivatePage(vm.CurrentPageKey, initial: true);
@@ -291,7 +299,10 @@ public partial class MainWindow : Window
             if (DateTime.UtcNow - _hiddenAt < TimeSpan.FromMinutes(5)) return;
             _idleTrimmed = true;
             timer.Stop();
-            await _vm.TrimIdleMemoryAsync();
+            // Round-104: async void has no caller to catch a throw — one
+            // unhandled exception here would kill the whole launcher.
+            try { await _vm.TrimIdleMemoryAsync(); }
+            catch (Exception ex) { Logger.Instance.Warn("App", "空闲内存清理失败: " + ex.Message); }
         };
         return timer;
     }
@@ -421,7 +432,16 @@ public partial class MainWindow : Window
         if (pack == null) return;
         e.Handled = true;
         Logger.Instance.Info("App", "拖入整合包: " + pack);
-        if (_vm != null) _ = _vm.ImportMrpackAsync(pack);
+        if (_vm != null)
+        {
+            _ = ImportMrpackSafelyAsync(_vm, pack);
+        }
+    }
+
+    private static async Task ImportMrpackSafelyAsync(MainViewModel vm, string pack)
+    {
+        try { await vm.ImportMrpackAsync(pack).ConfigureAwait(true); }
+        catch (Exception ex) { Logger.Instance.Warn("App", "拖入整合包失败: " + ex.Message); }
     }
 
     private static bool HasMrpack(IDataObject data)
@@ -523,6 +543,26 @@ public partial class MainWindow : Window
     {
         if (MaximizeGlyph != null)
             MaximizeGlyph.Text = WindowState == WindowState.Maximized ? "\uE923" : "\uE922";
+        ApplyMaximizedLayout();
+    }
+
+    /// <summary>Round-104: borderless + WindowChrome leaves the 6 px resize
+    /// border in Maximized state, which pushes content past the screen edge.
+    /// Drop the border and pin the window to the work area while maximised.</summary>
+    private void ApplyMaximizedLayout()
+    {
+        var maximized = WindowState == WindowState.Maximized;
+        var chrome = WindowChrome.GetWindowChrome(this);
+        if (chrome != null)
+            chrome.ResizeBorderThickness = new Thickness(WindowLayoutPolicy.ResizeBorder(maximized));
+        if (WindowLayoutPolicy.ClampToWorkArea(maximized))
+        {
+            var work = SystemParameters.WorkArea;
+            Left = work.Left;
+            Top = work.Top;
+            Width = work.Width;
+            Height = work.Height;
+        }
         UpdateWindowClip();
     }
 
