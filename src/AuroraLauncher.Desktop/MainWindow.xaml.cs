@@ -1,6 +1,8 @@
 ﻿using System.ComponentModel;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Interop;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -22,6 +24,42 @@ namespace AuroraLauncher.Desktop;
 /// </summary>
 public partial class MainWindow : Window
 {
+    // Round-105: WM_GETMINMAXINFO is the only reliable way to stop a borderless
+    // WindowChrome window from covering the taskbar when maximised. The monitor
+    // work rect is already in physical pixels — exactly what the message wants.
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WinPoint { public int X; public int Y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WinRect { public int Left; public int Top; public int Right; public int Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MonitorInfo
+    {
+        public int Size;
+        public WinRect Monitor;
+        public WinRect Work;
+        public int Flags;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MinMaxInfo
+    {
+        public WinPoint Reserved;
+        public WinPoint MaxSize;
+        public WinPoint MaxPosition;
+        public WinPoint MinTrackSize;
+        public WinPoint MaxTrackSize;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    private static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
+
+    private const uint MonitorDefaultToNearest = 2;
+
     /// <summary>Every visited page, created once and NEVER detached. Keeping
     /// the visual tree alive is the whole point — see PageHostPolicy.</summary>
     private readonly Dictionary<string, UIElement> _pages = new();
@@ -73,7 +111,13 @@ public partial class MainWindow : Window
             // Round-80: glass is applied by the window (it owns the HWND), on the
             // request of the view model. SourceInitialized guarantees a handle.
             vm.GlassModeChanged += (_, mode) => ApplyGlass(mode);
-            SourceInitialized += (_, _) => ApplyGlass(vm.CurrentGlassMode);
+            SourceInitialized += (_, _) =>
+            {
+                ApplyGlass(vm.CurrentGlassMode);
+                // Round-105: answer Windows with the monitor work area so the
+                // maximised window never grows over the taskbar.
+                (PresentationSource.FromVisual(this) as HwndSource)?.AddHook(ClampMaximizedToWorkArea);
+            };
             // Round-104: "跟随系统" must actually follow the OS at runtime.
             SystemEvents.UserPreferenceChanged += (_, e) =>
             {
@@ -546,23 +590,40 @@ public partial class MainWindow : Window
         ApplyMaximizedLayout();
     }
 
+    /// <summary>Round-105: answer Windows' maximise query with the monitor WORK
+    /// area (not the whole screen). Assigning Left/Top/Width/Height in the
+    /// Maximized state is a no-op — WPF hands that geometry to the OS — so the
+    /// taskbar clamp lives in this hook. It must not depend on WindowState:
+    /// Windows sends WM_GETMINMAXINFO *before* the state flips to Maximized.
+    /// </summary>
+    private IntPtr ClampMaximizedToWorkArea(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg != WindowLayoutPolicy.WmGetMinMaxInfo) return IntPtr.Zero;
+
+        var monitor = MonitorFromWindow(hwnd, MonitorDefaultToNearest);
+        var info = new MonitorInfo { Size = Marshal.SizeOf(typeof(MonitorInfo)) };
+        if (!GetMonitorInfo(monitor, ref info)) return IntPtr.Zero;
+
+        var mmi = (MinMaxInfo)Marshal.PtrToStructure(lParam, typeof(MinMaxInfo))!;
+        mmi.MaxPosition.X = info.Work.Left;
+        mmi.MaxPosition.Y = info.Work.Top;
+        mmi.MaxSize.X = info.Work.Right - info.Work.Left;
+        mmi.MaxSize.Y = info.Work.Bottom - info.Work.Top;
+        Marshal.StructureToPtr(mmi, lParam, false);
+        handled = true;
+        return IntPtr.Zero;
+    }
+
     /// <summary>Round-104: borderless + WindowChrome leaves the 6 px resize
     /// border in Maximized state, which pushes content past the screen edge.
-    /// Drop the border and pin the window to the work area while maximised.</summary>
+    /// Drop the border only; the work-area clamp itself is done by the
+    /// WM_GETMINMAXINFO hook above (see round-105).</summary>
     private void ApplyMaximizedLayout()
     {
         var maximized = WindowState == WindowState.Maximized;
         var chrome = WindowChrome.GetWindowChrome(this);
         if (chrome != null)
             chrome.ResizeBorderThickness = new Thickness(WindowLayoutPolicy.ResizeBorder(maximized));
-        if (WindowLayoutPolicy.ClampToWorkArea(maximized))
-        {
-            var work = SystemParameters.WorkArea;
-            Left = work.Left;
-            Top = work.Top;
-            Width = work.Width;
-            Height = work.Height;
-        }
         UpdateWindowClip();
     }
 

@@ -6144,6 +6144,25 @@ internal static class Program
                 "正式 EXE 不能被当成临时副本删掉");
         });
 
+        Check("Guard: 最大化贴靠工作区，任务栏不再被遮挡（第 105 轮）", () =>
+        {
+            Assert(WindowLayoutPolicy.WmGetMinMaxInfo == 0x0024,
+                "策略常量要与 Win32 消息号一致");
+            string Read(string p) => File.ReadAllText(Path.Combine(FindSourceRoot()!, p));
+            var win = Read("src/AuroraLauncher.Desktop/MainWindow.xaml.cs").Replace("\r\n", "\n");
+            var xaml = Read("src/AuroraLauncher.Desktop/MainWindow.xaml").Replace("\r\n", "\n");
+            Assert(win.Contains("AddHook(ClampMaximizedToWorkArea)") &&
+                   win.Contains("WindowLayoutPolicy.WmGetMinMaxInfo") &&
+                   win.Contains("GetMonitorInfo") &&
+                   win.Contains("info.Work"),
+                "必须钩住 WM_GETMINMAXINFO，并用显示器工作区回答最大化矩形");
+            Assert(xaml.Contains("<shell:WindowChrome") &&
+                   win.Contains("MaxSize.X = info.Work.Right - info.Work.Left"),
+                "WindowChrome 保留，但最大化矩形必须由钩子按工作区计算");
+            Assert(!win.Contains("Left = work.Left"),
+                "给最大化窗口赋 Left/Top/Width/Height 是空操作，不能再用它假装修任务栏");
+        });
+
         Check("主题策略：跟随系统能解析，默认按浅色回退（第 104 轮）", () =>
         {
             Assert(ThemePolicy.Resolve(ThemePreference.System, true) == ThemePreference.Light &&

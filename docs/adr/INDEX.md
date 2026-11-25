@@ -32,3 +32,4 @@
 | [ADR-0024](ADR-0024-uninstall-no-residue.md) | 卸载残留根治（临时清理进程立即删 EXE、路径二次校验、HKCU 注册表白名单、诚实回退） | 已采纳（含防线测试） |
 | [ADR-0025](ADR-0025-launch-feedback-and-resume-routes.md) | 启动拦截可见性 + 恢复下载线路归一（未登录也补齐、旧 BMCLAPI 域名可反解、client jar 路径映射） | 已采纳（含防线测试） |
 | [ADR-0026](ADR-0026-layout-progress-and-code-audit.md) | 布局/进度诚实与全代码审查（最大化贴靠、空任务 0%、单文件字节进度、任务槽、清单校验、持久化与主题） | 已采纳（含防线测试） |
+| [ADR-0027](ADR-0027-maximize-work-area.md) | 最大化窗口贴靠工作区（WM_GETMINMAXINFO 钩子 + 显示器 rcWork，任务栏不再被遮挡；赋值 Left/Top/Width/Height 无效） | 已采纳（含防线测试） |

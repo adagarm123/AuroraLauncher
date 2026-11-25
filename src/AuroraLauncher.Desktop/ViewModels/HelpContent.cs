@@ -18,12 +18,20 @@ public static class HelpContent
     /// <summary>Round number of the newest entry in <see cref="Changelog"/> —
     /// bump together with the changelog entry; drives the one-time "已更新"
     /// startup toast (dismissed permanently once the user opens the page).</summary>
-    public const int LatestChangelogRound = 104;
+    public const int LatestChangelogRound = 105;
     /// <summary>更新日志（说人话版本：无技术名词、用户视角）——独立页面
     /// 「更新日志」使用；模板见 docs/release-notes-template.md。
     /// 每轮发布时在此置顶新增一条。</summary>
     public static IEnumerable<HelpTopicVM> Changelog() => new[]
     {
+        new HelpTopicVM
+        {
+            Category = "更新日志", Glyph = "\uE777", Title = "【第 105 轮更新】最大化后，最底下不再被任务栏挡住",
+            Summary = "窗口最大化时贴着任务栏上方停住，整页内容完整可见",
+            Body = "1) 实测发现：把启动器最大化以后，最底下那一截内容（比如「性能概览」卡片）会被 Windows 任务栏盖住，看不到也点不到。上一轮试图把窗口贴到「可用区域」，但 Windows 对已经最大化的窗口不接受这种设置，所以问题还在。\n\n" +
+                   "2) 这次改成在 Windows 询问「最大化应该多大」的时候，直接告诉它「屏幕去掉任务栏以后剩下的那块地方」。启动器会看你当前这块屏幕（双显示器时看启动器所在的那块）的可用区域，按它来放大；底边正好停在任务栏上方，既不会压住任务栏，也不会把内容顶出屏幕。\n\n" +
+                   "3) 上一轮的「最大化时去掉多余边框」仍然保留，两处一起解决全屏显示问题。如果你用的是不同的显示缩放比例或者双显示器，麻烦最大化后再看一眼底边是否刚好贴着任务栏。"
+        },
         new HelpTopicVM
         {
             Category = "更新日志", Glyph = "\uE777", Title = "【第 104 轮更新】全屏不溢出、进度说实话，Java 和启动器更新进下载管理",
