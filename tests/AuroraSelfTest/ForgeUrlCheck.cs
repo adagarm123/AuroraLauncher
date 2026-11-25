@@ -54,7 +54,16 @@ internal static class ForgeUrlCheck
                     sw.Stop();
                     var length = new FileInfo(dest).Length;
                     var head = new byte[2];
-                    using (var fs = File.OpenRead(dest)) fs.Read(head, 0, 2);
+                    using (var fs = File.OpenRead(dest))
+                    {
+                        var read = 0;
+                        while (read < head.Length)
+                        {
+                            var n = fs.Read(head, read, head.Length - read);
+                            if (n == 0) break;
+                            read += n;
+                        }
+                    }
                     var isZip = head[0] == 0x50 && head[1] == 0x4B; // "PK"
                     Console.WriteLine($"[forge-check] {label}: OK {length / 1024} KB, {sw.ElapsedMilliseconds} ms, ZIP={isZip}");
                     if (length < 100_000) failures.Add($"{label} 下载的文件太小（{length} 字节），不像安装器");
