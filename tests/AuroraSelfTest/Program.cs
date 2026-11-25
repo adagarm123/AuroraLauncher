@@ -6271,6 +6271,40 @@ internal static class Program
                 "卸载助手异常必须落日志");
         });
 
+        Check("Guard: CI 必须拉取上一版 EXE 才能产出增量补丁（第 107 轮）", () =>
+        {
+            string Read(string p) => File.ReadAllText(Path.Combine(FindSourceRoot()!, p));
+            var yaml = Read(".github/workflows/release.yml").Replace("\r\n", "\n");
+            Assert(yaml.Contains("Fetch previous release EXE for delta patch"),
+                "CI 要有拉取上一版 EXE 的专门步骤");
+            Assert(yaml.Contains("gh release download") && yaml.Contains("artifacts\\prev") &&
+                   yaml.Contains("AuroraLauncher.exe"),
+                "必须从上一版 Release 下载原始 EXE 到 artifacts/prev");
+            Assert(yaml.Contains("publish\\.last-round") && yaml.Contains("round\\s*:\\s*(\\d+)"),
+                "必须把上一版的 round 写进 .last-round，publish.ps1 才会生成补丁");
+            // The client already only uses a patch for the exact previous round.
+            var manifest = new UpdateManifest
+            {
+                Round = 107, Version = "0.107.0", Url = "https://example.test/x.exe",
+                Sha256 = new string('A', 64), Size = 65_000_000,
+                PatchUrl = "https://example.test/x.patch", PatchFromRound = 106,
+                PatchSize = 600_000, PatchSha256 = new string('B', 64)
+            };
+            using (var rsa = System.Security.Cryptography.RSA.Create(2048))
+            {
+                var pub = rsa.ToXmlString(false);
+                var payload = manifest.PatchSignedPayload;
+                manifest.PatchSignature = Convert.ToBase64String(rsa.SignData(
+                    System.Text.Encoding.UTF8.GetBytes(payload),
+                    System.Security.Cryptography.HashAlgorithmName.SHA256,
+                    System.Security.Cryptography.RSASignaturePadding.Pkcs1));
+                Assert(UpdateService.ShouldUsePatch(manifest, 106, pub),
+                    "紧邻上一版必须用补丁");
+                Assert(!UpdateService.ShouldUsePatch(manifest, 105, pub),
+                    "落后多版仍走完整包（补丁只匹配一个 round）");
+            }
+        });
+
         Check("Guard: 第 106 轮关键改动接线（直连兜底 / 正则预编译 / 缓冲区复用 / 字形）", () =>
         {
             string Read(string p) => File.ReadAllText(Path.Combine(FindSourceRoot()!, p));

@@ -18,12 +18,20 @@ public static class HelpContent
     /// <summary>Round number of the newest entry in <see cref="Changelog"/> —
     /// bump together with the changelog entry; drives the one-time "已更新"
     /// startup toast (dismissed permanently once the user opens the page).</summary>
-    public const int LatestChangelogRound = 106;
+    public const int LatestChangelogRound = 107;
     /// <summary>更新日志（说人话版本：无技术名词、用户视角）——独立页面
     /// 「更新日志」使用；模板见 docs/release-notes-template.md。
     /// 每轮发布时在此置顶新增一条。</summary>
     public static IEnumerable<HelpTopicVM> Changelog() => new[]
     {
+        new HelpTopicVM
+        {
+            Category = "更新日志", Glyph = "\uE777", Title = "【第 107 轮更新】相邻版本升级改用增量补丁，不再每次重下完整包",
+            Summary = "只差一个版本时下载几百 KB 的补丁即可升级",
+            Body = "1) 之前虽然早就做好了「增量更新」功能，但云端发布时每次都是全新环境，找不到上一版启动器文件，所以每次生成的更新清单里都没有补丁地址——哪怕只更新一个小版本，也只能重新下载 60 多 MB 的完整程序。\n\n" +
+                   "2) 现在发布流程会先从 GitHub 上取回上一版程序，再自动生成补丁并单独签名，更新清单里也会带上补丁信息。你从上一版升级时，更新窗口会显示「增量更新」，下载量通常只有几百 KB 到几 MB，速度快很多。\n\n" +
+                   "3) 注意：补丁只对「紧邻的上一版」有效。如果你用的版本落后了两版或更多，仍会下载完整包——这是为了保证升级可靠，不是出了问题。升级到最新版后，下次就能继续享受增量更新。"
+        },
         new HelpTopicVM
         {
             Category = "更新日志", Glyph = "\uE777", Title = "【第 106 轮更新】按彻查报告补好安全与稳定性问题",

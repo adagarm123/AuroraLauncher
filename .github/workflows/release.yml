@@ -26,6 +26,48 @@ jobs:
       - name: Run Unit Tests
         run: dotnet run --project tests/AuroraSelfTest -c Release -- --unit
 
+      # Round-107: CI checks out a clean tree, so publish.ps1 used to find no
+      # previous EXE and silently produced a full-package-only manifest. Fetch
+      # the last published EXE from GitHub Releases so the SAME local patch
+      # path runs on CI: users one round behind then get a ~1 % delta instead
+      # of a 65 MB download. Multi-round-behind clients still get the full
+      # package (patchFromRound only matches one exact round) — by design.
+      - name: Fetch previous release EXE for delta patch
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $repo = "${{ github.repository }}"
+          $current = "${{ github.ref_name }}"
+          $releases = gh api "repos/$repo/releases?per_page=10" | ConvertFrom-Json
+          $prev = $releases | Where-Object {
+            $_.tag_name -ne $current -and -not $_.draft -and -not $_.prerelease -and
+            ($_.assets | Where-Object { $_.name -eq 'AuroraLauncher.exe' })
+          } | Select-Object -First 1
+          if (-not $prev) {
+            Write-Host "No previous release with an EXE - full package only."
+            exit 0
+          }
+          New-Item -ItemType Directory -Force -Path artifacts\prev, publish | Out-Null
+          $prevTag = $prev.tag_name
+          gh release download $prevTag --repo $repo --pattern AuroraLauncher.exe --dir artifacts\prev --clobber
+          gh release download $prevTag --repo $repo --pattern build-info.txt --dir artifacts\prev --clobber
+          # publish.ps1 reads publish/.last-round to decide from which round
+          # the patch is built; write it from that release's own build-info.
+          $infoPath = Join-Path (Get-Location) "artifacts\prev\build-info.txt"
+          $prevRound = 0
+          if (Test-Path $infoPath) {
+            $txt = Get-Content $infoPath -Raw
+            if ($txt -match 'round\s*:\s*(\d+)') { $prevRound = [int]$Matches[1] }
+          }
+          if ($prevRound -le 0) {
+            Write-Warning "Cannot read previous round from $prevTag - full package only."
+            Remove-Item (Join-Path (Get-Location) 'artifacts\prev\AuroraLauncher.exe') -ErrorAction SilentlyContinue
+            exit 0
+          }
+          [System.IO.File]::WriteAllText((Join-Path (Get-Location) 'publish\.last-round'), "$prevRound")
+          Write-Host "Previous build: $prevTag, round $prevRound -> artifacts\prev"
+
       - name: Publish EXE
         run: powershell -ExecutionPolicy Bypass -File scripts/publish.ps1
 
