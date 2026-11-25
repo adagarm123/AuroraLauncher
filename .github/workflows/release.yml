@@ -12,6 +12,7 @@ jobs:
       contents: write
       pages: write
       id-token: write
+      actions: read
 
     steps:
       - name: Checkout
@@ -53,7 +54,43 @@ jobs:
       - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: publish/ 
+          path: publish/
+
+      # Round-105: deploy-pages@v4 resolves the "github-pages" artifact by
+      # name within ~1 s of upload. GitHub's artifact metadata index can lag
+      # several seconds, so that lookup intermittently fails with
+      # "No artifacts named github-pages were found" even though the upload
+      # succeeded. Poll the artifact list until the name is visible (or time
+      # out with a clear message) before handing off to the deploy action.
+      - name: Wait for Pages artifact metadata
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $repo = "${{ github.repository }}"
+          $runId = "${{ github.run_id }}"
+          # The public artifact list may show the name immediately while the
+          # internal runtime metadata endpoint deploy-pages uses is still
+          # catching up — give it a fixed buffer before polling.
+          Start-Sleep -Seconds 15
+          $deadline = (Get-Date).AddMinutes(3)
+          $visible = $false
+          while ((Get-Date) -lt $deadline) {
+            $json = gh api "repos/$repo/actions/runs/$runId/artifacts" 2>$null
+            if ($LASTEXITCODE -eq 0 -and $json) {
+              $list = $json | ConvertFrom-Json
+              if ($list.artifacts | Where-Object { $_.name -eq 'github-pages' }) {
+                Write-Host "Pages artifact metadata visible; proceeding to deploy."
+                $visible = $true
+                break
+              }
+            }
+            Start-Sleep -Seconds 5
+          }
+          if (-not $visible) {
+            Write-Error "Pages artifact metadata did not become visible within 3 minutes."
+            exit 1
+          }
 
       - name: Deploy to GitHub Pages
         id: deployment
