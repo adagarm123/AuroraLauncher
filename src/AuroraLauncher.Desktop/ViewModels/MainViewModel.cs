@@ -567,7 +567,7 @@ public partial class MainViewModel : ViewModelBase
             // Round-104: launcher updates live in the download manager too —
             // same queue, same cancel semantics, same progress bar.
             updateJob = await BeginJobAsync("更新", $"启动器更新（第 {info.Round} 轮）", "");
-            updateJob.SetStageText("正在下载更新包…");
+            updateJob.SetStageText("正在下载更新包…", "update-download");
             await _update.DownloadStagedAsync(info, p => Dispatch(() =>
             {
                 var total = p.TotalBytes > 0 ? p.TotalBytes : info.Size;
@@ -1819,8 +1819,24 @@ public partial class MainViewModel : ViewModelBase
     /// callbacks from worker threads can never stall the render loop.</summary>
     private void Dispatch(Action a)
     {
-        if (_disp.CheckAccess()) a();
-        else _disp.BeginInvoke(a);
+        // Round-106 (L4): a background callback that throws inside BeginInvoke
+        // used to surface as a Dispatcher unhandled exception and take down the
+        // window. Contain it here — log and keep the UI alive.
+        void Safe()
+        {
+            try { a(); }
+            catch (Exception ex) { Logger.Instance.Warn("UI", "界面回调异常: " + ex.Message); }
+        }
+        if (_disp.CheckAccess()) Safe();
+        else _disp.BeginInvoke(Safe);
+    }
+
+    /// <summary>Round-106 (L3): release the playtime heartbeat timer on exit.
+    /// The normal session already disposes it in EndInternal; this is the
+    /// idempotent safety net for an exit between sessions.</summary>
+    public void DisposeResources()
+    {
+        try { _playtime.Dispose(); } catch { }
     }
 
     private void LoadAll()
@@ -2052,7 +2068,7 @@ public partial class MainViewModel : ViewModelBase
             try
             {
                 javaJob = await BeginJobAsync("Java", $"安装 Java {pkg.Major}（{distName}）", "");
-                javaJob.SetStageText("正在下载 JDK…");
+                javaJob.SetStageText("正在下载 JDK…", "java-download");
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(_javaCts.Token, javaJob.Token);
                 var result = await _javaRuntime.InstallAsync(pkg, p => Dispatch(() =>
                 {
@@ -3161,6 +3177,17 @@ public partial class MainViewModel : ViewModelBase
         {
             IsBusy = true;
             instance = SelectedInstance;
+            // Round-106: the guard table decided a moment ago, but the selection
+            // can change between that check and here. Re-check locally so a race
+            // never becomes a NullReferenceException (CS8604/CS8602 at the
+            // DescribeMissing / BuildLaunchSpec / message-box call sites).
+            if (instance == null || SelectedAccount == null)
+            {
+                ShowToast("实例或账户已被更改，请重新选择后启动");
+                Status = "启动已取消：实例或账户选择已变化";
+                return;
+            }
+            var account = SelectedAccount;
             _cts = new CancellationTokenSource();
 
             // ---- 启动前自动扫描：文件不完整才补全并跳转下载页；完整则直接启动 ----
@@ -3213,7 +3240,7 @@ public partial class MainViewModel : ViewModelBase
                 await BackupSavesAsync(instance, BackupTrigger.BeforeLaunch, interactive: false).ConfigureAwait(true);
 
             Status = $"正在启动 {instance.Name} ...";
-            var spec = await _svc.BuildLaunchSpecAsync(instance, SelectedAccount);
+            var spec = await _svc.BuildLaunchSpecAsync(instance, account);
             Dispatch(() => AddLog("[Launch] " + spec.DisplayCommandLine));
 
             // Crash-summary context: loader identity + mod census (mod
@@ -3239,10 +3266,10 @@ public partial class MainViewModel : ViewModelBase
             if (exit == 0)
             {
                 LastCrashReport = null;
-                Status = $"游戏已正常退出: {SelectedInstance.Name}";
+                Status = $"游戏已正常退出: {instance.Name}";
                 Dispatch(() => System.Windows.MessageBox.Show(
                     Application.Current.MainWindow,
-                    $"《Minecraft》已正常退出。\n\n实例：{SelectedInstance.Name}\n账户：{SelectedAccount.Username}",
+                    $"《Minecraft》已正常退出。\n\n实例：{instance.Name}\n账户：{account.Username}",
                     "Aurora Launcher", MessageBoxButton.OK, MessageBoxImage.Information));
             }
             else

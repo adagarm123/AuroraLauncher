@@ -91,7 +91,6 @@ public static class ModPreflight
 
         var missing = new List<ModDependency>();
         var seenMissing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var fabricApiMissing = false;
         foreach (var mod in mods)
         {
             foreach (var (depId, range) in mod.Depends)
@@ -105,11 +104,6 @@ public static class ModPreflight
                 var key = depId + "|" + mod.ModId;
                 if (!seenMissing.Add(key)) continue;
                 missing.Add(new ModDependency(depId, range, mod.DisplayName, mod.FileName));
-                if (loader == ModLoaderType.Fabric &&
-                    (depId.Equals("fabric-api", StringComparison.OrdinalIgnoreCase) ||
-                     depId.StartsWith("fabric-", StringComparison.OrdinalIgnoreCase) ||
-                     depId.StartsWith("fabric_", StringComparison.OrdinalIgnoreCase)))
-                    fabricApiMissing = true;
             }
         }
 

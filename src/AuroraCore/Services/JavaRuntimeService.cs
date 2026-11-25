@@ -82,16 +82,9 @@ public sealed class JavaRuntimeService
     private static string? Str(JsonElement e, string name)
         => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
-    /// <summary>PURE zip-slip guard — rejects absolute paths, drive letters,
-    /// parent traversal and NTFS alternate data streams.</summary>
-    public static bool IsSafeEntryPath(string fullName)
-    {
-        if (string.IsNullOrWhiteSpace(fullName)) return false;
-        if (fullName[0] is '/' or '\\') return false;
-        if (fullName.Contains("..", StringComparison.Ordinal)) return false;
-        if (fullName.Contains(':', StringComparison.Ordinal)) return false;
-        return !Path.IsPathRooted(fullName);
-    }
+    /// <summary>PURE zip-slip guard — delegates to the shared PathEx helper so
+    /// Java / natives / mrpack extraction all enforce the same rule.</summary>
+    public static bool IsSafeEntryPath(string fullName) => PathEx.IsSafeEntryPath(fullName);
 
     /// <summary>Resolves the latest package via NetRouting (proxy + direct
     /// hedge, 8s per route). No mirror is hard-coded: Adoptium's response

@@ -288,9 +288,17 @@ public sealed class UpdateService
             }
         }, progress, ct).ConfigureAwait(false);
 
-        var actual = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(StagingTempPath, ct).ConfigureAwait(false)));
-        if (!string.IsNullOrWhiteSpace(manifest.Sha256) &&
-            !string.Equals(actual, manifest.Sha256.Trim().Replace("-", ""), StringComparison.OrdinalIgnoreCase))
+        // Round-106: stream the ~63 MB package instead of buffering it whole
+        // into memory just to hash it (the peak mattered on low-RAM machines).
+        var actual = await Task.Run(() => Sha256OfFile(StagingTempPath), ct).ConfigureAwait(false);
+        // Round-106 (L1): fail closed — a signed manifest without a hash is a
+        // broken release artifact, not a reason to skip the last integrity gate.
+        if (string.IsNullOrWhiteSpace(manifest.Sha256))
+        {
+            TryDelete(StagingTempPath);
+            throw new IOException("更新清单缺少 SHA-256，拒绝安装未校验的更新包。");
+        }
+        if (!string.Equals(actual, manifest.Sha256.Trim().Replace("-", ""), StringComparison.OrdinalIgnoreCase))
         {
             TryDelete(StagingTempPath);
             throw new IOException("更新包校验失败（SHA-256 不匹配），已删除本次下载文件。");
@@ -326,9 +334,12 @@ public sealed class UpdateService
             }, progress, ct).ConfigureAwait(false);
 
             var patchHash = await Task.Run(() => Sha256OfFile(patchPath), ct).ConfigureAwait(false);
-            if (!string.IsNullOrWhiteSpace(manifest.PatchSha256) &&
+            // Round-106 (L1): fail closed on a missing hash too — an unchecked
+            // delta applied to the running EXE is worse than an unchecked full
+            // package. Fall back to the full download below.
+            if (string.IsNullOrWhiteSpace(manifest.PatchSha256) ||
                 !string.Equals(patchHash, manifest.PatchSha256.Trim().Replace("-", ""), StringComparison.OrdinalIgnoreCase))
-                throw new IOException("补丁文件校验失败（SHA-256 不匹配）。");
+                throw new IOException("补丁文件校验失败（SHA-256 缺失或不匹配）。");
 
             var currentExe = Environment.ProcessPath;
             if (string.IsNullOrEmpty(currentExe) || !File.Exists(currentExe))
@@ -340,9 +351,9 @@ public sealed class UpdateService
             {
                 BinaryDelta.Apply(currentExe, patchPath, mergedPath);
                 var mergedHash = Sha256OfFile(mergedPath);
-                if (!string.IsNullOrWhiteSpace(manifest.Sha256) &&
+                if (string.IsNullOrWhiteSpace(manifest.Sha256) ||
                     !string.Equals(mergedHash, manifest.Sha256.Trim().Replace("-", ""), StringComparison.OrdinalIgnoreCase))
-                    throw new IOException("合并结果与清单 SHA-256 不一致（补丁与当前版本不匹配）。");
+                    throw new IOException("合并结果校验失败（清单 SHA-256 缺失或不一致）。");
                 File.Move(mergedPath, StagingTempPath, overwrite: true);
             }, ct).ConfigureAwait(false);
 

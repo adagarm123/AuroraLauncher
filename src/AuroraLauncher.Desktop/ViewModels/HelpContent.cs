@@ -18,12 +18,21 @@ public static class HelpContent
     /// <summary>Round number of the newest entry in <see cref="Changelog"/> —
     /// bump together with the changelog entry; drives the one-time "已更新"
     /// startup toast (dismissed permanently once the user opens the page).</summary>
-    public const int LatestChangelogRound = 105;
+    public const int LatestChangelogRound = 106;
     /// <summary>更新日志（说人话版本：无技术名词、用户视角）——独立页面
     /// 「更新日志」使用；模板见 docs/release-notes-template.md。
     /// 每轮发布时在此置顶新增一条。</summary>
     public static IEnumerable<HelpTopicVM> Changelog() => new[]
     {
+        new HelpTopicVM
+        {
+            Category = "更新日志", Glyph = "\uE777", Title = "【第 106 轮更新】按彻查报告补好安全与稳定性问题",
+            Summary = "解压更安全、更新校验更严、下载与崩溃诊断更稳",
+            Body = "1) 解压加载器文件时加了统一的安全检查：带「上层目录」「绝对路径」这种可疑名字的文件会被跳过，避免被污染的压缩包写到启动器目录外面。\n\n" +
+                   "2) 更新包校验更严格：以前清单里如果没写校验值就直接放过，现在会拒绝安装；校验改为边下载边算、不再把 60 多 MB 整包读进内存。补丁和合并后的文件同样要求校验值齐全。\n\n" +
+                   "3) 修掉了几处稳定性隐患：Java 和启动器更新的下载卡住判定改用单独规则（单文件不会被误判）；主线路失败会自动用直连再试一次；后台界面回调出错不再让主窗口崩溃；退出时释放计时器，卸载助手出错会写日志。\n\n" +
+                   "这轮还清理了之前遗留的编译告警，Release 构建现在是 0 错误 0 警告。详情见 ADR-0028。"
+        },
         new HelpTopicVM
         {
             Category = "更新日志", Glyph = "\uE777", Title = "【第 105 轮更新】最大化后，最底下不再被任务栏挡住",

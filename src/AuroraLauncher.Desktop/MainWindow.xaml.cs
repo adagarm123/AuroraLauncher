@@ -192,6 +192,8 @@ public partial class MainWindow : Window
             _idleTrimTimer = null;
             _tray?.Dispose();
             _tray = null;
+            // Round-106 (L3): release the playtime heartbeat timer on shutdown.
+            try { _vm?.DisposeResources(); } catch { }
 
             // Round-75 invariant: this app must never outlive its only window.
             // Round 74 could leave a windowless process alive; it still owned the

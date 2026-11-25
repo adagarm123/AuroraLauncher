@@ -4262,7 +4262,7 @@ internal static class Program
             var exe = File.ReadAllText(Path.Combine(FindSourceRoot()!, "src", "AuroraCore", "Services", "UpdateService.cs"));
             Assert(exe.Contains("BinaryDelta.Apply(currentExe, patchPath, mergedPath)"),
                 "the patch must be merged with the running exe");
-            Assert(exe.Contains("合并结果与清单 SHA-256 不一致"),
+            Assert(exe.Contains("合并结果校验失败（清单 SHA-256 缺失或不一致）"),
                 "a merged result that does not match the signed hash must be rejected");
         });
 
@@ -6219,6 +6219,76 @@ internal static class Program
                    cfg.Contains("InstanceGate"), "配置原子保存与线程安全单例");
             Assert(journal.Contains("EnqueueCompaction(path, kept.ToString())") &&
                    journal.Contains("Queue.Enqueue(line)"), "日志压缩走 writer，失败行重新入队");
+        });
+
+        Check("第 106 轮：路径安全 / fail-closed 哈希 / 单文件看门狗 / 编译告警清零", () =>
+        {
+            // M1: zip-slip guard is shared by every extraction path.
+            Assert(PathEx.IsSafeEntryPath("org/foo/bar.dll") &&
+                   !PathEx.IsSafeEntryPath("../../evil.dll") &&
+                   !PathEx.IsSafeEntryPath("/etc/passwd") &&
+                   !PathEx.IsSafeEntryPath("C:\\Windows\\System32\\x.dll") &&
+                   !PathEx.IsSafeEntryPath("a/../b.dll"),
+                "PathEx 必须挡住父 traversal / 绝对路径 / 盘符 / ADS");
+            // The natives extractor actually calls the guard.
+            string Read(string p) => File.ReadAllText(Path.Combine(FindSourceRoot()!, p));
+            var installer = Read("src/AuroraCore/Services/GameInstaller.cs").Replace("\r\n", "\n");
+            Assert(installer.Contains("PathEx.IsSafeEntryPath(entry.FullName)") &&
+                   installer.Contains("跳过不安全的 natives 条目"),
+                "natives 解压必须过 zip-slip 闸门");
+
+            // L1: missing hash is now rejected, not silently skipped.
+            var upd = Read("src/AuroraCore/Services/UpdateService.cs").Replace("\r\n", "\n");
+            Assert(upd.Contains("更新清单缺少 SHA-256，拒绝安装未校验的更新包") &&
+                   upd.Contains("补丁文件校验失败（SHA-256 缺失或不匹配）"),
+                "哈希为空必须 fail-closed");
+            Assert(upd.Contains("Task.Run(() => Sha256OfFile(StagingTempPath), ct)") &&
+                   !upd.Contains("SHA256.HashData(await File.ReadAllBytesAsync(StagingTempPath"),
+                "完整包哈希必须流式、不能在 UI 线程 ReadAllBytes");
+
+            // Watchdog: single-file stages use the 90 s bucket and skip file-stall.
+            Assert(JobWatchdogPolicy.TimeoutSeconds(JobState.Running, "java-download") ==
+                   JobWatchdogPolicy.InstallerDownloadTimeoutSeconds &&
+                   JobWatchdogPolicy.TimeoutSeconds(JobState.Running, "update-download") ==
+                   JobWatchdogPolicy.InstallerDownloadTimeoutSeconds,
+                "Java / 更新单文件下载用安装器同档超时");
+            Assert(!JobWatchdogPolicy.ShouldUseFileStall("java-download") &&
+                   !JobWatchdogPolicy.ShouldUseFileStall("update-download"),
+                "单文件下载不能套用「无新完成文件」判定");
+
+            // #5 / #6: compiler warnings cleared — dead variable gone, local guards present.
+            var preflight = Read("src/AuroraCore/Services/ModPreflight.cs").Replace("\r\n", "\n");
+            Assert(!preflight.Contains("fabricApiMissing"), "死变量必须删除");
+            var vm = Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.cs").Replace("\r\n", "\n");
+            Assert(vm.Contains("if (instance == null || SelectedAccount == null)") &&
+                   vm.Contains("var account = SelectedAccount;") &&
+                   vm.Contains("LaunchAsync") , "启动链路必须有局部空守卫");
+            Assert(vm.Contains("catch (Exception ex) { Logger.Instance.Warn(\"UI\", \"界面回调异常"),
+                "Dispatch 回调必须有异常屏障");
+            Assert(vm.Contains("public void DisposeResources()"), "退出时必须释放 playtime 定时器");
+            Assert(Read("src/AuroraLauncher.Desktop/App.xaml.cs").Replace("\r\n", "\n")
+                       .Contains("Logger.Instance.Error(\"Uninstall\", \"清理助手异常"),
+                "卸载助手异常必须落日志");
+        });
+
+        Check("Guard: 第 106 轮关键改动接线（直连兜底 / 正则预编译 / 缓冲区复用 / 字形）", () =>
+        {
+            string Read(string p) => File.ReadAllText(Path.Combine(FindSourceRoot()!, p));
+            var engine = Read("src/AuroraCore/Download/DownloadEngine.cs").Replace("\r\n", "\n");
+            Assert(engine.Contains("ArrayPool<byte>.Shared.Rent(81920)") &&
+                   engine.Contains("ArrayPool<byte>.Shared.Return(buffer)"),
+                "下载缓冲区必须池化");
+            Assert(engine.Contains("var useDirectClient = false") &&
+                   engine.Contains("HttpClientFactory.Instance.DirectClient") &&
+                   engine.Contains("主线路失败，改用直连重试"),
+                "文件下载失败必须有一直连兜底");
+            var crash = Read("src/AuroraCore/Services/GameLauncher.cs").Replace("\r\n", "\n");
+            Assert(crash.Contains("RegexOptions.Compiled") && crash.Contains("r.Compiled.IsMatch(text)"),
+                "崩溃规则正则必须预编译并复用");
+            var job = Read("src/AuroraCore/Services/DownloadJob.cs").Replace("\r\n", "\n");
+            Assert(job.Contains("\"更新\" => \"\\uE777\""), "更新任务要有专属字形");
+            Assert(job.Contains("public void SetStageText(string text, string? stageKey = null)"),
+                "SetStageText 必须支持 stage key 供看门狗判定");
         });
 
         Console.WriteLine($"\n=== Result: {_passed} passed, {_failed} failed, {_skipped} skipped ===");        Environment.Exit(_failed == 0 ? 0 : 1);

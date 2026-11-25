@@ -33,3 +33,4 @@
 | [ADR-0025](ADR-0025-launch-feedback-and-resume-routes.md) | 启动拦截可见性 + 恢复下载线路归一（未登录也补齐、旧 BMCLAPI 域名可反解、client jar 路径映射） | 已采纳（含防线测试） |
 | [ADR-0026](ADR-0026-layout-progress-and-code-audit.md) | 布局/进度诚实与全代码审查（最大化贴靠、空任务 0%、单文件字节进度、任务槽、清单校验、持久化与主题） | 已采纳（含防线测试） |
 | [ADR-0027](ADR-0027-maximize-work-area.md) | 最大化窗口贴靠工作区（WM_GETMINMAXINFO 钩子 + 显示器 rcWork，任务栏不再被遮挡；赋值 Left/Top/Width/Height 无效） | 已采纳（含防线测试） |
+| [ADR-0028](ADR-0028-audit-report-verification.md) | 彻查报告核验与修复（zip-slip 共用闸门、更新哈希 fail-closed、告警清零、单文件看门狗、直连兜底、Dispatch 屏障、退出释放） | 已采纳（含防线测试） |

@@ -1,6 +1,7 @@
 ﻿using System.Windows;
 using AuroraCore;
 using AuroraCore.Services;
+using AuroraCore.Utils;
 using AuroraLauncher.Desktop.Services;
 using AuroraLauncher.Desktop.Views;
 
@@ -29,8 +30,18 @@ public partial class App : Application
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             _ = Task.Run(async () =>
             {
-                await UninstallService.RunCleanupHelperAsync(cleanupManifest).ConfigureAwait(false);
-                Environment.Exit(0);
+                // Round-106 (L9): log any helper failure before exiting so a
+                // leftover EXE / registry entry can be diagnosed; Exit must run
+                // even on failure or this headless process hangs forever.
+                try
+                {
+                    await UninstallService.RunCleanupHelperAsync(cleanupManifest).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    try { Logger.Instance.Error("Uninstall", "清理助手异常: " + ex.Message); } catch { }
+                }
+                finally { Environment.Exit(0); }
             });
             return;
         }

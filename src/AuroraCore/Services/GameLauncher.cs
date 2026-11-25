@@ -154,7 +154,14 @@ public static class CrashAnalyzer
 {
     /// <summary>One triage rule, projected from the resolution engine's table
     /// so the card and the log line can never disagree.</summary>
-    public sealed record CrashRule(string Pattern, string Title, string Suggestion);
+    public sealed record CrashRule(string Pattern, string Title, string Suggestion)
+    {
+        // Round-106 (L7): compile once instead of recompiling every pattern on
+        // every crash diagnosis (a modpack log can be hundreds of lines).
+        public System.Text.RegularExpressions.Regex Compiled { get; } =
+            new(Pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase |
+                         System.Text.RegularExpressions.RegexOptions.Compiled);
+    }
 
     private static readonly CrashRule[] Rules = CrashResolutionEngine.LegacyRules
         .Select(r => new CrashRule(r.Pattern, r.Title, r.Suggestion))
@@ -177,8 +184,7 @@ public static class CrashAnalyzer
     {
         var text = string.Join("\n", lines);
         var causes = Rules
-            .Where(r => System.Text.RegularExpressions.Regex.IsMatch(text, r.Pattern,
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            .Where(r => r.Compiled.IsMatch(text))
             .Select(r => new CrashFinding(r.Title, r.Suggestion))
             .ToList();
         return new CrashReport(exitCode, instanceName, causes);
@@ -189,8 +195,7 @@ public static class CrashAnalyzer
         var text = string.Join("\n", lines);
         foreach (var r in Rules)
         {
-            if (System.Text.RegularExpressions.Regex.IsMatch(text, r.Pattern,
-                    System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            if (r.Compiled.IsMatch(text))
                 return $"{r.Title}：{r.Suggestion}";
         }
         return null;

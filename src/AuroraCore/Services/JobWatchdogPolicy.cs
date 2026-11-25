@@ -26,17 +26,25 @@ public static class JobWatchdogPolicy
         // installer jar that simply had no progress callback at the time.
         if (state == JobState.Preparing && string.IsNullOrWhiteSpace(stageKey))
             return PreparingTimeoutSeconds;
-        return string.Equals(stageKey, "installer-download", StringComparison.OrdinalIgnoreCase)
+        return IsSingleFileDownload(stageKey)
             ? InstallerDownloadTimeoutSeconds
             : ActiveTimeoutSeconds;
     }
+
+    /// <summary>Round-106: a Java JDK / launcher-update package is ONE large
+    /// file with no completion counter. Treat it like the installer jar: 90 s
+    /// quiet timeout, never the "no NEW file for 2 minutes" rule.</summary>
+    public static bool IsSingleFileDownload(string? stageKey)
+        => string.Equals(stageKey, "installer-download", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(stageKey, "java-download", StringComparison.OrdinalIgnoreCase) ||
+           string.Equals(stageKey, "update-download", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Round-98: the 2-minute "no NEW file completed" rule applies to
     /// multi-file batches. An installer jar is ONE file and the installer JVM
     /// owns its own downloads — there is no file counter to advance there, so
     /// only the byte-progress (quiet) watchdog applies in those stages.</summary>
     public static bool ShouldUseFileStall(string? stageKey)
-        => !string.Equals(stageKey, "installer-download", StringComparison.OrdinalIgnoreCase) &&
+        => !IsSingleFileDownload(stageKey) &&
            !string.Equals(stageKey, InstallerRunStage, StringComparison.OrdinalIgnoreCase);
 
     private const string InstallerRunStage = "installer-run";

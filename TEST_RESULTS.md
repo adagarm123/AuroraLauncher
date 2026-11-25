@@ -1,7 +1,7 @@
 # 自测结论（AuroraSelfTest）
 
-> 更新于 2026-11-25（第 105 轮）。
-> **上次全绿：2026-11-25 —— Unit 180/180（离线）、All 187/187（含网络集成）。**
+> 更新于 2026-11-25（第 106 轮）。
+> **上次全绿：2026-11-25 —— Unit 182/182（离线）、All 189/189（含网络集成）。**
 > 运行命令：`dotnet run --project tests/AuroraSelfTest -c Debug [-- --unit|--integration|--all]`
 > 一键脚本：`powershell -File scripts/run-tests.ps1 [-Full]`（CI 见 `.github/workflows/selftest.yml`）
 > 测试分层：**unit（离线，CI 必跑）/ integration（联网，CI 定时跑）/ all**。

@@ -166,6 +166,7 @@ public sealed class DownloadJob : INotifyPropertyChanged
         "模组" => "\uE8F1",
         "加载器" => "\uE90F",
         "Java" => "\uE8B8",
+        "更新" => "\uE777",
         _ => "\uE90F"
     };
 
@@ -284,8 +285,9 @@ public sealed class DownloadJob : INotifyPropertyChanged
 
     /// <summary>Stage text from the installer's human-readable callback, used
     /// when there is no flow chart (single-step jobs like one mod).</summary>
-    public void SetStageText(string text)
+    public void SetStageText(string text, string? stageKey = null)
     {
+        if (!string.IsNullOrWhiteSpace(stageKey)) CurrentStageKey = stageKey;
         if (string.IsNullOrWhiteSpace(text)) return;
         _stageText = text.Trim();
         Touch();

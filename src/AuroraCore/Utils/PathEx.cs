@@ -4,6 +4,20 @@ public static class PathEx
 {
     public static string Combine(params string[] parts) => Path.Combine(parts);
 
+    /// <summary>Round-106 (M1): single zip-entry path guard shared by EVERY
+    /// extraction path (natives, Java packages, mrpacks). Rejects absolute
+    /// paths, drive letters, parent traversal and NTFS alternate data streams
+    /// before the entry is combined with the destination directory.</summary>
+    public static bool IsSafeEntryPath(string? fullName)
+    {
+        if (string.IsNullOrWhiteSpace(fullName)) return false;
+        var normalized = fullName.Replace('\\', '/');
+        if (normalized[0] == '/') return false;
+        if (normalized.Contains("..", StringComparison.Ordinal)) return false;
+        if (normalized.Contains(':', StringComparison.Ordinal)) return false;
+        return !Path.IsPathRooted(fullName);
+    }
+
     public static void EnsureDirectory(string dir)
     {
         if (!Directory.Exists(dir))

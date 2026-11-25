@@ -1,3 +1,4 @@
+using System.Buffers;
 using AuroraCore.Utils;
 
 namespace AuroraCore.Download;
@@ -246,6 +247,11 @@ public sealed class DownloadEngine
 
         const int maxAttempts = 5;
         var switchedRoute = false;
+        // Round-106 (M4): metadata requests already hedge proxy/direct, but
+        // byte downloads always used the primary client. On the first failure
+        // try the direct (proxy-bypassing) client too — orthogonal to the host
+        // switch below: a dead proxy is a different fault from a dead host.
+        var useDirectClient = false;
         for (int attempt = 1; attempt <= maxAttempts; attempt++)
         {
             // Per-attempt IDLE timeout: if no bytes arrive for 25s (stalled
@@ -260,7 +266,8 @@ public sealed class DownloadEngine
                 bool resume = startOffset > 0;
                 if (resume) req.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(startOffset, null);
 
-                using var resp = await HttpClientFactory.Instance.Client.SendAsync(req,
+                var http = useDirectClient ? HttpClientFactory.Instance.DirectClient : HttpClientFactory.Instance.Client;
+                using var resp = await http.SendAsync(req,
                     HttpCompletionOption.ResponseHeadersRead, attemptCts.Token).ConfigureAwait(false);
 
                 if ((int)resp.StatusCode == 429)
@@ -313,14 +320,20 @@ public sealed class DownloadEngine
                 using (var outStream = new FileStream(part, append ? FileMode.Append : FileMode.Create, FileAccess.Write, FileShare.Read, 81920, true))
                 {
                     await using var inStream = await resp.Content.ReadAsStreamAsync(attemptCts.Token).ConfigureAwait(false);
-                    var buffer = new byte[81920];
-                    int read;
-                    while ((read = await inStream.ReadAsync(buffer, attemptCts.Token).ConfigureAwait(false)) > 0)
+                    // Round-106 (L6): rent the 80 KB copy buffer instead of
+                    // allocating one per attempt — large mod batches churn GC.
+                    var buffer = ArrayPool<byte>.Shared.Rent(81920);
+                    try
                     {
-                        await outStream.WriteAsync(buffer.AsMemory(0, read), attemptCts.Token).ConfigureAwait(false);
-                        onBytes(read);
-                        idleCts.CancelAfter(TimeSpan.FromSeconds(25)); // reset idle window
+                        int read;
+                        while ((read = await inStream.ReadAsync(buffer.AsMemory(0, 81920), attemptCts.Token).ConfigureAwait(false)) > 0)
+                        {
+                            await outStream.WriteAsync(buffer.AsMemory(0, read), attemptCts.Token).ConfigureAwait(false);
+                            onBytes(read);
+                            idleCts.CancelAfter(TimeSpan.FromSeconds(25)); // reset idle window
+                        }
                     }
+                    finally { ArrayPool<byte>.Shared.Return(buffer); }
                     await outStream.FlushAsync(attemptCts.Token).ConfigureAwait(false);
                 } // outStream is closed here so the file can be read/renamed.
 
@@ -362,6 +375,17 @@ public sealed class DownloadEngine
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex) when (attempt < maxAttempts)
             {
+                // Round-106 (M4): a failed request over the proxy-backed client
+                // is retried once over the direct client before any host switch.
+                if (!useDirectClient)
+                {
+                    useDirectClient = true;
+                    _log.Warn("Download",
+                        $"主线路失败，改用直连重试 {entry.DisplayName ?? entry.Url}: {ex.Message}");
+                    onStatus?.Invoke($"直连重试：{entry.DisplayName ?? entry.Url}");
+                    if (File.Exists(part)) existing = new FileInfo(part).Length;
+                    continue; // same attempt budget, bypass the proxy this time
+                }
                 // Round-85: Auto mode picked the faster host once; if that host
                 // dies mid-download (DNS blip, RST, VPN came down), the other
                 // route is one assignment away. Forced policies only fall back

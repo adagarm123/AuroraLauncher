@@ -385,6 +385,13 @@ public sealed class GameInstaller
                 foreach (var entry in zip.Entries)
                 {
                     if (string.IsNullOrEmpty(entry.Name) && entry.FullName.EndsWith("/")) continue;
+                    // Round-106 (M1): loader jars may come from a mirror. A
+                    // damaged/poisoned entry must never escape nativesDir.
+                    if (!PathEx.IsSafeEntryPath(entry.FullName))
+                    {
+                        _log.Warn("Install", $"跳过不安全的 natives 条目：{entry.FullName}");
+                        continue;
+                    }
                     if (excludes.Any(ex => entry.FullName.StartsWith(ex, StringComparison.OrdinalIgnoreCase))) continue;
                     if (entry.FullName.Equals("META-INF/", StringComparison.OrdinalIgnoreCase)) continue;
                     var dest = Path.Combine(nativesDir, entry.FullName);
