@@ -115,7 +115,11 @@ jobs:
               Write-Host "CNB secrets not configured - skipping mirror (GitHub-only release)."
               exit 0
           }
-          powershell -ExecutionPolicy Bypass -File scripts/publish-to-cnb.ps1 -Tag "${{ github.ref_name }}"
+          Write-Host "Mirroring to CNB repo: $env:CNB_REPO, tag: ${{ github.ref_name }}"
+          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
+              -NoProfile -ExecutionPolicy Bypass -File scripts/publish-to-cnb.ps1 `
+              -Tag "${{ github.ref_name }}"
+          if ($LASTEXITCODE -ne 0) { throw "CNB mirror failed with exit $LASTEXITCODE" }
 
       - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3

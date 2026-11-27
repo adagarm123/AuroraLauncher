@@ -6,6 +6,7 @@ param(
     [Parameter(Mandatory = $true)][string]$Tag
 )
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"   # keep CI logs readable during 65 MB PUT
 $root = Split-Path -Parent $PSScriptRoot
 $repo = $env:CNB_REPO
 $token = $env:CNB_TOKEN
@@ -45,6 +46,9 @@ else {
         draft = $false
         prerelease = $false
         make_latest = "true"
+        # The GitHub tag is NOT mirrored by cnb-init-from; CNB creates it from
+        # this commitish. Without it the API returns 400 for a missing tag.
+        target_commitish = "main"
     }
     if ($created.__error) { throw "Failed to create CNB release: $($created.__message)" }
     $releaseId = $created.id
@@ -66,7 +70,7 @@ foreach ($name in $assetNames) {
     }
     if ($ticket.__error) { throw "Failed to get upload URL for $name`: $($ticket.__message)" }
 
-    # Pre-signed PUT: no bearer header — the URL itself carries the signature.
+    # Pre-signed PUT: no bearer header - the URL itself carries the signature.
     try {
         Invoke-RestMethod -Method PUT -Uri $ticket.upload_url -ContentType "application/octet-stream" `
             -InFile $path -TimeoutSec 300 | Out-Null
