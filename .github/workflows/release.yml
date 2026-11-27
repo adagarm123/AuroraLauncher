@@ -17,6 +17,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # round-108: full refs needed to mirror the tag to CNB
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -134,10 +136,13 @@ jobs:
               exit 0
           }
           $url = "https://cnb:$env:CNB_TOKEN@cnb.cool/$env:CNB_REPO.git"
+          Write-Host "HEAD: $(git rev-parse HEAD); tag ref: ${{ github.ref_name }}"
           # Force the tag: CNB auto-creates it from Release, pointing at a
           # different commit than GitHub's annotated tag.
           git push --force "$url" "HEAD:refs/heads/main"
-          git push --force "$url" "refs/tags/${{ github.ref_name }}:refs/tags/${{ github.ref_name }}"
+          if ($LASTEXITCODE -ne 0) { throw "CNB main push failed ($LASTEXITCODE)" }
+          git push --force "$url" "HEAD:refs/tags/${{ github.ref_name }}"
+          if ($LASTEXITCODE -ne 0) { throw "CNB tag push failed ($LASTEXITCODE)" }
           Write-Host "Git history + tag synced to CNB."
 
       - name: Upload Pages Artifact
