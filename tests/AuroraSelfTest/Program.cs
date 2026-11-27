@@ -6325,6 +6325,52 @@ internal static class Program
                 "SetStageText 必须支持 stage key 供看门狗判定");
         });
 
+        Check("第 108 轮：CNB 主源 + GitHub 签名兜底（双源更新）", () =>
+        {
+            using var rsa = System.Security.Cryptography.RSA.Create(2048);
+            var pub = rsa.ToXmlString(false);
+            string Sign(string s) => Convert.ToBase64String(rsa.SignData(
+                System.Text.Encoding.UTF8.GetBytes(s),
+                System.Security.Cryptography.HashAlgorithmName.SHA256,
+                System.Security.Cryptography.RSASignaturePadding.Pkcs1));
+            var m = new UpdateManifest
+            {
+                Round = 108, Version = "0.108.0",
+                Url = "https://cnb.cool/owner/AuroraLauncher/-/releases/download/v1.12.22/AuroraLauncher.exe",
+                FallbackUrl = "https://github.com/owner/AuroraLauncher/releases/download/v1.12.22/AuroraLauncher.exe",
+                Sha256 = new string('A', 64), Size = 65_000_000,
+                Signature = "x", FallbackSignature = ""
+            };
+            m.Signature = Sign(m.SignedPayload);
+            m.FallbackSignature = Sign(m.FallbackSignedPayload);
+            Assert(UpdateService.VerifySignature(m, pub), "主清单签名必须验证通过");
+            Assert(UpdateService.VerifyFallbackSignature(m, pub), "备用源签名必须验证通过");
+            Assert(!m.SignedPayload.Contains(m.FallbackUrl),
+                "FallbackUrl 不得进入 SignedPayload（旧客户端兼容）");
+            var tampered = new UpdateManifest
+            {
+                Round = m.Round, Url = m.Url, Sha256 = m.Sha256, Size = m.Size,
+                FallbackUrl = "https://evil.test/AuroraLauncher.exe",
+                FallbackSignature = m.FallbackSignature
+            };
+            Assert(!UpdateService.VerifyFallbackSignature(tampered, pub),
+                "篡改备用源地址必须验签失败");
+            Assert(UpdateService.VerifyFallbackSignature(new UpdateManifest(), pub),
+                "没有备用源的清单视为合法（向后兼容）");
+
+            string Read(string p) => File.ReadAllText(Path.Combine(FindSourceRoot()!, p));
+            var yaml = Read(".github/workflows/release.yml").Replace("\r\n", "\n");
+            Assert(yaml.Contains("Mirror assets to CNB Release") &&
+                   yaml.Contains("scripts/publish-to-cnb.ps1"),
+                "CI 必须把资产镜像到 CNB");
+            Assert(yaml.Contains("-FallbackUrl") && yaml.Contains("cnb.cool"),
+                "签名时主源必须是 CNB、备用源必须是 GitHub");
+            var mirror = Read("scripts/publish-to-cnb.ps1").Replace("\r\n", "\n");
+            Assert(mirror.Contains("asset-upload-url") && mirror.Contains("verify_url") &&
+                   mirror.Contains("overwrite = $true") && mirror.Contains("CNB_TOKEN"),
+                "CNB 镜像脚本必须走官方上传流程且可重复执行");
+        });
+
         Console.WriteLine($"\n=== Result: {_passed} passed, {_failed} failed, {_skipped} skipped ===");        Environment.Exit(_failed == 0 ? 0 : 1);
     }
 }

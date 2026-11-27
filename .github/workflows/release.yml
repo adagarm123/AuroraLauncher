@@ -74,9 +74,16 @@ jobs:
       - name: Generate signed latest.json
         env:
           RSA_PRIVATE_KEY: ${{ secrets.RSA_PRIVATE_KEY }}
+          CNB_REPO: ${{ secrets.CNB_REPO }}
         run: |
-          $DownloadUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AuroraLauncher.exe"
-          powershell -ExecutionPolicy Bypass -File scripts/sign-release.ps1 -DownloadUrl $DownloadUrl
+          # Round-108: CNB is the primary (fast in CN); GitHub is the signed
+          # fallback. Both hosts serve byte-identical assets from this build.
+          $CnbUrl = "https://cnb.cool/$env:CNB_REPO/-/releases/download/${{ github.ref_name }}/AuroraLauncher.exe"
+          $GitHubUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AuroraLauncher.exe"
+          $extra = ""
+          if ($env:CNB_REPO) { $extra = "-FallbackUrl $GitHubUrl" }
+          else { $CnbUrl = $GitHubUrl }   # no CNB configured: GitHub-only, as before
+          powershell -ExecutionPolicy Bypass -File scripts/sign-release.ps1 -DownloadUrl $CnbUrl $extra
           if (-not (Test-Path "publish/latest.json")) {
               Write-Error "Error: latest.json not generated"
               exit 1
@@ -92,6 +99,20 @@ jobs:
             publish/AuroraLauncher.patch
             publish/build-info.txt
             publish/latest.json
+
+      # Round-108: mirror the same four assets to CNB (cnb.cool) so Chinese
+      # users get the primary download from a domestic host; the signed
+      # fallbackUrl in latest.json keeps GitHub as a reliability hedge.
+      - name: Mirror assets to CNB Release
+        env:
+          CNB_REPO: ${{ secrets.CNB_REPO }}
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: |
+          if (-not $env:CNB_REPO -or -not $env:CNB_TOKEN) {
+              Write-Host "CNB secrets not configured - skipping mirror (GitHub-only release)."
+              exit 0
+          }
+          powershell -ExecutionPolicy Bypass -File scripts/publish-to-cnb.ps1 -Tag "${{ github.ref_name }}"
 
       - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3

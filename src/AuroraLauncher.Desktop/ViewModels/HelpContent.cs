@@ -18,12 +18,20 @@ public static class HelpContent
     /// <summary>Round number of the newest entry in <see cref="Changelog"/> —
     /// bump together with the changelog entry; drives the one-time "已更新"
     /// startup toast (dismissed permanently once the user opens the page).</summary>
-    public const int LatestChangelogRound = 107;
+    public const int LatestChangelogRound = 108;
     /// <summary>更新日志（说人话版本：无技术名词、用户视角）——独立页面
     /// 「更新日志」使用；模板见 docs/release-notes-template.md。
     /// 每轮发布时在此置顶新增一条。</summary>
     public static IEnumerable<HelpTopicVM> Changelog() => new[]
     {
+        new HelpTopicVM
+        {
+            Category = "更新日志", Glyph = "\uE777", Title = "【第 108 轮更新】更新改走国内高速源，GitHub 作为备用",
+            Summary = "下载更快更稳，主源不通会自动切备用源",
+            Body = "1) 启动器更新包现在优先从腾讯 CNB 下载（国内访问快），GitHub 作为备用源保留。两个源的下载文件完全一样，都经过同一个数字签名校验。\n\n" +
+                   "2) 如果国内源下载失败或文件校验不通过，启动器会自动改用 GitHub 备用源重试一次；备用源地址同样有独立签名保护，不会被中间人篡改。\n\n" +
+                   "3) 更新清单本身仍在原来的固定地址，所以已经装了旧版本的用户也能无缝升级到这版，之后再享受新线路。"
+        },
         new HelpTopicVM
         {
             Category = "更新日志", Glyph = "\uE777", Title = "【第 107 轮更新】相邻版本升级改用增量补丁，不再每次重下完整包",

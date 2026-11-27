@@ -1,6 +1,6 @@
 # 可交互 UI 实际功能全量检验报告（INTERACTIVE UI AUDIT）
 
-> 更新于 2026-11-25（第 107 轮复核；扫描规则于第 46 轮升级，自第 40-44 轮「按钮全量审计」演变而来）。
+> 更新于 2026-11-27（第 108 轮复核；扫描规则于第 46 轮升级，自第 40-44 轮「按钮全量审计」演变而来）。
 > 范围：**软件内所有可交互 UI 元素的实际功能反馈路径**——不只按钮，
 > 而是任何携带交互属性（`Command` 绑定 / `Click` / `Checked` / `Unchecked` /
 > `SelectionChanged` / `MouseDoubleClick` / `KeyDown` 及 Preview 变体）的元素。

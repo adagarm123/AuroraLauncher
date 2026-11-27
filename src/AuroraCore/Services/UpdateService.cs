@@ -17,6 +17,10 @@ public sealed class UpdateManifest
     public string ReleaseTime { get; set; } = "";
     public string Notes { get; set; } = "";
     public string Url { get; set; } = "";
+    // Round-108: independently signed backup host. The primary Url is CNB
+    // (fast in CN); this stays the GitHub Release URL as a reliability hedge.
+    public string FallbackUrl { get; set; } = "";
+    public string FallbackSignature { get; set; } = "";
     public string Sha256 { get; set; } = "";
     public long Size { get; set; }
     public string Signature { get; set; } = "";
@@ -44,6 +48,10 @@ public sealed class UpdateManifest
     /// guarantee still comes from the produced EXE having to match
     /// <see cref="Sha256"/> — this signature only pins the patch routing.</summary>
     public string PatchSignedPayload => $"{Round}|{PatchUrl}|{PatchSha256}|{PatchSize}";
+
+    /// <summary>Round-108: separate signature for the backup host so a
+    /// tampered feed cannot redirect the fallback to an attacker's server.</summary>
+    public string FallbackSignedPayload => $"{Round}|{FallbackUrl}|{Sha256}|{Size}";
 }
 
 /// <summary>
@@ -126,6 +134,26 @@ public sealed class UpdateService
             rsa.FromXmlString(keyXml);
             return rsa.VerifyData(Encoding.UTF8.GetBytes(manifest.PatchSignedPayload),
                 Convert.FromBase64String(manifest.PatchSignature),
+                HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        }
+        catch { return false; }
+    }
+
+    /// <summary>Round-108: the backup URL is optional; a manifest without one
+    /// needs no extra check, but a claimed fallback with a bad signature is
+    /// rejected so it can never be used as a download target.</summary>
+    public static bool VerifyFallbackSignature(UpdateManifest manifest, string? publicKeyXmlOverride = null)
+    {
+        if (string.IsNullOrWhiteSpace(manifest.FallbackUrl)) return true; // nothing claimed
+        if (string.IsNullOrWhiteSpace(manifest.FallbackSignature)) return false;
+        var keyXml = publicKeyXmlOverride ?? PublicKeyXml;
+        if (string.IsNullOrWhiteSpace(keyXml)) return false;
+        try
+        {
+            using var rsa = RSA.Create();
+            rsa.FromXmlString(keyXml);
+            return rsa.VerifyData(Encoding.UTF8.GetBytes(manifest.FallbackSignedPayload),
+                Convert.FromBase64String(manifest.FallbackSignature),
                 HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         }
         catch { return false; }
@@ -275,24 +303,58 @@ public sealed class UpdateService
             return;
         }
 
+        // Round-108: primary host is CNB (fast in CN); GitHub is the signed
+        // backup. A dead/slow primary or a corrupt download transparently
+        // retries once from the fallback before giving up.
         LastDownloadMode = $"完整更新（{FormatMb(manifest.Size)}）";
-        await _engine.DownloadAsync(new[]
+        var fullOk = await TryDownloadFullAsync(manifest, manifest.Url, progress, ct).ConfigureAwait(false);
+        if (!fullOk && !string.IsNullOrWhiteSpace(manifest.FallbackUrl) &&
+            VerifyFallbackSignature(manifest))
         {
-            new DownloadEntry
-            {
-                Url = manifest.Url,
-                Destination = StagingTempPath,
-                ExpectedSize = manifest.Size,
-                Required = true,
-                DisplayName = "启动器更新包"
-            }
-        }, progress, ct).ConfigureAwait(false);
+            _log.Warn("Update", $"主更新源下载失败，切换到备用源: {manifest.FallbackUrl}");
+            LastDownloadMode = $"备用源更新（{FormatMb(manifest.Size)}）";
+            fullOk = await TryDownloadFullAsync(manifest, manifest.FallbackUrl, progress, ct).ConfigureAwait(false);
+        }
+        if (!fullOk)
+            throw new IOException("更新包下载失败（主源与备用源均不可用，或校验不通过）。");
 
-        // Round-106: stream the ~63 MB package instead of buffering it whole
-        // into memory just to hash it (the peak mattered on low-RAM machines).
+        CommitStaged();
+        WriteStagedInfo(manifest);
+    }
+
+    /// <summary>Round-108: downloads the full package from one host and checks
+    /// its SHA-256. Returns false (instead of throwing) so the caller can try
+    /// the backup host. A hash mismatch is a hard failure for BOTH hosts, so
+    /// a poisoned primary can never silently fall through to an unchecked one.</summary>
+    private async Task<bool> TryDownloadFullAsync(UpdateManifest manifest, string url,
+        Action<DownloadProgress>? progress, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return false;
+        TryDelete(StagingTempPath);
+        try
+        {
+            await _engine.DownloadAsync(new[]
+            {
+                new DownloadEntry
+                {
+                    Url = url,
+                    Destination = StagingTempPath,
+                    ExpectedSize = manifest.Size,
+                    Required = true,
+                    DisplayName = "启动器更新包"
+                }
+            }, progress, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            _log.Warn("Update", $"Download from {url} failed: {ex.Message}");
+            TryDelete(StagingTempPath);
+            return false;
+        }
+        if (ct.IsCancellationRequested) throw new OperationCanceledException(ct);
+
+        // Round-106: stream-hash instead of buffering ~63 MB in memory.
         var actual = await Task.Run(() => Sha256OfFile(StagingTempPath), ct).ConfigureAwait(false);
-        // Round-106 (L1): fail closed — a signed manifest without a hash is a
-        // broken release artifact, not a reason to skip the last integrity gate.
         if (string.IsNullOrWhiteSpace(manifest.Sha256))
         {
             TryDelete(StagingTempPath);
@@ -301,11 +363,10 @@ public sealed class UpdateService
         if (!string.Equals(actual, manifest.Sha256.Trim().Replace("-", ""), StringComparison.OrdinalIgnoreCase))
         {
             TryDelete(StagingTempPath);
-            throw new IOException("更新包校验失败（SHA-256 不匹配），已删除本次下载文件。");
+            _log.Warn("Update", $"SHA-256 mismatch from {url} ({actual} != {manifest.Sha256})");
+            return false;
         }
-
-        CommitStaged();
-        WriteStagedInfo(manifest);
+        return true;
     }
 
     /// <summary>Downloads the patch, merges it with the RUNNING exe and only

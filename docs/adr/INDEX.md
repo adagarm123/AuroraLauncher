@@ -35,3 +35,4 @@
 | [ADR-0027](ADR-0027-maximize-work-area.md) | 最大化窗口贴靠工作区（WM_GETMINMAXINFO 钩子 + 显示器 rcWork，任务栏不再被遮挡；赋值 Left/Top/Width/Height 无效） | 已采纳（含防线测试） |
 | [ADR-0028](ADR-0028-audit-report-verification.md) | 彻查报告核验与修复（zip-slip 共用闸门、更新哈希 fail-closed、告警清零、单文件看门狗、直连兜底、Dispatch 屏障、退出释放） | 已采纳（含防线测试） |
 | [ADR-0029](ADR-0029-ci-delta-patch.md) | CI 增量补丁打通（干净 checkout 下拉取上一版 EXE 与 round 标记，清单带签名 patchUrl，相邻版走补丁） | 已采纳（含防线测试） |
+| [ADR-0030](ADR-0030-cnb-primary-github-fallback.md) | CNB 主源 + GitHub 签名兜底（双源清单、官方 API 镜像发布、备用源验签后切换、SignedPayload 兼容） | 已采纳（含防线测试） |

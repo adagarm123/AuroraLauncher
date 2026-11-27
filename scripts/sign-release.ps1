@@ -6,7 +6,8 @@
 # to your feed host (any static HTTPS host; see docs\auto-update.md).
 
 param(
-    [Parameter(Mandatory = $true)][string]$DownloadUrl,
+    [Parameter(Mandatory = $true)][string]$DownloadUrl,   # primary (CNB in CI, GitHub locally)
+    [string]$FallbackUrl = "",             # round-108: backup host (GitHub when primary is CNB)
     [int]$Round = 0,                       # 0 = read from src\AuroraCore\BuildInfo.cs
     [string]$Version = "",                 # "" = derived from the round
     [string]$Notes = "",
@@ -46,6 +47,18 @@ $sig = [Convert]::ToBase64String($rsa.SignData([Text.Encoding]::UTF8.GetBytes($p
     [System.Security.Cryptography.HashAlgorithmName]::SHA256,
     [System.Security.Cryptography.RSASignaturePadding]::Pkcs1))
 
+# ---- round-108: independently signed backup download URL ----
+# SignedPayload must stay byte-identical for old clients; the fallback route
+# gets its own signature over round|url|sha256|size, same pattern as patchSig.
+$fallbackSig = ""
+if ($FallbackUrl) {
+    $fbPayload = "$Round|$FallbackUrl|$sha|$($exeItem.Length)"
+    $fallbackSig = [Convert]::ToBase64String($rsa.SignData([Text.Encoding]::UTF8.GetBytes($fbPayload),
+        [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+        [System.Security.Cryptography.RSASignaturePadding]::Pkcs1))
+    Write-Host "Fallback URL signed: $FallbackUrl"
+}
+
 # ---- round-74: optional delta patch published next to the EXE ----
 # publish.ps1 writes patch-info.txt only when a patch against the previous build
 # was small enough to be worth shipping; its absence simply means "full package".
@@ -82,6 +95,10 @@ $manifest = [ordered]@{
     sha256      = $sha
     size        = $exeItem.Length
     signature   = $sig
+}
+if ($FallbackUrl) {
+    $manifest["fallbackUrl"] = $FallbackUrl
+    $manifest["fallbackSignature"] = $fallbackSig
 }
 if ($patchUrl) {
     $manifest["patchUrl"] = $patchUrl
