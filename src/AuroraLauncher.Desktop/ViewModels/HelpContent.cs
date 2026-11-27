@@ -18,12 +18,20 @@ public static class HelpContent
     /// <summary>Round number of the newest entry in <see cref="Changelog"/> —
     /// bump together with the changelog entry; drives the one-time "已更新"
     /// startup toast (dismissed permanently once the user opens the page).</summary>
-    public const int LatestChangelogRound = 108;
+    public const int LatestChangelogRound = 109;
     /// <summary>更新日志（说人话版本：无技术名词、用户视角）——独立页面
     /// 「更新日志」使用；模板见 docs/release-notes-template.md。
     /// 每轮发布时在此置顶新增一条。</summary>
     public static IEnumerable<HelpTopicVM> Changelog() => new[]
     {
+        new HelpTopicVM
+        {
+            Category = "更新日志", Glyph = "\uE777", Title = "【第 109 轮更新】下载失败会重试三次，界面如实显示进度状态",
+            Summary = "主源不通不会再秒切备用，你能看到每次重试",
+            Body = "1) 启动器更新包的主源（国内高速源）与备用源现在各有三次重试机会——偶尔的超时或网络抖动会自己恢复，不会动不动就换线路或放弃。\n\n" +
+                   "2) 下载窗口不再只显示百分比：正在重试第几次、是否切换到备用源、增量补丁是否从头重下，都会如实写出来。下载完成后「更新方式」也会注明用的是主源还是备用源。\n\n" +
+                   "3) 补充：国内源同样支持增量更新，只差一个版本时下载量通常只有几百 KB。"
+        },
         new HelpTopicVM
         {
             Category = "更新日志", Glyph = "\uE777", Title = "【第 108 轮更新】更新改走国内高速源，GitHub 作为备用",

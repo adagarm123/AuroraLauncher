@@ -6374,6 +6374,26 @@ internal static class Program
                 "CNB 镜像脚本必须走官方上传流程且可重复执行");
         });
 
+        Check("第 109 轮：主源重试三次 + UI 如实显示重试/切源状态", () =>
+        {
+            string Read(string p) => File.ReadAllText(Path.Combine(FindSourceRoot()!, p));
+            var engine = Read("src/AuroraCore/Download/DownloadEngine.cs").Replace("\r\n", "\n");
+            Assert(engine.Contains("public int MaxAttempts { get; set; }") &&
+                   engine.Contains("entry.MaxAttempts > 0 ? entry.MaxAttempts : 5"),
+                "下载引擎必须支持逐条目重试预算（默认仍 5）");
+            var upd = Read("src/AuroraCore/Services/UpdateService.cs").Replace("\r\n", "\n");
+            Assert(upd.Contains("const int hostAttempts = 3") &&
+                   upd.Contains("MaxAttempts = attempts") &&
+                   upd.Contains("主源 CNB") && upd.Contains("备用源 GitHub"),
+                "更新包主源/备用源各至少重试三次且带主机标签");
+            Assert(upd.Contains("MaxAttempts = 3") && upd.Contains("增量补丁："),
+                "增量补丁也要三次预算和如实标签");
+            var vm = Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.cs").Replace("\r\n", "\n");
+            Assert(vm.Contains("string.IsNullOrWhiteSpace(p.Message)") &&
+                   vm.Contains("p.Message}（{pct:0}%）"),
+                "下载界面必须显示引擎的重试/切源消息而不是只显示百分比");
+        });
+
         Console.WriteLine($"\n=== Result: {_passed} passed, {_failed} failed, {_skipped} skipped ===");        Environment.Exit(_failed == 0 ? 0 : 1);
     }
 }

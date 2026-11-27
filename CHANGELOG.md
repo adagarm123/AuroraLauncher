@@ -1,6 +1,6 @@
 # 更新日志（CHANGELOG）
 
-> 完整历史变更记录：**第 1–2 轮交付说明 + 第 3 轮至第 107 轮逐轮补充**（末轮始终为当前版本的前一轮）。
+> 完整历史变更记录：**第 1–2 轮交付说明 + 第 3 轮至第 108 轮逐轮补充**（末轮始终为当前版本的前一轮）。
 > 本文件由 `README.md` 的历史章节整体搬迁而来，正文保持原样（未改写、未删减）。
 >
 > - **最新一轮**始终放在 [README](README.md) 的「最新一轮的更新内容」章节。
@@ -2298,3 +2298,28 @@ BattleArmory TACZ  loader=Forge  resolved=(null)                      mods=0 →
 **仍需你实测**：从上一版（106）升级到本版，观察更新窗口是否显示「增量更新」字样、下载体积是否只有几百 KB 而非 65 MB；若你已是更早版本，则走完整包属正常。
 
 **配套**：`BuildInfo.CurrentRound` → 107、应用内更新日志置顶第 107 轮、第 106 轮归档进 CHANGELOG、新增 ADR-0029。
+
+## 更新补充（第 108 轮：CNB 成为主更新源，GitHub 做签名兜底）
+
+### 第 108 轮：CNB 成为主更新源，GitHub 做签名兜底（2026-11-27）
+
+**背景**：国内访问 GitHub Release 慢。腾讯 CNB（cnb.cool）的 Release 附件直链免登录长期有效（HMCL 生产在用，已实测），本轮把它设为主下载源。
+
+**改动**
+
+- **仓库与迁移**：在 CNB 建公开仓库 `AuroraLauncher-2026/AuroraLauncher`，用 `cnb-init-from` 从 GitHub 一次性迁入代码/提交/TAG。注意这只是一次性迁移，不是持续同步。
+- **CI 双源发布**：新增 `scripts/publish-to-cnb.ps1`，用 CNB 官方 OpenAPI（创建 Release → 取预签名 URL → PUT → verify 确认）把 EXE、补丁、build-info、latest.json 四个资产镜像到 CNB；重跑幂等（同名覆盖）。CI 里在 GitHub Release 上传后执行，缺 Secrets 时自动跳过。
+- **清单双 URL**：`url` = CNB 直链（主），`fallbackUrl` = GitHub 直链（兜底），`fallbackSignature` 独立签名（覆盖 `Round|FallbackUrl|Sha256|Size`），**不动 `SignedPayload`**，旧客户端完全兼容。
+- **客户端兜底**：完整包下载/校验失败时，只有备用源验签通过才切过去重试一次；两个源都失败才报错。主源下载失败不会让未校验文件混入。
+- **GitHub Secrets**：新增 `CNB_TOKEN`、`CNB_REPO`，均不进版本库。
+
+**验证**
+
+- `--unit` **184/184**、`--all` **191/191**（新增 1 条，机制防线 67→68）
+- CNB 镜像脚本本地实跑通过：4 个资产上传成功，直链免登录 200 可读
+- 新增防线：备用源签名正反例、SignedPayload 不含 fallback、workflow 双源接线、镜像脚本走官方流程
+- 文档轮动 / 三份基线 / ADR-0030 同步
+
+**仍需你实测**：在国内网络环境下检查更新，看是否走 CNB 且明显更快；断开 CNB 后应自动回退 GitHub。
+
+**配套**：`BuildInfo.CurrentRound` → 108、应用内更新日志置顶第 108 轮、第 107 轮归档进 CHANGELOG、新增 ADR-0030。

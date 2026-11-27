@@ -580,7 +580,12 @@ public partial class MainViewModel : ViewModelBase
                 var speed = p.SpeedBytesPerSec >= mb
                     ? $"{p.SpeedBytesPerSec / mb:0.0} MB/s"
                     : $"{p.SpeedBytesPerSec / 1024.0:0} KB/s";
-                UpdateStatusText = UpdateUiPolicy.DescribeProgress((int)pct, size, speed);
+                // Round-109: show the engine's retry/route/fallback messages
+                // (e.g. "主源 CNB：重试中 (2/3)") instead of hiding them behind
+                // a bare percentage — the user asked to be told the truth.
+                UpdateStatusText = string.IsNullOrWhiteSpace(p.Message)
+                    ? UpdateUiPolicy.DescribeProgress((int)pct, size, speed)
+                    : $"{p.Message}（{pct:0}%）";
                 Status = UpdateStatusText; // main status bar follows the download too
                 updateJob.Report(p);
             }), _updateCts.Token).ConfigureAwait(true);

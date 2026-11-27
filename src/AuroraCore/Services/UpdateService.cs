@@ -303,20 +303,24 @@ public sealed class UpdateService
             return;
         }
 
-        // Round-108: primary host is CNB (fast in CN); GitHub is the signed
-        // backup. A dead/slow primary or a corrupt download transparently
-        // retries once from the fallback before giving up.
-        LastDownloadMode = $"完整更新（{FormatMb(manifest.Size)}）";
-        var fullOk = await TryDownloadFullAsync(manifest, manifest.Url, progress, ct).ConfigureAwait(false);
+        // Round-108/109: CNB is primary (fast in CN), GitHub is the signed
+        // backup. Each host gets at least 3 attempts before we move on, and
+        // the UI is told which host/attempt is active instead of showing a
+        // bare percentage.
+        const int hostAttempts = 3;
+        LastDownloadMode = $"完整更新 · 主源（{FormatMb(manifest.Size)}）";
+        var fullOk = await TryDownloadFullAsync(manifest, manifest.Url, progress, ct,
+            "主源 CNB", hostAttempts).ConfigureAwait(false);
         if (!fullOk && !string.IsNullOrWhiteSpace(manifest.FallbackUrl) &&
             VerifyFallbackSignature(manifest))
         {
-            _log.Warn("Update", $"主更新源下载失败，切换到备用源: {manifest.FallbackUrl}");
-            LastDownloadMode = $"备用源更新（{FormatMb(manifest.Size)}）";
-            fullOk = await TryDownloadFullAsync(manifest, manifest.FallbackUrl, progress, ct).ConfigureAwait(false);
+            _log.Warn("Update", $"主源重试 {hostAttempts} 次仍失败，切换到备用源: {manifest.FallbackUrl}");
+            LastDownloadMode = $"完整更新 · 备用源 GitHub（{FormatMb(manifest.Size)}）";
+            fullOk = await TryDownloadFullAsync(manifest, manifest.FallbackUrl, progress, ct,
+                "备用源 GitHub", hostAttempts).ConfigureAwait(false);
         }
         if (!fullOk)
-            throw new IOException("更新包下载失败（主源与备用源均不可用，或校验不通过）。");
+            throw new IOException($"更新包下载失败（主源与备用源各重试 {hostAttempts} 次均不可用，或校验不通过）。");
 
         CommitStaged();
         WriteStagedInfo(manifest);
@@ -325,9 +329,11 @@ public sealed class UpdateService
     /// <summary>Round-108: downloads the full package from one host and checks
     /// its SHA-256. Returns false (instead of throwing) so the caller can try
     /// the backup host. A hash mismatch is a hard failure for BOTH hosts, so
-    /// a poisoned primary can never silently fall through to an unchecked one.</summary>
+    /// a poisoned primary can never silently fall through to an unchecked one.
+    /// Round-109: <paramref name="label"/> names the host in UI status lines;
+    /// <paramref name="attempts"/> is the per-host retry budget (3 for CNB).</summary>
     private async Task<bool> TryDownloadFullAsync(UpdateManifest manifest, string url,
-        Action<DownloadProgress>? progress, CancellationToken ct)
+        Action<DownloadProgress>? progress, CancellationToken ct, string label, int attempts)
     {
         if (string.IsNullOrWhiteSpace(url)) return false;
         TryDelete(StagingTempPath);
@@ -341,9 +347,18 @@ public sealed class UpdateService
                     Destination = StagingTempPath,
                     ExpectedSize = manifest.Size,
                     Required = true,
-                    DisplayName = "启动器更新包"
+                    DisplayName = $"启动器更新包（{label}）",
+                    MaxAttempts = attempts
                 }
-            }, progress, ct).ConfigureAwait(false);
+            }, p =>
+            {
+                // Engine retry/route messages must reach the UI verbatim —
+                // otherwise "正在下载 x%" hides that we are on attempt 3 of 3.
+                if (progress is null) return;
+                if (!string.IsNullOrWhiteSpace(p.Message))
+                    p.Message = $"{label}：{p.Message}";
+                progress(p);
+            }, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
@@ -382,6 +397,9 @@ public sealed class UpdateService
             TryDelete(patchPath);
             TryDelete(mergedPath);
 
+            // Round-109: same 3-attempt budget and honest host label as the
+            // full package; a failed patch then falls through to the full
+            // package (which has its own signed CNB->GitHub chain).
             await _engine.DownloadAsync(new[]
             {
                 new DownloadEntry
@@ -390,9 +408,16 @@ public sealed class UpdateService
                     Destination = patchPath,
                     ExpectedSize = manifest.PatchSize,
                     Required = true,
-                    DisplayName = "增量更新补丁"
+                    DisplayName = "增量更新补丁",
+                    MaxAttempts = 3
                 }
-            }, progress, ct).ConfigureAwait(false);
+            }, p =>
+            {
+                if (progress is null) return;
+                if (!string.IsNullOrWhiteSpace(p.Message))
+                    p.Message = $"增量补丁：{p.Message}";
+                progress(p);
+            }, ct).ConfigureAwait(false);
 
             var patchHash = await Task.Run(() => Sha256OfFile(patchPath), ct).ConfigureAwait(false);
             // Round-106 (L1): fail closed on a missing hash too — an unchecked

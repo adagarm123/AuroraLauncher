@@ -13,6 +13,10 @@ public class DownloadEntry
     public bool Required { get; set; } = true;
     public string? DisplayName { get; set; }
     public string? Category { get; set; }
+    /// <summary>Round-109: per-entry attempt budget. 0 = engine default (5).
+    /// Launcher updates set this to 3 so a dead CNB host is retried at least
+    /// three times before the signed GitHub fallback is tried.</summary>
+    public int MaxAttempts { get; set; }
 }
 
 /// <summary>Aggregated and per-file progress snapshot reported to the UI.</summary>
@@ -245,7 +249,7 @@ public sealed class DownloadEngine
                 existing = 0;
             }
 
-        const int maxAttempts = 5;
+        var maxAttempts = entry.MaxAttempts > 0 ? entry.MaxAttempts : 5;
         var switchedRoute = false;
         // Round-106 (M4): metadata requests already hedge proxy/direct, but
         // byte downloads always used the primary client. On the first failure
