@@ -121,6 +121,25 @@ jobs:
               -Tag "${{ github.ref_name }}"
           if ($LASTEXITCODE -ne 0) { throw "CNB mirror failed with exit $LASTEXITCODE" }
 
+      # Round-108: mirror the git history + tag too, so the CNB repo home page
+      # shows the same round as the Release assets. cnb-init-from only copies
+      # code once; without this step CNB stays stuck at the round it was seeded.
+      - name: Sync git history and tag to CNB
+        env:
+          CNB_REPO: ${{ secrets.CNB_REPO }}
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: |
+          if (-not $env:CNB_REPO -or -not $env:CNB_TOKEN) {
+              Write-Host "CNB secrets not configured - skipping git sync."
+              exit 0
+          }
+          $url = "https://cnb:$env:CNB_TOKEN@cnb.cool/$env:CNB_REPO.git"
+          # Force the tag: CNB auto-creates it from Release, pointing at a
+          # different commit than GitHub's annotated tag.
+          git push --force "$url" "HEAD:refs/heads/main"
+          git push --force "$url" "refs/tags/${{ github.ref_name }}:refs/tags/${{ github.ref_name }}"
+          Write-Host "Git history + tag synced to CNB."
+
       - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3
         with:

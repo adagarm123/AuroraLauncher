@@ -6363,6 +6363,9 @@ internal static class Program
             Assert(yaml.Contains("Mirror assets to CNB Release") &&
                    yaml.Contains("scripts/publish-to-cnb.ps1"),
                 "CI 必须把资产镜像到 CNB");
+            Assert(yaml.Contains("Sync git history and tag to CNB") &&
+                   yaml.Contains("refs/heads/main") && yaml.Contains("refs/tags/"),
+                "CI 必须同步 git 历史与 tag 到 CNB（否则仓库主页停留在旧轮次）");
             Assert(yaml.Contains("-FallbackUrl") && yaml.Contains("cnb.cool"),
                 "签名时主源必须是 CNB、备用源必须是 GitHub");
             var mirror = Read("scripts/publish-to-cnb.ps1").Replace("\r\n", "\n");
