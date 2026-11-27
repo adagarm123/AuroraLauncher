@@ -6394,6 +6394,34 @@ internal static class Program
                 "下载界面必须显示引擎的重试/切源消息而不是只显示百分比");
         });
 
+        Check("第 110 轮：网络诊断（CNB / GitHub / Mojang）与图形化条形", () =>
+        {
+            string Read(string p) => File.ReadAllText(Path.Combine(FindSourceRoot()!, p));
+            var probe = Read("src/AuroraCore/Utils/NetworkProbe.cs").Replace("\r\n", "\n");
+            Assert(probe.Contains("ProbeDiagnosticsAsync") && probe.Contains("CNB 更新源") &&
+                   probe.Contains("GitHub 更新源") && probe.Contains("Mojang 官方源"),
+                "必须提供三源并行诊断");
+            Assert(probe.Contains("NormalizeBars") && probe.Contains("BarWidth"),
+                "测速结果必须归一化成可直接绑定的条形宽度");
+            var bars = NetworkProbe.NormalizeBars(new[]
+            {
+                new NetworkProbe.HostDiagnostic("A", "a", true, 100),
+                new NetworkProbe.HostDiagnostic("B", "b", true, 400),
+                new NetworkProbe.HostDiagnostic("C", "c", false, null)
+            });
+            Assert(bars[0].BarPercent == 100 && bars[1].BarPercent == 25 && bars[2].BarPercent == 0,
+                "最快源满条、慢源按比例、不可达为零");
+            Assert(bars[0].BarWidth > bars[1].BarWidth && bars[1].BarWidth > bars[2].BarWidth,
+                "条形宽度必须可直接用于界面展示");
+            var vm = Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.cs").Replace("\r\n", "\n");
+            Assert(vm.Contains("NetworkDiagnoseCommand") && vm.Contains("HasNetworkDiagnostics"),
+                "设置页必须有可绑定的诊断命令与结果显示状态");
+            var xaml = Read("src/AuroraLauncher.Desktop/Views/SettingsView.xaml").Replace("\r\n", "\n");
+            Assert(xaml.Contains("NetworkDiagnoseCommand") && xaml.Contains("BarWidth") &&
+                   xaml.Contains("DisplayLatency"),
+                "设置页必须渲染诊断按钮与图形化结果");
+        });
+
         Console.WriteLine($"\n=== Result: {_passed} passed, {_failed} failed, {_skipped} skipped ===");        Environment.Exit(_failed == 0 ? 0 : 1);
     }
 }

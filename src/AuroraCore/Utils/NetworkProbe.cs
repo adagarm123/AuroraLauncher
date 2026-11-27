@@ -106,6 +106,94 @@ public static class NetworkProbe
         }
     }
 
+    /// <summary>Round-110: one row of the explicit network diagnostic shown in
+    /// Settings. Timing is a HEAD (or 1-byte GET) round trip — no file body is
+    /// ever downloaded just to measure a host.</summary>
+    public sealed record HostDiagnostic(string Name, string Host, bool Ok, long? Ms, string? Error = null)
+    {
+        public string DisplayLatency => Ok && Ms.HasValue ? $"{Ms.Value} ms" : "不可达";
+        /// <summary>Bar length in 0..100, relative to the slowest reachable host
+        /// in this run. Unreachable hosts get 0 so the bar stays honest.</summary>
+        public double BarPercent { get; private set; }
+        /// <summary>Ready-to-bind pixel width (max 240) — avoids a converter in XAML.</summary>
+        public double BarWidth => Math.Max(0, BarPercent) * 2.4;
+
+        public HostDiagnostic WithBar(double percent) => this with { BarPercent = percent };
+    }
+
+    /// <summary>Normalizes raw measurements to bar widths: the fastest host is
+    /// always 100% wide, others scale by fastest/slowest. Failures stay at 0.
+    /// Pure function so the UI rule can be unit-tested without network.</summary>
+    public static IReadOnlyList<HostDiagnostic> NormalizeBars(IEnumerable<HostDiagnostic> rows)
+    {
+        var list = rows.ToList();
+        var ok = list.Where(r => r.Ok && r.Ms.HasValue && r.Ms.Value > 0).Select(r => r.Ms!.Value).ToList();
+        if (ok.Count == 0) return list.Select(r => r.WithBar(0)).ToList();
+        var fastest = ok.Min();
+        return list.Select(r => !r.Ok || !r.Ms.HasValue || r.Ms.Value <= 0
+            ? r.WithBar(0)
+            : r.WithBar(Math.Clamp(100.0 * fastest / Math.Max(fastest, r.Ms.Value), 4, 100))).ToList();
+    }
+
+    /// <summary>Round-110: measures the three hosts that matter to this launcher
+    /// (CNB update mirror, GitHub fallback/release host, Mojang version manifest)
+    /// in parallel. Unlike <see cref="ProbeCachedAsync"/> this is an explicit
+    /// user-triggered diagnostic: it NEVER returns a cached result and never
+    /// changes the download route preference.</summary>
+    public static async Task<IReadOnlyList<HostDiagnostic>> ProbeDiagnosticsAsync(
+        CancellationToken ct = default, int timeoutSec = 5)
+    {
+        var cnbRepo = Environment.GetEnvironmentVariable("AURORA_CNB_REPO") ?? "AuroraLauncher-2026/AuroraLauncher";
+        var hosts = new (string Name, string Url)[]
+        {
+            ("CNB 更新源", $"https://cnb.cool/{cnbRepo}/-/releases"),
+            ("GitHub 更新源", "https://github.com/adagarm123/AuroraLauncher/releases"),
+            ("Mojang 官方源", LauncherConfig.OfficialVersionManifestUrl)
+        };
+        var tasks = hosts.Select(h => MeasureAsync(h.Name, h.Url, timeoutSec, ct)).ToArray();
+        var rows = await Task.WhenAll(tasks).ConfigureAwait(false);
+        return rows;
+    }
+
+    private static async Task<HostDiagnostic> MeasureAsync(string name, string url,
+        int timeoutSec, CancellationToken ct)
+    {
+        string host;
+        try { host = new Uri(url).Host; }
+        catch { host = url; }
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(timeoutSec));
+            var sw = Stopwatch.StartNew();
+            using (var head = new HttpRequestMessage(HttpMethod.Head, url))
+            using (var resp = await HttpClientFactory.Instance.Client.SendAsync(head,
+                       HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false))
+            {
+                if (resp.IsSuccessStatusCode || resp.StatusCode == System.Net.HttpStatusCode.MethodNotAllowed)
+                {
+                    sw.Stop();
+                    return new HostDiagnostic(name, host, true, sw.ElapsedMilliseconds);
+                }
+            }
+            // Some hosts reject HEAD; a 1-byte GET is still cheap.
+            using var range = new HttpRequestMessage(HttpMethod.Get, url);
+            range.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
+            using var resp2 = await HttpClientFactory.Instance.Client.SendAsync(range,
+                HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+            sw.Stop();
+            return resp2.IsSuccessStatusCode
+                ? new HostDiagnostic(name, host, true, sw.ElapsedMilliseconds)
+                : new HostDiagnostic(name, host, false, null, $"HTTP {(int)resp2.StatusCode}");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            return new HostDiagnostic(name, host, false, null,
+                ex is OperationCanceledException ? "连接超时" : ex.Message);
+        }
+    }
+
     /// <summary>Probes both routes in parallel. HEAD first; if the host refuses
     /// HEAD, fall back to a GET that asks for exactly one byte — never a full
     /// download.</summary>

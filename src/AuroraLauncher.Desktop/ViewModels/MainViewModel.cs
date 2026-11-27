@@ -320,6 +320,7 @@ public partial class MainViewModel : ViewModelBase
         OpenOptiFineWebCommand = new RelayCommand(_ => OpenUrl(OptiFineService.WebUrl));
         PickLocalOptiFineCommand = new RelayCommand(async _ => await PickLocalOptiFineAsync());
         CheckUpdateCommand = new RelayCommand(async _ => await CheckForUpdateAsync());
+        NetworkDiagnoseCommand = new RelayCommand(async _ => await RunNetworkDiagnoseAsync());
         RestartToApplyCommand = new RelayCommand(_ => RestartToApply());
         OneClickUpdateCommand = new RelayCommand(async _ => await OneClickUpdateAsync());
         // Round-83: 手动释放启动器自己的内存（绝不碰游戏进程）
@@ -1336,6 +1337,8 @@ public partial class MainViewModel : ViewModelBase
     public RelayCommand CheckUpdateCommand { get; }
     public RelayCommand RestartToApplyCommand { get; }
     public RelayCommand OneClickUpdateCommand { get; }
+    /// <summary>Round-110: explicit three-host latency diagnostic in Settings.</summary>
+    public RelayCommand NetworkDiagnoseCommand { get; }
 
     // ---- round-72: multi-job download center ----
     // Every install (instance / modpack / mod / loader / java / repair) is its own
@@ -2937,6 +2940,59 @@ public partial class MainViewModel : ViewModelBase
     {
         get => _networkNoteDisplay;
         private set => SetProperty(ref _networkNoteDisplay, value);
+    }
+
+    // ---- round-110: explicit network diagnostic (Settings → 网络) ----
+    private IReadOnlyList<NetworkProbe.HostDiagnostic> _networkDiagnostics = Array.Empty<NetworkProbe.HostDiagnostic>();
+    public IReadOnlyList<NetworkProbe.HostDiagnostic> NetworkDiagnostics
+    {
+        get => _networkDiagnostics;
+        private set
+        {
+            SetProperty(ref _networkDiagnostics, value);
+            OnPropertyChanged(nameof(HasNetworkDiagnostics));
+        }
+    }
+    public bool HasNetworkDiagnostics => NetworkDiagnostics.Count > 0;
+
+    private bool _networkDiagnosticsRunning;
+    public bool NetworkDiagnosticsRunning
+    {
+        get => _networkDiagnosticsRunning;
+        private set => SetProperty(ref _networkDiagnosticsRunning, value);
+    }
+
+    private string? _networkDiagnosticsSummary;
+    public string? NetworkDiagnosticsSummary
+    {
+        get => _networkDiagnosticsSummary;
+        private set => SetProperty(ref _networkDiagnosticsSummary, value);
+    }
+
+    private async Task RunNetworkDiagnoseAsync()
+    {
+        NetworkDiagnosticsRunning = true;
+        NetworkDiagnosticsSummary = "正在测试 CNB / GitHub / Mojang 三个源的响应速度…";
+        NetworkDiagnostics = Array.Empty<NetworkProbe.HostDiagnostic>();
+        try
+        {
+            var rows = await NetworkProbe.ProbeDiagnosticsAsync().ConfigureAwait(true);
+            var normalized = NetworkProbe.NormalizeBars(rows);
+            NetworkDiagnostics = normalized;
+            var reachable = normalized.Where(r => r.Ok).OrderBy(r => r.Ms).ToList();
+            NetworkDiagnosticsSummary = reachable.Count == 0
+                ? "三个源均不可达；请检查网络或代理设置。"
+                : $"最快：{reachable[0].Name}（{reachable[0].DisplayLatency}）。条形越短越快；「不可达」表示该源当前连不上。";
+        }
+        catch (Exception ex)
+        {
+            NetworkDiagnosticsSummary = "网络诊断失败：" + ex.Message;
+            _log.Warn("Net", $"Network diagnostic failed: {ex.Message}");
+        }
+        finally
+        {
+            NetworkDiagnosticsRunning = false;
+        }
     }
 
     private void RefreshNetworkNote()

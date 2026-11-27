@@ -291,6 +291,50 @@
                                Foreground="{DynamicResource TextMutedBrush}" Margin="0,10,0,0"
                                Visibility="{Binding NetworkNoteDisplay, Converter={StaticResource NullToCollapsed}}"/>
 
+                    <!-- Round-110: explicit three-host diagnostic with a bar chart. -->
+                    <StackPanel Margin="0,14,0,0">
+                        <StackPanel Orientation="Horizontal">
+                            <Button Command="{Binding NetworkDiagnoseCommand}"
+                                    Content="{Binding NetworkDiagnosticsRunning, Converter={StaticResource BoolToText}, ConverterParameter='测试中…|网络诊断'}"
+                                    Padding="14,6" HorizontalAlignment="Left"/>
+                            <TextBlock Text="一键测试 CNB、GitHub、Mojang 三个源的响应速度（只发探测请求，不下载文件）"
+                                       FontSize="11.5" TextWrapping="Wrap" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextMutedBrush}" Margin="12,0,0,0"/>
+                        </StackPanel>
+
+                        <ItemsControl ItemsSource="{Binding NetworkDiagnostics}" Margin="0,12,0,0"
+                                      Visibility="{Binding HasNetworkDiagnostics, Converter={StaticResource BoolToVis}}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="0,0,0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="110"/>
+                                            <ColumnDefinition Width="260"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="{Binding Name}" VerticalAlignment="Center"
+                                                   FontSize="12" FontWeight="SemiBold"/>
+                                        <Border Grid.Column="1" Height="14" VerticalAlignment="Center"
+                                                Background="{DynamicResource PanelAltBrush}" CornerRadius="7">
+                                            <Border Width="{Binding BarWidth}" Height="12" CornerRadius="6"
+                                                    HorizontalAlignment="Left"
+                                                    Background="{DynamicResource SuccessBrush}"/>
+                                        </Border>
+                                        <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="12,0,0,0" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding DisplayLatency}" FontSize="12" FontWeight="SemiBold"/>
+                                            <TextBlock Text="{Binding Host}" FontSize="11" Margin="10,0,0,0"
+                                                       Foreground="{DynamicResource TextMutedBrush}" TextTrimming="CharacterEllipsis"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <TextBlock Text="{Binding NetworkDiagnosticsSummary}" FontSize="11.5" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TextMutedBrush}"
+                                   Visibility="{Binding NetworkDiagnosticsSummary, Converter={StaticResource NullToCollapsed}}"/>
+                    </StackPanel>
+
                     <TextBlock Text="代理地址（可选，如 http://127.0.0.1:7890）" Style="{StaticResource FieldLabel}" Margin="0,14,0,6"/>
                     <TextBox Text="{Binding ProxyUrl, UpdateSourceTrigger=PropertyChanged}"/>
 

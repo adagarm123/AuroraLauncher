@@ -18,12 +18,20 @@ public static class HelpContent
     /// <summary>Round number of the newest entry in <see cref="Changelog"/> —
     /// bump together with the changelog entry; drives the one-time "已更新"
     /// startup toast (dismissed permanently once the user opens the page).</summary>
-    public const int LatestChangelogRound = 109;
+    public const int LatestChangelogRound = 110;
     /// <summary>更新日志（说人话版本：无技术名词、用户视角）——独立页面
     /// 「更新日志」使用；模板见 docs/release-notes-template.md。
     /// 每轮发布时在此置顶新增一条。</summary>
     public static IEnumerable<HelpTopicVM> Changelog() => new[]
     {
+        new HelpTopicVM
+        {
+            Category = "更新日志", Glyph = "\uE777", Title = "【第 110 轮更新】设置页新增网络诊断，一键测三个源的响应速度",
+            Summary = "可视化对比 CNB、GitHub、Mojang 的延迟",
+            Body = "1) 在「设置 → 网络」里点「网络诊断」，会同时测试 CNB 更新源、GitHub 更新源和 Mojang 官方源的响应速度。\n\n" +
+                   "2) 结果以条形图展示：条越短越快，旁边标注具体毫秒数和主机名；连不上的源显示「不可达」。顶部会指出当前最快的源。\n\n" +
+                   "3) 测速只发一个很小的探测请求，不会下载文件，也不会改变已有的下载线路设置。"
+        },
         new HelpTopicVM
         {
             Category = "更新日志", Glyph = "\uE777", Title = "【第 109 轮更新】下载失败会重试三次，界面如实显示进度状态",

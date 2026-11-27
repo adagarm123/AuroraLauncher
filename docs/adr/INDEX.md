@@ -37,3 +37,4 @@
 | [ADR-0029](ADR-0029-ci-delta-patch.md) | CI 增量补丁打通（干净 checkout 下拉取上一版 EXE 与 round 标记，清单带签名 patchUrl，相邻版走补丁） | 已采纳（含防线测试） |
 | [ADR-0030](ADR-0030-cnb-primary-github-fallback.md) | CNB 主源 + GitHub 签名兜底（双源清单、官方 API 镜像发布、备用源验签后切换、SignedPayload 兼容） | 已采纳（含防线测试） |
 | [ADR-0031](ADR-0031-host-retry-and-honest-ui.md) | 主源三次重试 + 下载界面如实显示（逐条目重试预算、主机标签、p.Message 上屏） | 已采纳（含防线测试） |
+| [ADR-0032](ADR-0032-network-diagnostics.md) | 设置页三源网络诊断与图形化测速（并行 HEAD 探测、纯函数归一化、中性化文档） | 已采纳（含防线测试） |
