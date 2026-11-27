@@ -78,12 +78,15 @@ jobs:
         run: |
           # Round-108: CNB is the primary (fast in CN); GitHub is the signed
           # fallback. Both hosts serve byte-identical assets from this build.
-          $CnbUrl = "https://cnb.cool/$env:CNB_REPO/-/releases/download/${{ github.ref_name }}/AuroraLauncher.exe"
           $GitHubUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AuroraLauncher.exe"
-          $extra = ""
-          if ($env:CNB_REPO) { $extra = "-FallbackUrl $GitHubUrl" }
-          else { $CnbUrl = $GitHubUrl }   # no CNB configured: GitHub-only, as before
-          powershell -ExecutionPolicy Bypass -File scripts/sign-release.ps1 -DownloadUrl $CnbUrl $extra
+          if ($env:CNB_REPO) {
+              $CnbUrl = "https://cnb.cool/$env:CNB_REPO/-/releases/download/${{ github.ref_name }}/AuroraLauncher.exe"
+              powershell -ExecutionPolicy Bypass -File scripts/sign-release.ps1 -DownloadUrl $CnbUrl -FallbackUrl $GitHubUrl
+          }
+          else {
+              # No CNB configured: GitHub-only, exactly as before.
+              powershell -ExecutionPolicy Bypass -File scripts/sign-release.ps1 -DownloadUrl $GitHubUrl
+          }
           if (-not (Test-Path "publish/latest.json")) {
               Write-Error "Error: latest.json not generated"
               exit 1
