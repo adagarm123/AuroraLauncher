@@ -297,7 +297,7 @@
                             <Button Command="{Binding NetworkDiagnoseCommand}"
                                     Content="{Binding NetworkDiagnosticsRunning, Converter={StaticResource BoolToText}, ConverterParameter='测试中…|网络诊断'}"
                                     Padding="14,6" HorizontalAlignment="Left"/>
-                            <TextBlock Text="一键测试 CNB、GitHub、Mojang 三个源的响应速度（只发探测请求，不下载文件）"
+                            <TextBlock Text="一键测试 CNB、GitHub、Mojang 三个源的延迟与下载速率（速率采样最多 512 KB / 2 秒）"
                                        FontSize="11.5" TextWrapping="Wrap" VerticalAlignment="Center"
                                        Foreground="{DynamicResource TextMutedBrush}" Margin="12,0,0,0"/>
                         </StackPanel>
@@ -306,25 +306,41 @@
                                       Visibility="{Binding HasNetworkDiagnostics, Converter={StaticResource BoolToVis}}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
-                                    <Grid Margin="0,0,0,10">
+                                    <Grid Margin="0,0,0,12">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="110"/>
                                             <ColumnDefinition Width="260"/>
                                             <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="{Binding Name}" VerticalAlignment="Center"
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <!-- Latency row: shorter bar = faster -->
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding Name}" VerticalAlignment="Center"
                                                    FontSize="12" FontWeight="SemiBold"/>
-                                        <Border Grid.Column="1" Height="14" VerticalAlignment="Center"
+                                        <Border Grid.Row="0" Grid.Column="1" Height="14" VerticalAlignment="Center"
                                                 Background="{DynamicResource PanelAltBrush}" CornerRadius="7">
                                             <Border Width="{Binding BarWidth}" Height="12" CornerRadius="6"
                                                     HorizontalAlignment="Left"
                                                     Background="{DynamicResource SuccessBrush}"/>
                                         </Border>
-                                        <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="12,0,0,0" VerticalAlignment="Center">
+                                        <StackPanel Grid.Row="0" Grid.Column="2" Orientation="Horizontal" Margin="12,0,0,0" VerticalAlignment="Center">
                                             <TextBlock Text="{Binding DisplayLatency}" FontSize="12" FontWeight="SemiBold"/>
                                             <TextBlock Text="{Binding Host}" FontSize="11" Margin="10,0,0,0"
                                                        Foreground="{DynamicResource TextMutedBrush}" TextTrimming="CharacterEllipsis"/>
                                         </StackPanel>
+                                        <!-- Round-111: throughput row: longer bar = faster -->
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="下载速率" VerticalAlignment="Center"
+                                                   FontSize="11" Foreground="{DynamicResource TextMutedBrush}" Margin="0,4,0,0"/>
+                                        <Border Grid.Row="1" Grid.Column="1" Height="12" VerticalAlignment="Center"
+                                                Background="{DynamicResource PanelAltBrush}" CornerRadius="6" Margin="0,4,0,0">
+                                            <Border Width="{Binding SpeedBarWidth}" Height="10" CornerRadius="5"
+                                                    HorizontalAlignment="Left"
+                                                    Background="{DynamicResource AccentBrush}"/>
+                                        </Border>
+                                        <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding DisplaySpeed}"
+                                                   FontSize="12" Margin="12,4,0,0" VerticalAlignment="Center"/>
                                     </Grid>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>

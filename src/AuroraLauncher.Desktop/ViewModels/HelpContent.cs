@@ -18,12 +18,19 @@ public static class HelpContent
     /// <summary>Round number of the newest entry in <see cref="Changelog"/> —
     /// bump together with the changelog entry; drives the one-time "已更新"
     /// startup toast (dismissed permanently once the user opens the page).</summary>
-    public const int LatestChangelogRound = 110;
+    public const int LatestChangelogRound = 111;
     /// <summary>更新日志（说人话版本：无技术名词、用户视角）——独立页面
     /// 「更新日志」使用；模板见 docs/release-notes-template.md。
     /// 每轮发布时在此置顶新增一条。</summary>
     public static IEnumerable<HelpTopicVM> Changelog() => new[]
     {
+        new HelpTopicVM
+        {
+            Category = "更新日志", Glyph = "\uE777", Title = "【第 111 轮更新】网络诊断加入下载速率，下载总进度实时跟随任务",
+            Summary = "延迟与速度分开看，总进度不再卡住",
+            Body = "1) 网络诊断现在每个源显示两行：延迟（越短越好）和下载速率（越长越好）。速率来自限时采样，不会下载整个文件。延迟最低与下载最快的源往往不是同一个，摘要会分别指出。\n\n" +
+                   "2) 修复下载管理里总进度卡住不动的问题：只有一个任务时总进度就是那个任务的进度；多个任务时综合显示。"
+        },
         new HelpTopicVM
         {
             Category = "更新日志", Glyph = "\uE777", Title = "【第 110 轮更新】设置页新增网络诊断，一键测三个源的响应速度",

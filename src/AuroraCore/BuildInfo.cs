@@ -6,6 +6,6 @@ namespace AuroraCore;
 /// it for downgrade rejection (only strictly higher rounds are updates).</summary>
 public static class BuildInfo
 {
-    public const int CurrentRound = 110;
-    public const string Version = "0.110.0";
+    public const int CurrentRound = 111;
+    public const string Version = "0.111.0";
 }

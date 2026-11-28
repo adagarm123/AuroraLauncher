@@ -96,6 +96,13 @@ public static class JobProgressPolicy
         if (counted == 0)
             return (completedOnly > 0 && !hasFailed ? 100 : 0, speed, active, queued);
 
+        // Round-111: with exactly one in-flight job the summary must mirror
+        // THAT job's progress, not an average that hides its real state.
+        // (Previously the same happened by accident via a 1-item average,
+        // but rounding could round a 99.6 up to 100 — make it explicit.)
+        if (counted == 1)
+            return (ProgressDisplayPolicy.Display(percentSum, false), speed, active, queued);
+
         var percent = (int)Math.Round((double)percentSum / counted, MidpointRounding.AwayFromZero);
         // Round-97: a live job (running OR preparing OR queued) can never make
         // the summary read 100 %, even if every stage is technically "past".

@@ -1670,7 +1670,11 @@ public partial class MainViewModel : ViewModelBase
     private void RefreshDownloadAggregate(bool force = false)
     {
         CheckStalledJobs(); // Round-96: must run even when Version is unchanged
-        if (!force && _seenJobVersion == _jobManager.Version) return;
+        // Round-111: the old "_seenJobVersion == Version" early-return froze
+        // the summary while jobs were running — DownloadJob.Report() updates
+        // percent/speed on every push but does NOT bump the manager Version
+        // (that only tracks add/remove). Read the live snapshot on every tick;
+        // keep the 1-second throttle only while the window is hidden.
         if (!force && !_windowVisible)
         {
             var now = Environment.TickCount64;
@@ -2980,9 +2984,20 @@ public partial class MainViewModel : ViewModelBase
             var normalized = NetworkProbe.NormalizeBars(rows);
             NetworkDiagnostics = normalized;
             var reachable = normalized.Where(r => r.Ok).OrderBy(r => r.Ms).ToList();
-            NetworkDiagnosticsSummary = reachable.Count == 0
-                ? "三个源均不可达；请检查网络或代理设置。"
-                : $"最快：{reachable[0].Name}（{reachable[0].DisplayLatency}）。条形越短越快；「不可达」表示该源当前连不上。";
+            var fastestSpeed = normalized.Where(r => r.BytesPerSec.HasValue && r.BytesPerSec.Value > 0)
+                                         .OrderByDescending(r => r.BytesPerSec).FirstOrDefault();
+            if (reachable.Count == 0)
+            {
+                NetworkDiagnosticsSummary = "三个源均不可达；请检查网络或代理设置。";
+            }
+            else
+            {
+                var latencyPart = $"延迟最低：{reachable[0].Name}（{reachable[0].DisplayLatency}）";
+                var speedPart = fastestSpeed != null
+                    ? $"；下载最快：{fastestSpeed.Name}（{fastestSpeed.DisplaySpeed}）"
+                    : "";
+                NetworkDiagnosticsSummary = latencyPart + speedPart + "。延迟条越短、速率条越长越好；「不可达」表示该源当前连不上。";
+            }
         }
         catch (Exception ex)
         {

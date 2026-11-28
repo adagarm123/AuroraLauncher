@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using AuroraCore.Services;
 
 namespace AuroraCore.Utils;
 
@@ -109,16 +110,26 @@ public static class NetworkProbe
     /// <summary>Round-110: one row of the explicit network diagnostic shown in
     /// Settings. Timing is a HEAD (or 1-byte GET) round trip — no file body is
     /// ever downloaded just to measure a host.</summary>
-    public sealed record HostDiagnostic(string Name, string Host, bool Ok, long? Ms, string? Error = null)
+    public sealed record HostDiagnostic(string Name, string Host, bool Ok, long? Ms,
+        string? Error = null, double? BytesPerSec = null)
     {
         public string DisplayLatency => Ok && Ms.HasValue ? $"{Ms.Value} ms" : "不可达";
+        /// <summary>Round-111: measured download throughput, or a reason when
+        /// the host cannot serve bytes at all.</summary>
+        public string DisplaySpeed => BytesPerSec.HasValue && BytesPerSec.Value > 0
+            ? JobProgressPolicy.FormatSpeed(BytesPerSec.Value)
+            : Ok ? "测速失败" : "—";
         /// <summary>Bar length in 0..100, relative to the slowest reachable host
         /// in this run. Unreachable hosts get 0 so the bar stays honest.</summary>
         public double BarPercent { get; private set; }
         /// <summary>Ready-to-bind pixel width (max 240) — avoids a converter in XAML.</summary>
         public double BarWidth => Math.Max(0, BarPercent) * 2.4;
+        /// <summary>Round-111: separate width for the throughput bar.</summary>
+        public double SpeedBarWidth { get; private set; }
 
         public HostDiagnostic WithBar(double percent) => this with { BarPercent = percent };
+        public HostDiagnostic WithSpeedBar(double percent) => this with { SpeedBarWidth = percent * 2.4 };
+        public HostDiagnostic WithSpeed(double bytesPerSec) => this with { BytesPerSec = bytesPerSec };
     }
 
     /// <summary>Normalizes raw measurements to bar widths: the fastest host is
@@ -135,6 +146,20 @@ public static class NetworkProbe
             : r.WithBar(Math.Clamp(100.0 * fastest / Math.Max(fastest, r.Ms.Value), 4, 100))).ToList();
     }
 
+    /// <summary>Round-111: normalize throughput to bar widths (fastest = 100).
+    /// Pure function, unit-testable without network.</summary>
+    public static IReadOnlyList<HostDiagnostic> NormalizeSpeedBars(IEnumerable<HostDiagnostic> rows)
+    {
+        var list = rows.ToList();
+        var speeds = list.Where(r => r.BytesPerSec.HasValue && r.BytesPerSec.Value > 0)
+                         .Select(r => r.BytesPerSec!.Value).ToList();
+        if (speeds.Count == 0) return list;
+        var fastest = speeds.Max();
+        return list.Select(r => !r.BytesPerSec.HasValue || r.BytesPerSec.Value <= 0
+            ? r.WithSpeedBar(0)
+            : r.WithSpeedBar(Math.Clamp(100.0 * r.BytesPerSec.Value / Math.Max(fastest, 1), 4, 100))).ToList();
+    }
+
     /// <summary>Round-110: measures the three hosts that matter to this launcher
     /// (CNB update mirror, GitHub fallback/release host, Mojang version manifest)
     /// in parallel. Unlike <see cref="ProbeCachedAsync"/> this is an explicit
@@ -144,15 +169,91 @@ public static class NetworkProbe
         CancellationToken ct = default, int timeoutSec = 5)
     {
         var cnbRepo = Environment.GetEnvironmentVariable("AURORA_CNB_REPO") ?? "AuroraLauncher-2026/AuroraLauncher";
-        var hosts = new (string Name, string Url)[]
+        // Resolve current asset URLs from the signed feed so the throughput
+        // sample never points at a stale tag (the feed is ~2.8 KB).
+        var (primaryExe, fallbackExe) = await ResolveFeedUrlsAsync(ct).ConfigureAwait(false);
+        // Latency targets (light HEAD) and throughput targets (a real file,
+        // sampled for at most 2 s / 512 KB) are separate: a releases landing
+        // page is fine for ping but says nothing about download speed.
+        var hosts = new (string Name, string PingUrl, string SpeedUrl)[]
         {
-            ("CNB 更新源", $"https://cnb.cool/{cnbRepo}/-/releases"),
-            ("GitHub 更新源", "https://github.com/adagarm123/AuroraLauncher/releases"),
-            ("Mojang 官方源", LauncherConfig.OfficialVersionManifestUrl)
+            ("CNB 更新源", $"https://cnb.cool/{cnbRepo}/-/releases", primaryExe),
+            ("GitHub 更新源", "https://github.com/adagarm123/AuroraLauncher/releases", fallbackExe),
+            ("Mojang 官方源", LauncherConfig.OfficialVersionManifestUrl,
+                LauncherConfig.OfficialVersionManifestUrl)
         };
-        var tasks = hosts.Select(h => MeasureAsync(h.Name, h.Url, timeoutSec, ct)).ToArray();
+        var tasks = hosts.Select(async h =>
+        {
+            var row = await MeasureAsync(h.Name, h.PingUrl, timeoutSec, ct).ConfigureAwait(false);
+            if (!row.Ok) return row;
+            var speed = await MeasureThroughputAsync(h.SpeedUrl, ct).ConfigureAwait(false);
+            return speed.HasValue ? row.WithSpeed(speed.Value) : row;
+        }).ToArray();
         var rows = await Task.WhenAll(tasks).ConfigureAwait(false);
-        return rows;
+        return NormalizeSpeedBars(rows);
+    }
+
+    /// <summary>Reads the small signed feed to learn the current EXE URLs on
+    /// both hosts. Any failure degrades to version-tagged defaults — diagnostics
+    /// must never throw just because the feed host is down.</summary>
+    private static async Task<(string Primary, string Fallback)> ResolveFeedUrlsAsync(CancellationToken ct)
+    {
+        var cnbRepo = Environment.GetEnvironmentVariable("AURORA_CNB_REPO") ?? "AuroraLauncher-2026/AuroraLauncher";
+        var tag = "v1.12.24";
+        var fallbackPrimary = $"https://cnb.cool/{cnbRepo}/-/releases/download/{tag}/AuroraLauncher.exe";
+        var fallbackBackup = $"https://github.com/adagarm123/AuroraLauncher/releases/download/{tag}/AuroraLauncher.exe";
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(4));
+            using var resp = await HttpClientFactory.Instance.Client.GetAsync(
+                "https://adagarm123.github.io/AuroraLauncher/latest.json",
+                HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) return (fallbackPrimary, fallbackBackup);
+            using var doc = System.Text.Json.JsonDocument.Parse(
+                await resp.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false));
+            var root = doc.RootElement;
+            string? url = null, fb = null;
+            if (root.TryGetProperty("url", out var u)) url = u.GetString();
+            if (root.TryGetProperty("fallbackUrl", out var f)) fb = f.GetString();
+            return (string.IsNullOrWhiteSpace(url) ? fallbackPrimary : url!,
+                    string.IsNullOrWhiteSpace(fb) ? fallbackBackup : fb!);
+        }
+        catch { return (fallbackPrimary, fallbackBackup); }
+    }
+
+    /// <summary>Downloads at most 512 KB / 2 seconds from one host and derives
+    /// bytes-per-second from the bytes actually received. Range requests are
+    /// used when available so CDN nodes serve from the start; the sample is
+    /// bounded in both time and size, so this never downloads a whole EXE.</summary>
+    private static async Task<double?> MeasureThroughputAsync(string url, CancellationToken ct)
+    {
+        const int maxBytes = 512 * 1024;
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(2));
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, maxBytes - 1);
+            using var resp = await HttpClientFactory.Instance.Client.SendAsync(req,
+                HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode && resp.StatusCode != System.Net.HttpStatusCode.PartialContent)
+                return null;
+            await using var stream = await resp.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false);
+            var buffer = new byte[32 * 1024];
+            var sw = Stopwatch.StartNew();
+            long total = 0;
+            while (total < maxBytes)
+            {
+                var want = (int)Math.Min(buffer.Length, maxBytes - total);
+                var read = await stream.ReadAsync(buffer.AsMemory(0, want), cts.Token).ConfigureAwait(false);
+                if (read <= 0) break;
+                total += read;
+            }
+            sw.Stop();
+            return sw.Elapsed.TotalSeconds > 0 && total > 0 ? total / sw.Elapsed.TotalSeconds : null;
+        }
+        catch { return null; }
     }
 
     private static async Task<HostDiagnostic> MeasureAsync(string name, string url,

@@ -6422,6 +6422,49 @@ internal static class Program
                 "设置页必须渲染诊断按钮与图形化结果");
         });
 
+        Check("第 111 轮：单任务总进度镜像、多任务综合、三源下载速率", () =>
+        {
+            // Single in-flight job: the summary must be that job's own progress.
+            var single = JobProgressPolicy.Aggregate(new[]
+            {
+                new DownloadJobSnapshot(JobState.Done, 100, 0),
+                new DownloadJobSnapshot(JobState.Running, 37, 1024)
+            });
+            Assert(single.Percent == 37 && Math.Abs(single.SpeedBytesPerSec - 1024) < 0.01,
+                "只有一个活跃任务时总进度必须精确等于该任务进度");
+            var multi = JobProgressPolicy.Aggregate(new[]
+            {
+                new DownloadJobSnapshot(JobState.Running, 20, 100),
+                new DownloadJobSnapshot(JobState.Queued, 0, 0),
+                new DownloadJobSnapshot(JobState.Running, 60, 300)
+            });
+            Assert(multi.Percent == 27 && Math.Abs(multi.SpeedBytesPerSec - 400) < 0.01,
+                "多任务时综合平均进度与速度和");
+
+            var bars = NetworkProbe.NormalizeSpeedBars(new[]
+            {
+                new NetworkProbe.HostDiagnostic("A", "a", true, 10, BytesPerSec: 1_000_000),
+                new NetworkProbe.HostDiagnostic("B", "b", true, 10, BytesPerSec: 500_000),
+                new NetworkProbe.HostDiagnostic("C", "c", true, 10, BytesPerSec: null)
+            });
+            Assert(bars[0].SpeedBarWidth == 240 && bars[1].SpeedBarWidth == 120 &&
+                   bars[2].SpeedBarWidth == 0,
+                "速率条按最快源归一化，测速失败为零");
+            Assert(bars[2].DisplaySpeed == "测速失败", "测速失败不能显示成测试中");
+
+            string Read(string p) => File.ReadAllText(Path.Combine(FindSourceRoot()!, p));
+            var vm = Read("src/AuroraLauncher.Desktop/ViewModels/MainViewModel.cs").Replace("\r\n", "\n");
+            Assert(!vm.Contains("_seenJobVersion == _jobManager.Version"),
+                "总进度刷新不得被任务增删版本号冻结（进度更新不 bump 版本）");
+            var probe = Read("src/AuroraCore/Utils/NetworkProbe.cs").Replace("\r\n", "\n");
+            Assert(probe.Contains("MeasureThroughputAsync") && probe.Contains("NormalizeSpeedBars") &&
+                   probe.Contains("ResolveFeedUrlsAsync"),
+                "测速必须从签名清单解析当前资产 URL 并采样真实下载速率");
+            var xaml = Read("src/AuroraLauncher.Desktop/Views/SettingsView.xaml").Replace("\r\n", "\n");
+            Assert(xaml.Contains("SpeedBarWidth") && xaml.Contains("DisplaySpeed"),
+                "设置页必须展示下载速率条与数值");
+        });
+
         Console.WriteLine($"\n=== Result: {_passed} passed, {_failed} failed, {_skipped} skipped ===");        Environment.Exit(_failed == 0 ? 0 : 1);
     }
 }
